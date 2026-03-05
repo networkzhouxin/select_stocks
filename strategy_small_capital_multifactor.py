@@ -168,7 +168,7 @@ def select_stocks(context):
     all_stocks = list(set(hs300_stocks + zz500_stocks))
 
     if len(all_stocks) == 0:
-        log.warn("[选股] 获取指数成分股失败，股票池为空")
+        log.warning("[选股] 获取指数成分股失败，股票池为空")
         return []
 
     log.info("[选股] 初始候选池: %d 只 (沪深300: %d, 中证500: %d)" % (
@@ -181,11 +181,11 @@ def select_stocks(context):
             fields=['pe_dynamic', 'pb', 'total_value', 'turnover_rate']
         )
     except Exception as e:
-        log.warn("[选股] 获取估值数据失败: %s" % str(e))
+        log.warning("[选股] 获取估值数据失败: %s" % str(e))
         return []
 
     if val_data is None or len(val_data) == 0:
-        log.warn("[选股] 估值数据为空")
+        log.warning("[选股] 估值数据为空")
         return []
 
     # 过滤PE、PB合理区间
@@ -452,7 +452,7 @@ def check_stop_loss_and_profit(context, data):
 
         # --- 止损 ---
         if profit_rate <= g.stop_loss_rate:
-            log.warn("[止损] %s 亏损 %.2f%%, 成本: %.2f, 现价: %.2f, 卖出 %d 股" % (
+            log.warning("[止损] %s 亏损 %.2f%%, 成本: %.2f, 现价: %.2f, 卖出 %d 股" % (
                 stock, profit_rate * 100, cost, current_price, pos.enable_amount))
             order_target(stock, 0)
             clean_stock_record(stock)
@@ -486,7 +486,7 @@ def check_stop_loss_and_profit(context, data):
         elif profit_rate <= -0.03:
             hold_days = g.hold_days.get(stock, 0)
             if hold_days >= 10:
-                log.warn("[阶梯止损] %s 持有%d天仍亏损 %.2f%%, 早走早好" % (
+                log.warning("[阶梯止损] %s 持有%d天仍亏损 %.2f%%, 早走早好" % (
                     stock, hold_days, profit_rate * 100))
                 order_target(stock, 0)
                 clean_stock_record(stock)
