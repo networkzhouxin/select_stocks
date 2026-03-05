@@ -17,7 +17,7 @@
  2. 基本面过滤：低估值(PE/PB合理) + 盈利能力强(ROE) + 有成长性
  3. 技术面确认：均线多头排列 + MACD趋势向好 + RSI未超买超卖
  4. 价格过滤：股价3~25元（2万资金可买1~6手，保证仓位灵活性）
- 5. 严格风控：单只最大50%仓位、7%止损、避开涨跌停/停牌股
+ 5. 严格风控：单只最大50%仓位、5%止损+阶梯止损、避开涨跌停/停牌股
 
  风险提示:
  ─────────
@@ -45,7 +45,7 @@ def initialize(context):
     """
     # ------ 基本参数 ------
     g.max_hold_count = 2          # 最大持仓只数（2万资金持2只较合理）
-    g.stop_loss_rate = -0.07      # 止损线：亏损7%止损
+    g.stop_loss_rate = -0.05      # 止损线：亏损5%止损
     g.take_profit_rate = 0.20     # 止盈线：盈利20%止盈（锁定利润）
     g.min_price = 3.0             # 最低股价（排除低价垃圾股）
     g.max_price = 25.0            # 最高股价（确保2万资金至少买1手）
@@ -81,9 +81,8 @@ def initialize(context):
     # ------ 基准设置 ------
     set_benchmark('000300.SS')
 
-    # ------ 定时任务 ------
-    # 每天9:31执行选股（盘前准备）
-    run_daily(context, daily_check)
+    # ------ 持仓上限天数 ------
+    g.max_hold_days = 60              # 单只股票最长持有60个交易日
 
     log.info("=" * 60)
     log.info("策略初始化完成 - 小资金多因子精选策略")
@@ -95,24 +94,27 @@ def initialize(context):
 
 
 # ============================================================================
-#  每日盘前检查（通过 run_daily 在 9:31 调用）
+#  主交易逻辑（每个交易日执行）
 # ============================================================================
-def daily_check(context):
+def handle_data(context, data):
     """
-    每个交易日开盘时执行：
+    核心交易逻辑，每个交易日执行一次（日线级别）。
+    将原daily_check逻辑合并到handle_data开头，确保选股和交易在同一周期完成。
+    执行顺序：
     1. 更新持仓天数
-    2. 判断是否为调仓日
-    3. 若为调仓日，执行选股
+    2. 选股（如果是调仓日）
+    3. 止损止盈检查（每天都执行）
+    4. 卖出不再符合条件的持仓（调仓日）
+    5. 买入新的优质标的（调仓日）
     """
-    # 更新所有持仓的持有天数
-    for stock in list(g.hold_days.keys()):
-        g.hold_days[stock] = g.hold_days.get(stock, 0) + 1
-
-    # 判断今天是周几
     current_dt = context.blotter.current_dt
     weekday = current_dt.isoweekday()
 
-    # 只在调仓日选股（减少交易频率，降低手续费消耗）
+    # ======== 第一步：更新持仓天数（每天执行）========
+    for stock in list(g.hold_days.keys()):
+        g.hold_days[stock] = g.hold_days.get(stock, 0) + 1
+
+    # ======== 第二步：选股（调仓日在交易前完成）========
     if weekday == g.rebalance_weekday:
         g.stock_pool = select_stocks(context)
         log.info("[选股完成] 日期: %s, 候选股票数: %d" % (
@@ -122,25 +124,10 @@ def daily_check(context):
                 log.info("  Top%d: %s (综合得分: %.2f)" % (
                     i + 1, item['code'], item['score']))
 
-
-# ============================================================================
-#  主交易逻辑（每个交易日执行）
-# ============================================================================
-def handle_data(context, data):
-    """
-    核心交易逻辑，每个交易日执行一次（日线级别）。
-    执行顺序：
-    1. 止损止盈检查（保命优先）
-    2. 卖出不再符合条件的持仓
-    3. 买入新的优质标的
-    """
-    current_dt = context.blotter.current_dt
-    weekday = current_dt.isoweekday()
-
-    # ======== 第一步：止损止盈检查（每天都执行，不受调仓日限制）========
+    # ======== 第三步：止损止盈检查（每天都执行，不受调仓日限制）========
     check_stop_loss_and_profit(context, data)
 
-    # ======== 第二步 & 第三步：仅在调仓日执行买卖操作 ========
+    # ======== 第四步 & 第五步：仅在调仓日执行买卖操作 ========
     if weekday == g.rebalance_weekday:
         # 卖出不在最新选股池中的持仓
         execute_sell(context, data)
@@ -330,139 +317,105 @@ def evaluate_single_stock(stock, fundamental_info, context):
 
     total_score = 0.0
 
-    # ---------- 1. 估值得分（满分30分）----------
+    # ---------- 1. 估值得分（满分30分）— 连续反比例函数 ----------
     pe = fundamental_info['pe']
     pb = fundamental_info['pb']
 
-    # PE得分：PE越低越好（在合理范围内），10~15分最高分
-    if pe <= 15:
-        pe_score = 15.0
-    elif pe <= 25:
-        pe_score = 15.0 - (pe - 15) * 0.8
-    else:
-        pe_score = max(0, 15.0 - (pe - 15) * 1.0)
+    # PE得分（满分15分）：以PE=10为最优，向两端递减
+    pe_optimal = 10.0
+    pe_score = 15.0 * np.exp(-0.5 * ((pe - pe_optimal) / 8.0) ** 2)
 
-    # PB得分：PB越低越好，1~2分最高分
-    if pb <= 2.0:
-        pb_score = 15.0
-    elif pb <= 4.0:
-        pb_score = 15.0 - (pb - 2.0) * 5.0
-    else:
-        pb_score = max(0, 15.0 - (pb - 2.0) * 5.0)
+    # PB得分（满分15分）：以PB=1.5为最优，向两端递减
+    pb_optimal = 1.5
+    pb_score = 15.0 * np.exp(-0.5 * ((pb - pb_optimal) / 1.5) ** 2)
 
     total_score += pe_score + pb_score
 
-    # ---------- 2. 趋势得分（满分30分）----------
+    # ---------- 2. 趋势得分（满分30分）— 连续量化偏离度 ----------
     trend_score = 0.0
 
-    # 2a. 均线多头排列判断（满分15分）
+    # 2a. 均线偏离度打分（满分12分）
     if len(close) >= g.ma_long:
         ma5 = np.mean(close[-g.ma_short:])
         ma10 = np.mean(close[-g.ma_mid:])
         ma20 = np.mean(close[-g.ma_long:])
 
-        # 价格在MA20上方 (+5分)
-        if latest_price > ma20:
-            trend_score += 5.0
-        # MA5 > MA10 (+5分，短期趋势向好)
-        if ma5 > ma10:
-            trend_score += 5.0
-        # MA10 > MA20 (+5分，中期趋势向好)
-        if ma10 > ma20:
-            trend_score += 5.0
+        # MA5相对MA20的偏离度，正值=多头
+        ma_deviation = (ma5 - ma20) / ma20 if ma20 > 0 else 0
+        # 偏离度在0~5%时给最高分，用sigmoid映射到0~12
+        trend_score += 12.0 / (1.0 + np.exp(-80.0 * ma_deviation))
 
-    # 2b. MACD信号（满分10分）
+    # 2b. MACD信号（满分10分）— DIF绝对值+变化速率
     if len(close) >= 35:
         try:
             dif_arr, dea_arr, macd_arr = get_MACD(
                 close, g.macd_short, g.macd_long, g.macd_signal)
             dif = dif_arr[-1]
             dea = dea_arr[-1]
-            macd_val = macd_arr[-1]
 
-            # DIF > DEA（MACD金叉或多头）(+5分)
-            if dif > dea:
-                trend_score += 5.0
-            # MACD柱状线为正且在放大 (+5分)
-            if macd_val > 0 and len(macd_arr) >= 2 and macd_arr[-1] > macd_arr[-2]:
-                trend_score += 5.0
+            # DIF强度：DIF为正且越大越好，用tanh映射到0~6
+            dif_strength = np.tanh(dif / (latest_price * 0.02)) if latest_price > 0 else 0
+            trend_score += max(0, 6.0 * dif_strength)
+
+            # MACD变化速率：柱状线在放大给分，用连续值
+            if len(macd_arr) >= 3:
+                macd_accel = macd_arr[-1] - macd_arr[-3]
+                accel_score = np.tanh(macd_accel / (latest_price * 0.005)) if latest_price > 0 else 0
+                trend_score += max(0, 4.0 * accel_score)
         except Exception:
             pass
 
-    # 2c. RSI信号（满分5分）- 适中区间给分
+    # 2c. RSI信号（满分8分）— 距离50的偏离度打分
     if len(close) >= g.rsi_period + 1:
         try:
             rsi_arr = get_RSI(close, g.rsi_period)
             rsi = rsi_arr[-1]
 
-            # RSI在超买超卖区间外，且偏强不偏弱
-            if rsi > g.rsi_upper:
-                # 超买，不给分，且可能要排除
-                trend_score -= 5.0
-            elif rsi < g.rsi_lower:
-                # 超卖，不给分
-                trend_score -= 3.0
-            elif 40 <= rsi <= 65:
-                # 适中偏强区间，最佳
-                trend_score += 5.0
-            elif 30 <= rsi < 40 or 65 < rsi <= 75:
-                trend_score += 2.0
+            # RSI=50最好，越远越低，用高斯函数
+            rsi_score = 8.0 * np.exp(-0.5 * ((rsi - 50.0) / 15.0) ** 2)
+            trend_score += rsi_score
         except Exception:
             pass
 
-    total_score += max(0, trend_score)
+    total_score += min(30.0, max(0, trend_score))
 
-    # ---------- 3. 动量得分（满分20分）----------
+    # ---------- 3. 动量得分（满分20分）— 高斯分布连续打分 ----------
     momentum_score = 0.0
 
     if len(close) >= 20:
-        # 近5日涨幅
+        # 近5日涨幅（%）
         ret_5d = (close[-1] / close[-5] - 1) * 100 if close[-5] > 0 else 0
-        # 近20日涨幅
+        # 近20日涨幅（%）
         ret_20d = (close[-1] / close[-20] - 1) * 100 if close[-20] > 0 else 0
 
-        # 近5日涨幅在 -2% ~ +5% 为最佳（温和上涨，非暴涨暴跌）
-        if -2 <= ret_5d <= 5:
-            momentum_score += 10.0
-        elif -5 <= ret_5d < -2 or 5 < ret_5d <= 10:
-            momentum_score += 5.0
-        elif ret_5d > 15 or ret_5d < -10:
-            momentum_score -= 5.0  # 暴涨暴跌扣分
+        # 5日涨幅以+2%为中心，标准差4%的高斯分布（满分10分）
+        momentum_score += 10.0 * np.exp(-0.5 * ((ret_5d - 2.0) / 4.0) ** 2)
 
-        # 近20日涨幅在 0% ~ 15% 为最佳（中期稳健上涨）
-        if 0 <= ret_20d <= 15:
-            momentum_score += 10.0
-        elif -5 <= ret_20d < 0 or 15 < ret_20d <= 25:
-            momentum_score += 5.0
-        elif ret_20d > 30:
-            momentum_score -= 5.0  # 严重超涨扣分
+        # 20日涨幅以+8%为中心，标准差10%的高斯分布（满分10分）
+        momentum_score += 10.0 * np.exp(-0.5 * ((ret_20d - 8.0) / 10.0) ** 2)
 
-    total_score += max(0, momentum_score)
+    total_score += min(20.0, max(0, momentum_score))
 
-    # ---------- 4. 流动性得分（满分20分）----------
+    # ---------- 4. 流动性得分（满分20分）— 对数函数 ----------
     liquidity_score = 0.0
 
     if len(volume) >= 10:
         avg_vol_10 = np.mean(volume[-10:])
         avg_vol_5 = np.mean(volume[-5:])
 
-        # 近10日日均成交量 > 50万手（基本门槛）
-        if avg_vol_10 > 500000:
-            liquidity_score += 10.0
-        elif avg_vol_10 > 200000:
-            liquidity_score += 5.0
+        # 成交量对数打分（满分12分）：量越大分越高但边际递减
+        if avg_vol_10 > 0:
+            # 以10万为基准，对数映射到0~12
+            vol_log = np.log10(max(avg_vol_10, 1)) - np.log10(100000)
+            liquidity_score += min(12.0, max(0, 6.0 * vol_log))
 
-        # 近5日成交量相比近10日有所放大（温和放量）
+        # 量比连续打分（满分8分）：温和放量最佳
         if avg_vol_10 > 0:
             vol_ratio = avg_vol_5 / avg_vol_10
-            if 1.0 <= vol_ratio <= 1.5:
-                liquidity_score += 10.0  # 温和放量最佳
-            elif 0.8 <= vol_ratio < 1.0:
-                liquidity_score += 5.0   # 缩量也可接受
-            elif vol_ratio > 2.0:
-                liquidity_score -= 5.0   # 异常放量扣分
+            # 量比=1.2最佳，用高斯函数
+            liquidity_score += 8.0 * np.exp(-0.5 * ((vol_ratio - 1.2) / 0.3) ** 2)
 
-    total_score += max(0, liquidity_score)
+    total_score += min(20.0, max(0, liquidity_score))
 
     return total_score
 
@@ -529,6 +482,15 @@ def check_stop_loss_and_profit(context, data):
                 if hasattr(g, max_profit_key):
                     delattr(g, max_profit_key)
 
+        # --- 阶梯止损：持有超过10天仍亏损超过3%，说明选错了 ---
+        elif profit_rate <= -0.03:
+            hold_days = g.hold_days.get(stock, 0)
+            if hold_days >= 10:
+                log.warn("[阶梯止损] %s 持有%d天仍亏损 %.2f%%, 早走早好" % (
+                    stock, hold_days, profit_rate * 100))
+                order_target(stock, 0)
+                clean_stock_record(stock)
+
 
 # ============================================================================
 #  卖出逻辑
@@ -536,16 +498,19 @@ def check_stop_loss_and_profit(context, data):
 def execute_sell(context, data):
     """
     卖出不再满足条件的持仓：
-    1. 不在最新选股池中
-    2. 持仓已达最短持有天数
-    3. 技术面转弱
+    1. 不在选股池Top30中 且 价格跌破MA20（双重条件）
+    2. 趋势退出：价格跌破MA20 且 MACD死叉（DIF<DEA）
+    3. 持有上限：超过60个交易日强制重新评估
     """
     positions = context.portfolio.positions
     if len(positions) == 0:
         return
 
-    # 最新选股池中的股票代码集合
-    pool_codes = set([item['code'] for item in g.stock_pool]) if g.stock_pool else set()
+    # 最新选股池Top30的股票代码集合（放宽留存标准）
+    pool_codes_top30 = set()
+    if g.stock_pool:
+        for item in g.stock_pool[:30]:
+            pool_codes_top30.add(item['code'])
 
     for stock, pos in list(positions.items()):
         if pos.amount <= 0 or pos.enable_amount <= 0:
@@ -559,26 +524,47 @@ def execute_sell(context, data):
         should_sell = False
         sell_reason = ""
 
-        # 条件1：不在最新选股池中
-        if stock not in pool_codes:
-            should_sell = True
-            sell_reason = "不在最新选股池"
+        # 获取技术指标数据
+        below_ma20 = False
+        macd_death_cross = False
+        try:
+            hist = get_history(
+                35, '1d', ['close'], security_list=stock, fq='pre')
+            if hist is not None and len(hist) >= 20:
+                close_arr = hist['close'].values
+                ma20 = np.mean(close_arr[-20:])
+                current_price = close_arr[-1]
 
-        # 条件2：技术面转弱（均线死叉）
-        if not should_sell:
-            try:
-                hist = get_history(
-                    25, '1d', ['close'], security_list=stock, fq='pre')
-                if hist is not None and len(hist) >= 20:
-                    close = hist['close'].values
-                    ma5 = np.mean(close[-5:])
-                    ma20 = np.mean(close[-20:])
-                    # MA5跌破MA20，趋势转弱
-                    if ma5 < ma20 * 0.98:
-                        should_sell = True
-                        sell_reason = "MA5跌破MA20（趋势转弱）"
-            except Exception:
-                pass
+                # 判断价格是否跌破MA20
+                if current_price < ma20:
+                    below_ma20 = True
+
+                # 判断MACD是否死叉
+                if len(close_arr) >= 35:
+                    try:
+                        dif_arr, dea_arr, _ = get_MACD(
+                            close_arr, g.macd_short, g.macd_long, g.macd_signal)
+                        if dif_arr[-1] < dea_arr[-1]:
+                            macd_death_cross = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 条件1：不在选股池Top30中 且 价格跌破MA20
+        if stock not in pool_codes_top30 and below_ma20:
+            should_sell = True
+            sell_reason = "不在选股池Top30且跌破MA20"
+
+        # 条件2：趋势退出 — 价格跌破MA20 且 MACD死叉
+        if not should_sell and below_ma20 and macd_death_cross:
+            should_sell = True
+            sell_reason = "趋势退出（跌破MA20+MACD死叉）"
+
+        # 条件3：持有上限 — 超过60个交易日
+        if not should_sell and hold_days >= g.max_hold_days:
+            should_sell = True
+            sell_reason = "持有超过%d天，强制重新评估" % g.max_hold_days
 
         if should_sell:
             log.info("[卖出] %s, 原因: %s, 持仓天数: %d, 数量: %d" % (
@@ -608,10 +594,9 @@ def execute_buy(context, data):
     if not g.stock_pool or len(g.stock_pool) == 0:
         return
 
-    # 可用资金
+    # 可用资金（预留5%作为交易费用缓冲，含印花税和佣金）
     available_cash = context.portfolio.cash
-    # 每只股票分配的资金（预留2%作为交易费用缓冲）
-    per_stock_value = available_cash * 0.98 / empty_slots
+    per_stock_value = available_cash * 0.95 / empty_slots
 
     # 最小有效金额（至少能买1手 + 手续费）
     min_buy_value = g.min_price * 100 + 10  # 约310元
@@ -620,7 +605,7 @@ def execute_buy(context, data):
             per_stock_value, min_buy_value))
         return
 
-    # 当前已持有的股票代码
+    # 当前已持有的股票代码及其在池中的状态
     held_stocks = set()
     for stock, pos in context.portfolio.positions.items():
         if pos.amount > 0:
@@ -638,8 +623,8 @@ def execute_buy(context, data):
         if stock in held_stocks:
             continue
 
-        # 得分过低的不买（至少要40分以上）
-        if score < 40:
+        # 得分门槛从40提高到55（减少低质量买入）
+        if score < 55:
             log.info("[买入] 候选股得分过低，停止买入 (最高: %.1f)" % score)
             break
 
@@ -654,36 +639,20 @@ def execute_buy(context, data):
         except Exception:
             pass
 
-        # 获取当前价格计算买入数量
-        try:
-            hist = get_history(1, '1d', 'close', security_list=stock, fq='pre', include=True)
-            if hist is None or len(hist) == 0:
-                continue
-            current_price = hist['close'].values[-1]
-        except Exception:
-            continue
+        # 使用order_value按金额买入，让平台自动处理取整和手续费
+        log.info("[买入] %s, 得分: %.1f, 分配金额: %.2f 元" % (
+            stock, score, per_stock_value))
 
-        if current_price <= 0:
-            continue
-
-        # 计算买入手数（A股最小单位100股）
-        buy_shares = int(per_stock_value / current_price / 100) * 100
-
-        if buy_shares < 100:
-            log.info("[买入] %s 资金不足买1手 (价格: %.2f, 分配资金: %.2f)" % (
-                stock, current_price, per_stock_value))
-            continue
-
-        # 执行买入
-        log.info("[买入] %s, 得分: %.1f, 价格: %.2f, 数量: %d 股, 金额: %.2f 元" % (
-            stock, score, current_price, buy_shares,
-            current_price * buy_shares))
-
-        order_id = order(stock, buy_shares)
+        order_id = order_value(stock, per_stock_value)
 
         if order_id is not None:
             # 记录买入信息
-            g.buy_prices[stock] = current_price
+            try:
+                hist = get_history(1, '1d', 'close', security_list=stock, fq='pre', include=True)
+                if hist is not None and len(hist) > 0:
+                    g.buy_prices[stock] = hist['close'].values[-1]
+            except Exception:
+                pass
             g.hold_days[stock] = 0
             bought_count += 1
             held_stocks.add(stock)
