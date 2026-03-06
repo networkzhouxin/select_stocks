@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-智能买卖点量化交易策略 V7.3 - 聚宽版
+智能买卖点量化交易策略 V8.0 - ETF版
 ======================================
-V7.3 基于4年回测(2022-2025)暴露的问题优化：
-  V7.2问题：4年最大回撤49%，2023-2024连续2年水下
+四轮个股回测教训总结：
+  V7.0-V7.3 核心问题：6买6卖信号扫描500只个股，命中率不足
+  2万资金只能买1-2只个股，选错一只就重亏
 
-核心改进：
-  1. 三层择时：大盘趋势+大盘波动率+个股趋势
-  2. 动态仓位：根据市场环境调节总仓位上限
-  3. 账户级风控：总资产回撤>15%强制清仓冷静
-  4. 跟踪止损根据波动率自适应
-  5. 保留全部6买6卖信号逻辑
+V8.0 思路转变：
+  - 不再选个股，改为交易3只宽基/行业ETF
+  - 同样的技术信号系统用于ETF择时（买卖点判断）
+  - ETF自带分散，消除个股黑天鹅
+  - 信号用于择时而非选股，命中率大幅提高
+
+标的池：
+  - 510300 沪深300ETF（大盘蓝筹代表）
+  - 159915 创业板ETF（成长股代表）
+  - 510500 中证500ETF（中盘股代表）
 
 资金：2万
-市场：主板 + 创业板
+保留全部：6买6卖信号 + 趋势五档 + 拉伸度 + 背离检测
 """
 
 import numpy as np
@@ -29,35 +34,35 @@ def initialize(context):
     set_option('use_real_price', True)
     set_option('avoid_future_data', True)
 
-    set_slippage(PriceRelatedSlippage(0.002))
+    set_slippage(PriceRelatedSlippage(0.001))  # ETF滑点更小
     set_order_cost(OrderCost(
         open_tax=0,
-        close_tax=0.001,
+        close_tax=0,            # ETF免印花税
         open_commission=0.0003,
         close_commission=0.0003,
         close_today_commission=0,
         min_commission=5
     ), type='stock')
 
+    # ---- ETF标的池 ----
+    g.etf_pool = [
+        '510300.XSHG',   # 沪深300ETF
+        '159915.XSHE',   # 创业板ETF
+        '510500.XSHG',   # 中证500ETF
+    ]
+
     # ---- 策略参数 ----
-    g.max_hold = 2
-    g.signal_level = 2
-    g.trend_filter = 1
+    g.max_hold = 2               # 最多同时持有2只ETF
+    g.signal_level = 2           # 中级以上信号
     g.cooldown_buy = 5
     g.cooldown_sell = 5
-
-    # ---- 风控参数 ----
-    g.account_stop_loss = 0.12     # 账户总值从高点回撤12%暂停买入
-    g.account_clear_loss = 0.18    # 账户总值从高点回撤18%全部清仓
-    g.freeze_days = 15             # 触发账户风控后冻结交易天数
-    g.max_loss_pct = 0.10          # 单股最大亏损10%兜底
+    g.trailing_stop_pct = 0.05   # ETF跟踪止损5%（ETF波动小于个股）
+    g.max_loss_pct = 0.08        # 最大亏损8%
 
     # ---- 运行时状态 ----
     g.buy_signal_history = {}
     g.sell_signal_history = {}
     g.highest_since_buy = {}
-    g.account_high = 0             # 账户净值最高点
-    g.freeze_until = None          # 冻结交易截止日期
 
     run_daily(market_open, time='09:35')
     run_daily(update_highest, time='15:00')
@@ -70,105 +75,7 @@ def get_prev_trade_date(context):
 
 
 # ============================================================
-#  三层市场环境判断
-# ============================================================
-def get_market_regime(context):
-    """
-    返回市场状态：
-      'bull'   - 牛市/强势（积极买入）
-      'normal' - 正常（正常买入）
-      'weak'   - 弱势（谨慎，只买强信号）
-      'bear'   - 熊市（禁止买入）
-    """
-    prev_date = get_prev_trade_date(context)
-
-    df = get_price('000300.XSHG', end_date=prev_date, count=65,
-                   frequency='daily', fields=['close'])
-    if df is None or len(df) < 61:
-        return 'normal'
-
-    close = df['close']
-    ma20 = close.rolling(20).mean().iloc[-1]
-    ma60 = close.rolling(60).mean().iloc[-1]
-    cur = close.iloc[-1]
-
-    # 20日收益率判断动量
-    ret_20 = (cur - close.iloc[-21]) / close.iloc[-21]
-
-    # 波动率（20日年化）
-    daily_ret = close.pct_change().dropna()
-    vol_20 = daily_ret.tail(20).std() * np.sqrt(252)
-
-    # 三层判断
-    above_ma20 = cur > ma20
-    above_ma60 = cur > ma60
-    ma20_rising = ma20 > close.rolling(20).mean().iloc[-6]  # MA20比5天前高
-
-    if above_ma20 and above_ma60 and ma20_rising:
-        if vol_20 < 0.25:
-            return 'bull'
-        else:
-            return 'normal'
-    elif above_ma20:
-        return 'normal'
-    elif not above_ma20 and not above_ma60:
-        if ret_20 < -0.08 or vol_20 > 0.30:
-            return 'bear'
-        else:
-            return 'weak'
-    else:
-        return 'weak'
-
-
-# ============================================================
-#  自适应跟踪止损比例
-# ============================================================
-def get_trailing_stop(code, end_date):
-    """根据个股波动率动态调整止损比例：波动大的股票给更宽的止损"""
-    df = get_price(code, end_date=end_date, count=25,
-                   frequency='daily', fields=['close'])
-    if df is None or len(df) < 20:
-        return 0.08
-
-    daily_ret = df['close'].pct_change().dropna()
-    vol = daily_ret.tail(20).std()
-
-    # 基础8%，根据波动率上下浮动
-    # 日波动率2%的股票 → 止损约8%
-    # 日波动率3%的股票 → 止损约10%
-    # 日波动率4%的股票 → 止损约12%（上限）
-    stop = max(0.06, min(0.12, vol * 4))
-    return stop
-
-
-# ============================================================
-#  股票池
-# ============================================================
-def get_stock_pool(context, use_date=None):
-    today = use_date or context.current_dt.date()
-
-    all_stocks = get_all_securities(types=['stock'], date=today)
-
-    pool = []
-    for code in all_stocks.index:
-        if code.startswith('60') or code.startswith('000') or code.startswith('001') \
-                or code.startswith('300') or code.startswith('301'):
-            name = all_stocks.loc[code, 'display_name']
-            if 'ST' in name or 'st' in name:
-                continue
-            start_date = all_stocks.loc[code, 'start_date']
-            if (today - start_date).days < 120:
-                continue
-            pool.append(code)
-
-    paused_info = get_current_data()
-    pool = [s for s in pool if not paused_info[s].paused]
-
-    return pool
-
-
-# ============================================================
-#  技术指标计算（完整保留全部逻辑）
+#  技术指标计算（完整保留全部V7逻辑）
 # ============================================================
 def calc_sma(series, n, m):
     result = pd.Series(index=series.index, dtype=float)
@@ -193,11 +100,13 @@ def calc_indicators(code, end_date, count=120):
     L = df['low']
     V = df['volume']
 
+    # ------ 均线 ------
     MA5 = C.rolling(5).mean()
     MA10 = C.rolling(10).mean()
     MA20 = C.rolling(20).mean()
     MA60 = C.rolling(60).mean()
 
+    # ------ KDJ ------
     low9 = L.rolling(9).min()
     high9 = H.rolling(9).max()
     RSV = (C - low9) / (high9 - low9) * 100
@@ -206,6 +115,7 @@ def calc_indicators(code, end_date, count=120):
     D0 = calc_sma(K0, 3, 1)
     J0 = 3 * K0 - 2 * D0
 
+    # ------ RSI6 ------
     LC = C.shift(1)
     diff_c = C - LC
     pos = diff_c.clip(lower=0)
@@ -215,24 +125,29 @@ def calc_indicators(code, end_date, count=120):
     RSI6 = sma_pos / sma_abs.replace(0, np.nan) * 100
     RSI6 = RSI6.fillna(50)
 
+    # ------ CCI ------
     TYP0 = (H + L + C) / 3
     ma_typ = TYP0.rolling(14).mean()
     avedev_typ = TYP0.rolling(14).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
     CCI0 = (TYP0 - ma_typ) / (0.015 * avedev_typ.replace(0, np.nan))
     CCI0 = CCI0.fillna(0)
 
+    # ------ 量比 ------
     V5 = V.rolling(5).mean()
     VR = V / V5.shift(1).replace(0, np.nan)
     VR = VR.fillna(1)
 
+    # ------ K线形态 ------
     实体 = (C - O).abs()
     上影 = H - pd.concat([C, O], axis=1).max(axis=1)
     下影 = pd.concat([C, O], axis=1).min(axis=1) - L
     阳线 = C >= O
     阴线 = C <= O
 
+    # ------ BIAS ------
     BIAS20 = (C - MA20) / MA20 * 100
 
+    # ------ MACD ------
     DIF0 = C.ewm(span=12, adjust=False).mean() - C.ewm(span=26, adjust=False).mean()
     DEA0 = DIF0.ewm(span=9, adjust=False).mean()
 
@@ -386,18 +301,13 @@ def update_highest(context):
 
 
 # ============================================================
-#  仓位计算（根据市场环境动态调节）
+#  仓位计算
 # ============================================================
-def calc_position_size(context, signal_level, price, regime):
+def calc_position_size(context, signal_level, price):
     available = context.portfolio.available_cash
-
-    # 基础仓位比例
-    ratio_map = {3: 0.70, 2: 0.50, 1: 0.35}
-    ratio = ratio_map.get(signal_level, 0.35)
-
-    # 根据市场环境缩放
-    regime_scale = {'bull': 1.0, 'normal': 0.8, 'weak': 0.5, 'bear': 0.0}
-    ratio = ratio * regime_scale.get(regime, 0.5)
+    # ETF集中度可以更高（风险比个股低）
+    ratio_map = {3: 0.80, 2: 0.60, 1: 0.45}
+    ratio = ratio_map.get(signal_level, 0.45)
 
     amount = available * ratio
     shares = int(amount / price / 100) * 100
@@ -412,70 +322,12 @@ def calc_position_size(context, signal_level, price, regime):
 
 
 # ============================================================
-#  账户级风控
-# ============================================================
-def check_account_risk(context):
-    """
-    返回:
-      'normal' - 正常交易
-      'pause'  - 暂停买入（回撤>12%）
-      'clear'  - 全部清仓（回撤>18%）
-      'frozen' - 冻结期内不交易
-    """
-    today = context.current_dt.date()
-    total_value = context.portfolio.total_value
-
-    # 更新账户最高值
-    if total_value > g.account_high:
-        g.account_high = total_value
-
-    # 冻结期检查
-    if g.freeze_until and today <= g.freeze_until:
-        return 'frozen'
-    elif g.freeze_until and today > g.freeze_until:
-        g.freeze_until = None
-        g.account_high = total_value  # 重置高点
-        log.info('[风控解除] 冻结期结束，重置账户高点为 %.2f' % total_value)
-
-    # 账户回撤计算
-    if g.account_high > 0:
-        drawdown = (g.account_high - total_value) / g.account_high
-
-        if drawdown >= g.account_clear_loss:
-            return 'clear'
-        elif drawdown >= g.account_stop_loss:
-            return 'pause'
-
-    return 'normal'
-
-
-# ============================================================
 #  每日交易主函数
 # ============================================================
 def market_open(context):
     today = context.current_dt.date()
     prev_date = get_prev_trade_date(context)
     current_data = get_current_data()
-
-    # ========== 账户级风控检查 ==========
-    risk_status = check_account_risk(context)
-
-    if risk_status == 'clear':
-        log.info('[账户风控-清仓] 总值从高点%.2f回撤超%.0f%%，全部清仓！' % (
-            g.account_high, g.account_clear_loss * 100))
-        for code in list(context.portfolio.positions.keys()):
-            pos = context.portfolio.positions[code]
-            if pos.total_amount > 0 and not current_data[code].paused:
-                if current_data[code].last_price > current_data[code].low_limit:
-                    order_target(code, 0)
-                    g.highest_since_buy.pop(code, None)
-        import datetime
-        g.freeze_until = today + datetime.timedelta(days=g.freeze_days)
-        log.info('[冻结交易] 至 %s' % g.freeze_until)
-        return
-
-    if risk_status == 'frozen':
-        return
 
     # ========== 第一步：检查持仓卖出 ==========
     for code in list(context.portfolio.positions.keys()):
@@ -486,26 +338,22 @@ def market_open(context):
         if current_data[code].paused:
             continue
 
-        if current_data[code].last_price <= current_data[code].low_limit:
-            continue
-
         cur_price = current_data[code].last_price
         profit_pct = (cur_price - pos.avg_cost) / pos.avg_cost
 
-        # --- 自适应跟踪止损 ---
+        # --- 跟踪止损 ---
         if code in g.highest_since_buy:
             highest = g.highest_since_buy[code]
             drawdown = (highest - cur_price) / highest
-            trail_pct = get_trailing_stop(code, prev_date)
-            if drawdown >= trail_pct:
-                log.info('[跟踪止损] %s 最高%.2f 现价%.2f 回撤%.1f%%(阈值%.0f%%)' % (
-                    code, highest, cur_price, drawdown * 100, trail_pct * 100))
+            if drawdown >= g.trailing_stop_pct:
+                log.info('[跟踪止损] %s 最高%.3f 现价%.3f 回撤%.1f%%' % (
+                    code, highest, cur_price, drawdown * 100))
                 order_target(code, 0)
                 g.highest_since_buy.pop(code, None)
                 record_signal(g.sell_signal_history, code, today)
                 continue
 
-        # --- 最大亏损止损（兜底）---
+        # --- 最大亏损止损 ---
         if profit_pct <= -g.max_loss_pct:
             log.info('[最大止损] %s 亏损%.1f%%' % (code, profit_pct * 100))
             order_target(code, 0)
@@ -532,10 +380,6 @@ def market_open(context):
             record_signal(g.sell_signal_history, code, today)
 
     # ========== 第二步：检查是否可以买入 ==========
-    if risk_status == 'pause':
-        log.info('[账户风控] 回撤超%.0f%%，暂停买入' % (g.account_stop_loss * 100))
-        return
-
     hold_count = len([c for c in context.portfolio.positions
                       if context.portfolio.positions[c].total_amount > 0])
 
@@ -545,49 +389,17 @@ def market_open(context):
     if context.portfolio.available_cash < 500:
         return
 
-    # 大盘环境
-    regime = get_market_regime(context)
-
-    if regime == 'bear':
-        log.info('[市场环境] 熊市，禁止买入')
-        return
-
-    # ========== 第三步：选股并买入 ==========
-    pool = get_stock_pool(context, use_date=prev_date)
-
-    # 弱势市场要求更高信号级别
-    min_signal = g.signal_level
-    if regime == 'weak':
-        min_signal = max(min_signal, 3)  # 弱势只买强信号
-
-    q = query(
-        valuation.code,
-        valuation.circulating_market_cap,
-        indicator.roe,
-        indicator.inc_revenue_year_on_year
-    ).filter(
-        valuation.code.in_(pool),
-        valuation.circulating_market_cap > 30,
-        valuation.circulating_market_cap < 500,
-        indicator.roe > 3,
-        indicator.inc_revenue_year_on_year > -20
-    ).order_by(
-        indicator.roe.desc()
-    ).limit(500)
-
-    df_val = get_fundamentals(q, date=prev_date)
-    if df_val is None or len(df_val) == 0:
-        return
-
-    candidates = df_val['code'].tolist()
-
+    # ========== 第三步：扫描ETF池信号 ==========
     buy_signals = []
-    for code in candidates:
+    for code in g.etf_pool:
         if code in context.portfolio.positions and \
                 context.portfolio.positions[code].total_amount > 0:
             continue
 
         if check_cooldown(g.buy_signal_history, code, today, g.cooldown_buy):
+            continue
+
+        if current_data[code].paused:
             continue
 
         sig = calc_indicators(code, prev_date, count=120)
@@ -600,20 +412,12 @@ def market_open(context):
         if buy_level == 0 or sell_level >= 1:
             continue
 
-        # 动态信号门槛
-        if buy_level < min_signal:
+        if buy_level < g.signal_level:
             continue
 
+        # ETF也做趋势过滤：至少偏多
         ts = sig['趋势系数']
-        if g.trend_filter == 1 and ts < 1:
-            continue
-        if g.trend_filter == 2 and ts < 2:
-            continue
-
-        if current_data[code].last_price >= current_data[code].high_limit:
-            continue
-
-        if sig['close'] > 180:
+        if ts < 1:
             continue
 
         buy_signals.append(sig)
@@ -621,7 +425,8 @@ def market_open(context):
     if not buy_signals:
         return
 
-    buy_signals.sort(key=lambda x: (x['买分'], x['趋势系数']), reverse=True)
+    # 按买分降序
+    buy_signals.sort(key=lambda x: x['买分'], reverse=True)
 
     slots = g.max_hold - hold_count
     for sig in buy_signals[:slots]:
@@ -629,14 +434,15 @@ def market_open(context):
         price = sig['close']
         level = sig['买入级别']
 
-        shares = calc_position_size(context, level, price, regime)
+        shares = calc_position_size(context, level, price)
         if shares <= 0:
             continue
 
         level_name = {3: '强买', 2: '中买', 1: '弱买'}[level]
-        log.info('[%s|%s] %s 买分=%.1f 趋势=%d 拉伸=%.1f %d股 @%.2f' % (
-            level_name, regime, code, sig['买分'], sig['趋势系数'],
+        log.info('[%s] %s 买分=%.1f 趋势=%d 拉伸=%.1f %d股 @%.3f' % (
+            level_name, code, sig['买分'], sig['趋势系数'],
             sig['拉伸线'], shares, price))
+        log.info('  BU: %s' % sig['BU_details'])
 
         order(code, shares)
         g.highest_since_buy[code] = price
@@ -650,21 +456,15 @@ def after_close(context):
     positions = context.portfolio.positions
     hold = {code: pos for code, pos in positions.items() if pos.total_amount > 0}
 
-    dd = 0
-    if g.account_high > 0:
-        dd = (g.account_high - context.portfolio.total_value) / g.account_high * 100
-
     log.info('=' * 55)
-    log.info('总值:%.2f 高点:%.2f 回撤:%.1f%% 现金:%.2f 持仓:%d' % (
+    log.info('总值:%.2f 现金:%.2f 持仓:%d' % (
         context.portfolio.total_value,
-        g.account_high,
-        dd,
         context.portfolio.available_cash,
         len(hold)))
 
     for code, pos in hold.items():
         profit_pct = (pos.price - pos.avg_cost) / pos.avg_cost * 100
         highest = g.highest_since_buy.get(code, pos.price)
-        log.info('  %s 成本:%.2f 现价:%.2f 高:%.2f 盈亏:%.1f%% 持:%d' % (
+        log.info('  %s 成本:%.3f 现价:%.3f 高:%.3f 盈亏:%.1f%% 持:%d' % (
             code, pos.avg_cost, pos.price, highest, profit_pct, pos.total_amount))
     log.info('=' * 55)
