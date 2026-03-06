@@ -56,12 +56,18 @@ def initialize(context):
     run_daily(after_close, time='15:30')
 
 
+def get_prev_trade_date(context):
+    """获取前一个交易日，用于避免未来数据"""
+    today = context.current_dt.date()
+    return get_trade_days(end_date=today, count=2)[0]
+
+
 # ============================================================
 #  盘前：获取股票池
 # ============================================================
-def get_stock_pool(context):
+def get_stock_pool(context, use_date=None):
     """获取主板+创业板股票池，排除ST/停牌/次新/小市值"""
-    today = context.current_dt.date()
+    today = use_date or context.current_dt.date()
 
     # 全部A股
     all_stocks = get_all_securities(types=['stock'], date=today)
@@ -377,6 +383,7 @@ def calc_position_size(context, signal_level, price):
 # ============================================================
 def market_open(context):
     today = context.current_dt.date()
+    prev_date = get_prev_trade_date(context)
     current_data = get_current_data()
 
     # ========== 第一步：检查持仓卖出 ==========
@@ -389,7 +396,7 @@ def market_open(context):
         if current_data[code].paused:
             continue
 
-        sig = calc_indicators(code, today, count=120)
+        sig = calc_indicators(code, prev_date, count=120)
         if sig is None:
             continue
 
@@ -436,7 +443,7 @@ def market_open(context):
         return
 
     # ========== 第三步：选股并买入 ==========
-    pool = get_stock_pool(context)
+    pool = get_stock_pool(context, use_date=prev_date)
 
     # 按流通市值排序取前300只加速计算（2万资金无需扫全市场）
     q = query(
@@ -449,7 +456,7 @@ def market_open(context):
         valuation.circulating_market_cap.asc()
     ).limit(500)
 
-    df_val = get_fundamentals(q, date=today)
+    df_val = get_fundamentals(q, date=prev_date)
     if df_val is None or len(df_val) == 0:
         return
 
@@ -467,7 +474,7 @@ def market_open(context):
         if check_cooldown(g.buy_signal_history, code, today, g.cooldown_buy):
             continue
 
-        sig = calc_indicators(code, today, count=120)
+        sig = calc_indicators(code, prev_date, count=120)
         if sig is None:
             continue
 
