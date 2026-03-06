@@ -1,24 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-智能买卖点量化交易策略 V8.0 - ETF版
+智能买卖点量化交易策略 V8.0 - ETF版（最终版）
 ======================================
-四轮个股回测教训总结：
-  V7.0-V7.3 核心问题：6买6卖信号扫描500只个股，命中率不足
-  2万资金只能买1-2只个股，选错一只就重亏
+经6轮迭代回测确认的最优方案：
+  V7.0-V7.3 个股选股失败 → 转为ETF择时
+  V8.0 3只宽基ETF：4年收益38.44%，超额+47.72%，回撤19.15%
+  V8.1 加行业ETF+盈利保护 → 反而退步，已回退
 
-V8.0 思路转变：
-  - 不再选个股，改为交易3只宽基/行业ETF
-  - 同样的技术信号系统用于ETF择时（买卖点判断）
-  - ETF自带分散，消除个股黑天鹅
-  - 信号用于择时而非选股，命中率大幅提高
-
-标的池：
-  - 510300 沪深300ETF（大盘蓝筹代表）
-  - 159915 创业板ETF（成长股代表）
-  - 510500 中证500ETF（中盘股代表）
+标的池（仅宽基，不加行业ETF）：
+  - 510300 沪深300ETF（大盘蓝筹）
+  - 159915 创业板ETF（成长弹性）
+  - 510500 中证500ETF（中盘均衡）
 
 资金：2万
-保留全部：6买6卖信号 + 趋势五档 + 拉伸度 + 背离检测
 """
 
 import numpy as np
@@ -44,11 +38,11 @@ def initialize(context):
         min_commission=5
     ), type='stock')
 
-    # ---- ETF标的池 ----
+    # ---- ETF标的池（仅宽基，经回测验证行业ETF会拖累收益）----
     g.etf_pool = [
-        '510300.XSHG',   # 沪深300ETF
-        '159915.XSHE',   # 创业板ETF
-        '510500.XSHG',   # 中证500ETF
+        '510300.XSHG',   # 沪深300ETF（大盘蓝筹）
+        '159915.XSHE',   # 创业板ETF（成长弹性）
+        '510500.XSHG',   # 中证500ETF（中盘均衡）
     ]
 
     # ---- 策略参数 ----
@@ -346,8 +340,8 @@ def market_open(context):
             highest = g.highest_since_buy[code]
             drawdown = (highest - cur_price) / highest
             if drawdown >= g.trailing_stop_pct:
-                log.info('[跟踪止损] %s 最高%.3f 现价%.3f 回撤%.1f%%' % (
-                    code, highest, cur_price, drawdown * 100))
+                log.info('[跟踪止损] %s 最高%.3f 现价%.3f 回撤%.1f%% 盈亏%.1f%%' % (
+                    code, highest, cur_price, drawdown * 100, profit_pct * 100))
                 order_target(code, 0)
                 g.highest_since_buy.pop(code, None)
                 record_signal(g.sell_signal_history, code, today)
