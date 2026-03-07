@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-智能买卖点量化交易策略 V8.0 - ETF版（最终版）
+智能买卖点量化交易策略 V8.0 - ETF版（最终版+动态资金适配）
 ======================================
-经6轮迭代回测确认的最优方案：
-  V7.0-V7.3 个股选股失败 → 转为ETF择时
-  V8.0 3只宽基ETF：4年收益38.44%，超额+47.72%，回撤19.15%
-  V8.1 加行业ETF+盈利保护 → 反而退步，已回退
+核心信号逻辑不变（经8轮回测验证），仅根据账户资金规模动态调整运营参数：
 
-标的池（仅宽基，不加行业ETF）：
+资金档位：
+  <1.5万（微型）：集中1只ETF，高仓位搏收益
+  1.5-5万（小型）：标准2只ETF（回测验证档位）
+  5-10万（中型）：3只ETF全覆盖，分散更好
+  >10万（大型）：3只ETF+可持有更久
+
+标的池（仅宽基）：
   - 510300 沪深300ETF（大盘蓝筹）
   - 159915 创业板ETF（成长弹性）
   - 510500 中证500ETF（中盘均衡）
-
-资金：2万
 """
 
 import numpy as np
@@ -45,19 +46,55 @@ def initialize(context):
         '510500.XSHG',   # 中证500ETF（中盘均衡）
     ]
 
-    # ---- 策略参数 ----
-    g.max_hold = 2               # 最多同时持有2只ETF
-    g.signal_level = 2           # 中级以上信号
-    g.cooldown_buy = 5
-    g.cooldown_sell = 5
-    g.trailing_stop_pct = 0.05   # ETF跟踪止损5%（ETF波动小于个股）
-    g.max_loss_pct = 0.08        # 最大亏损8%
+    # ---- 资金档位配置 ----
+    # 每个档位：(最大持仓数, 信号门槛, 买入冷却, 卖出冷却, 跟踪止损, 最大止损, 仓位比例表)
+    g.capital_tiers = {
+        'micro': {                          # <1.5万
+            'max_hold': 1,                  # 集中1只，2万以下买2只每只太少
+            'signal_level': 2,
+            'cooldown_buy': 5,
+            'cooldown_sell': 5,
+            'trailing_stop_pct': 0.05,
+            'max_loss_pct': 0.08,
+            'position_ratio': {3: 0.90, 2: 0.75, 1: 0.50},  # 集中火力
+        },
+        'small': {                          # 1.5万-5万（回测验证档位）
+            'max_hold': 2,
+            'signal_level': 2,
+            'cooldown_buy': 5,
+            'cooldown_sell': 5,
+            'trailing_stop_pct': 0.05,
+            'max_loss_pct': 0.08,
+            'position_ratio': {3: 0.80, 2: 0.60, 1: 0.45},
+        },
+        'medium': {                         # 5万-10万
+            'max_hold': 3,                  # 3只ETF全覆盖
+            'signal_level': 2,
+            'cooldown_buy': 5,
+            'cooldown_sell': 5,
+            'trailing_stop_pct': 0.05,
+            'max_loss_pct': 0.08,
+            'position_ratio': {3: 0.70, 2: 0.55, 1: 0.40},  # 单只比例降低（持仓更多）
+        },
+        'large': {                          # >10万
+            'max_hold': 3,
+            'signal_level': 2,
+            'cooldown_buy': 5,
+            'cooldown_sell': 5,
+            'trailing_stop_pct': 0.06,      # 略宽止损，资金厚可以扛波动
+            'max_loss_pct': 0.09,
+            'position_ratio': {3: 0.60, 2: 0.45, 1: 0.35},
+        },
+    }
+
+    g.current_tier = None  # 当前档位名称
 
     # ---- 运行时状态 ----
     g.buy_signal_history = {}
     g.sell_signal_history = {}
     g.highest_since_buy = {}
 
+    run_daily(update_tier, time='09:30')    # 每日开盘前更新档位
     run_daily(market_open, time='09:35')
     run_daily(update_highest, time='15:00')
     run_daily(after_close, time='15:30')
@@ -66,6 +103,36 @@ def initialize(context):
 def get_prev_trade_date(context):
     today = context.current_dt.date()
     return get_trade_days(end_date=today, count=2)[0]
+
+
+# ============================================================
+#  动态资金档位
+# ============================================================
+def update_tier(context):
+    """每日根据总资产更新资金档位"""
+    total = context.portfolio.total_value
+
+    if total < 15000:
+        new_tier = 'micro'
+    elif total < 50000:
+        new_tier = 'small'
+    elif total < 100000:
+        new_tier = 'medium'
+    else:
+        new_tier = 'large'
+
+    if new_tier != g.current_tier:
+        old_tier = g.current_tier or '初始化'
+        g.current_tier = new_tier
+        tier_cfg = g.capital_tiers[new_tier]
+        log.info('[档位变更] %s → %s | 总资产:%.0f | 最大持仓:%d | 止损:%.0f%%' % (
+            old_tier, new_tier, total,
+            tier_cfg['max_hold'], tier_cfg['trailing_stop_pct'] * 100))
+
+
+def get_tier_param(param_name):
+    """获取当前档位的参数值"""
+    return g.capital_tiers[g.current_tier][param_name]
 
 
 # ============================================================
@@ -299,8 +366,7 @@ def update_highest(context):
 # ============================================================
 def calc_position_size(context, signal_level, price):
     available = context.portfolio.available_cash
-    # ETF集中度可以更高（风险比个股低）
-    ratio_map = {3: 0.80, 2: 0.60, 1: 0.45}
+    ratio_map = get_tier_param('position_ratio')
     ratio = ratio_map.get(signal_level, 0.45)
 
     amount = available * ratio
@@ -336,19 +402,22 @@ def market_open(context):
         profit_pct = (cur_price - pos.avg_cost) / pos.avg_cost
 
         # --- 跟踪止损 ---
+        trailing_stop = get_tier_param('trailing_stop_pct')
         if code in g.highest_since_buy:
             highest = g.highest_since_buy[code]
             drawdown = (highest - cur_price) / highest
-            if drawdown >= g.trailing_stop_pct:
-                log.info('[跟踪止损] %s 最高%.3f 现价%.3f 回撤%.1f%% 盈亏%.1f%%' % (
-                    code, highest, cur_price, drawdown * 100, profit_pct * 100))
+            if drawdown >= trailing_stop:
+                log.info('[跟踪止损|%s] %s 最高%.3f 现价%.3f 回撤%.1f%%(阈值%.0f%%) 盈亏%.1f%%' % (
+                    g.current_tier, code, highest, cur_price,
+                    drawdown * 100, trailing_stop * 100, profit_pct * 100))
                 order_target(code, 0)
                 g.highest_since_buy.pop(code, None)
                 record_signal(g.sell_signal_history, code, today)
                 continue
 
         # --- 最大亏损止损 ---
-        if profit_pct <= -g.max_loss_pct:
+        max_loss = get_tier_param('max_loss_pct')
+        if profit_pct <= -max_loss:
             log.info('[最大止损] %s 亏损%.1f%%' % (code, profit_pct * 100))
             order_target(code, 0)
             g.highest_since_buy.pop(code, None)
@@ -362,7 +431,7 @@ def market_open(context):
 
         sell_level = sig['卖出级别']
 
-        if check_cooldown(g.sell_signal_history, code, today, g.cooldown_sell):
+        if check_cooldown(g.sell_signal_history, code, today, get_tier_param('cooldown_sell')):
             if sell_level < 3:
                 continue
 
@@ -377,7 +446,7 @@ def market_open(context):
     hold_count = len([c for c in context.portfolio.positions
                       if context.portfolio.positions[c].total_amount > 0])
 
-    if hold_count >= g.max_hold:
+    if hold_count >= get_tier_param('max_hold'):
         return
 
     if context.portfolio.available_cash < 500:
@@ -390,7 +459,7 @@ def market_open(context):
                 context.portfolio.positions[code].total_amount > 0:
             continue
 
-        if check_cooldown(g.buy_signal_history, code, today, g.cooldown_buy):
+        if check_cooldown(g.buy_signal_history, code, today, get_tier_param('cooldown_buy')):
             continue
 
         if current_data[code].paused:
@@ -406,7 +475,7 @@ def market_open(context):
         if buy_level == 0 or sell_level >= 1:
             continue
 
-        if buy_level < g.signal_level:
+        if buy_level < get_tier_param('signal_level'):
             continue
 
         # ETF也做趋势过滤：至少偏多
@@ -422,7 +491,7 @@ def market_open(context):
     # 按买分降序
     buy_signals.sort(key=lambda x: x['买分'], reverse=True)
 
-    slots = g.max_hold - hold_count
+    slots = get_tier_param('max_hold') - hold_count
     for sig in buy_signals[:slots]:
         code = sig['code']
         price = sig['close']
@@ -451,10 +520,12 @@ def after_close(context):
     hold = {code: pos for code, pos in positions.items() if pos.total_amount > 0}
 
     log.info('=' * 55)
-    log.info('总值:%.2f 现金:%.2f 持仓:%d' % (
+    log.info('[%s] 总值:%.2f 现金:%.2f 持仓:%d/%d' % (
+        g.current_tier,
         context.portfolio.total_value,
         context.portfolio.available_cash,
-        len(hold)))
+        len(hold),
+        get_tier_param('max_hold')))
 
     for code, pos in hold.items():
         profit_pct = (pos.price - pos.avg_cost) / pos.avg_cost * 100
