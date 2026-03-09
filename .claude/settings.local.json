@@ -11,7 +11,11 @@
       "WebFetch(domain:iris.findtruman.io)",
       "WebFetch(domain:lingjie.li)",
       "WebFetch(domain:ycjq.95358.com)",
-      "WebFetch(domain:ptradeapi.com)"
+      "WebFetch(domain:ptradeapi.com)",
+      "Read(//k/financial/**)",
+      "Bash(where python:*)",
+      "Bash(python:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)"
     ]
   }
 }
