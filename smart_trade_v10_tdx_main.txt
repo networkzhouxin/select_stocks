@@ -1,0 +1,121 @@
+{==========================================}
+{   智能买卖V10.0 - 主图叠加（ATR止损线）  }
+{   配合副图指标使用                        }
+{   功能：K线上显示ATR跟踪止损参考线       }
+{         + 买卖信号箭头标注                }
+{==========================================}
+
+
+{====== 基础指标 ======}
+
+MA20:=MA(C,20);
+MA60:=MA(C,60);
+EMA12:=EMA(C,12);
+EMA26:=EMA(C,26);
+EMA20:=EMA(C,20);
+
+RSV:=(C-LLV(L,9))/(HHV(H,9)-LLV(L,9))*100;
+K0:=SMA(RSV,3,1);
+D0:=SMA(K0,3,1);
+J0:=3*K0-2*D0;
+
+LC:=REF(C,1);
+RSI6:=SMA(MAX(C-LC,0),6,1)/SMA(ABS(C-LC),6,1)*100;
+
+DIF0:=EMA12-EMA26;
+DEA0:=EMA(DIF0,9);
+
+TR0:=MAX(MAX(H-L,ABS(H-REF(C,1))),ABS(L-REF(C,1)));
+ATR14:=MA(TR0,14);
+
+V5:=MA(V,5);
+VR:=V/REF(V5,1);
+实体:=ABS(C-O);
+阳线:=C>=O;
+阴线:=C<=O;
+
+ROC20:=(C/REF(C,20)-1)*100;
+
+
+{====== 趋势评分 ======}
+
+趋势分:=IF(C>MA20,1,0)+IF(EMA20>REF(EMA20,10),1,0)+IF(C>MA60,1,0)+IF(DIF0>0,1,0)+IF(ROC20>0,1,0);
+趋势系数:=IF(趋势分>=4,2,IF(趋势分=3,1,IF(趋势分=2,0,IF(趋势分=1,-1,-2))));
+
+
+{====== 买入信号 ======}
+
+BU1:=C>MA20 AND REF(C,1)<=REF(MA20,1) AND VR>1.2;
+BU2:=(J0<10 OR RSI6<20) AND 阳线 AND 实体>0;
+BU3:=DIF0>DEA0 AND REF(DIF0,1)<=REF(DEA0,1) AND DIF0<0;
+BU4:=C<=LLV(C,20) AND RSI6>LLV(RSI6,20)*1.1 AND RSI6<40;
+
+买原分:=IF(BU1,1.5,0)+IF(BU2,1.0,0)+IF(BU3,1.5,0)+IF(BU4,1.0,0);
+买分:=买原分+IF(趋势系数>=1,1,0)-IF(趋势系数<=-1,1,0);
+买冷却:=COUNT(买原分>=1,5)<=1;
+
+
+{====== 卖出信号 ======}
+
+SE1:=C<MA20 AND REF(C,1)>=REF(MA20,1) AND VR>1.0;
+SE2:=(J0>90 OR RSI6>80) AND 阴线 AND 实体>0;
+SE3:=C<REF(C,1)*0.97 AND VR>1.5;
+SE4:=C>=HHV(C,20) AND RSI6<HHV(RSI6,20)*0.9 AND RSI6>60;
+
+卖原分:=IF(SE1,1.5,0)+IF(SE2,1.0,0)+IF(SE3,1.5,0)+IF(SE4,1.0,0);
+卖分:=卖原分+IF(趋势系数<0,1,0)-IF(趋势系数>=2,0.5,0);
+卖冷却:=COUNT(卖原分>=1,5)<=1;
+
+
+{====== 信号分级 ======}
+
+买入有效:=买分>=2.0 AND 买冷却 AND 趋势系数>=1;
+买强:=买入有效 AND (买分>=3 OR (买分>=2.5 AND 趋势系数>=1)) AND NOT(卖分>=2);
+买中:=买入有效 AND 买分>=2 AND NOT(买强) AND NOT(卖分>=2);
+
+卖出有效:=卖分>=2.0 AND 卖冷却;
+卖强:=卖出有效 AND (卖分>=3 OR (卖分>=2 AND 趋势系数<0)) AND NOT(买入有效);
+卖中:=卖出有效 AND 卖分>=2 AND NOT(卖强) AND NOT(买入有效);
+
+趋势持有:=趋势分>=4 AND COUNT(买入有效,20)>=1 AND C>MA20;
+
+
+{====== ATR跟踪止损参考线（主图核心）======}
+{说明：显示基于近期最高价的ATR止损位}
+{实际策略从买入价开始跟踪，TDX中用滚动高点近似}
+
+近期高:=HHV(H,20);
+
+{跟踪止损 = 2.5倍ATR，限制在[3%,15%]}
+跟踪比:=(2.5*ATR14)/近期高;
+修正跟踪比:=MIN(MAX(跟踪比,0.03),0.15);
+跟踪止损:近期高*(1-修正跟踪比),LINETHICK2,COLORGREEN,LINESTYLE2;
+
+{最大止损 = 3.5倍ATR，限制在[3%,15%]}
+最大比:=(3.5*ATR14)/近期高;
+修正最大比:=MIN(MAX(最大比,0.03),0.15);
+最大止损:近期高*(1-修正最大比),LINETHICK1,COLORBLUE,LINESTYLE2;
+
+{均线参考}
+二十日:MA20,COLORYELLOW;
+六十日:MA60,COLORMAGENTA;
+
+
+{====== 信号标注（主图箭头）======}
+
+DRAWICON(买强,L*0.98,1);
+DRAWICON(买中,L*0.99,1);
+DRAWICON(卖强,H*1.02,2);
+DRAWICON(卖中,H*1.01,2);
+
+DRAWTEXT(买强,L*0.97,'强买'),COLORYELLOW;
+DRAWTEXT(买中,L*0.98,'中买'),COLORWHITE;
+DRAWTEXT(卖强,H*1.03,'强卖'),COLORYELLOW;
+DRAWTEXT(卖中,H*1.02,'中卖'),COLORWHITE;
+
+{趋势持有提示}
+DRAWTEXT(趋势持有 AND NOT(卖强) AND NOT(卖中),H*1.01,'持'),COLORRED;
+
+{ATR数值显示（最新K线）}
+DRAWTEXT_FIX(1,0.01,0.01,0,'ATR:'+NUMTOSTR(ATR14,4)+' 止损比:'+NUMTOSTR(修正跟踪比*100,1)+'%'),COLORGREEN;
+DRAWTEXT_FIX(1,0.01,0.04,0,'趋势:'+NUMTOSTR(趋势分,0)+' 动量:'+NUMTOSTR(ROC20,1)+'%'),COLORYELLOW;
