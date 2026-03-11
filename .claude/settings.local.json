@@ -15,7 +15,10 @@
       "Read(//k/financial/**)",
       "Bash(where python:*)",
       "Bash(python:*)",
-      "Bash(PYTHONIOENCODING=utf-8 python:*)"
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(wc:*)",
+      "Bash(ls -lh /k/financial/select_stocks/*.py)",
+      "Bash(xxd:*)"
     ]
   }
 }
