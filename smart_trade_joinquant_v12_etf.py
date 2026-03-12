@@ -1,33 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-智能ETF量化交易策略 V12.0 - 扩展标的 + BUG修复
+智能ETF量化交易策略 V12.0 - 纯ATR止损 + 标的优化
 =============================================
-基于V10.0，核心信号逻辑100%不变，仅扩大标的池 + 修复BUG。
+基于V10.0，两处改动：
+  1. 去掉信号卖出：V10回测103笔中信号卖出9笔亏8笔（-17.3%），
+     属于负贡献。只保留ATR跟踪止损和ATR最大止损作为退出机制。
+  2. 510300→512100：沪深300在V10中34笔交易仅贡献+5.4%，
+     波动小趋势弱不适合趋势跟踪。换成中证1000ETF（小盘高波动）。
 
-与V10.0的区别（仅两处）：
-  1. ETF池从3只扩展到5只（新增510880红利、512100中证1000）
-  2. 修复信号卖出处cleanup_position_state未定义的BUG
+其余所有参数、信号条件、仓位管理与V10.0完全一致。
 
-V12.0优化尝试记录（全部回退，均导致劣化）：
-  - BU1加MA20斜率过滤 → 踏空V型反转真突破，总收益14%
-  - BU4替换为趋势回踩 → 增加低质量交易
-  - ROC>0动量过滤 → 禁掉BU2核心超卖场景，总收益21%
-  教训：基于4年短周期的信号优化 = 过拟合，V10.0信号体系已是最优。
-
-不变的部分（与V10.0完全一致）：
-  - 4买+4卖信号体系、趋势评分、买卖分级
-  - ATR动态止损（2.5x跟踪/3.5x最大）
-  - 趋势持有模式
-  - 波动率反比仓位、动量排序选股
-  - 所有参数取学术默认值
-  - 资金档位配置
-
-标的池（宽基ETF，5只）：
-  - 510300 沪深300ETF（大盘均衡）       ← 原有
-  - 159915 创业板ETF（成长弹性）        ← 原有
-  - 510500 中证500ETF（中盘均衡）       ← 原有
-  - 510880 红利ETF（低波防御）          ← 新增
-  - 512100 中证1000ETF（小盘弹性）      ← 新增
+标的池（宽基ETF）：
+  - 512100 中证1000ETF（小盘弹性）← 替换510300
+  - 159915 创业板ETF（成长弹性）
+  - 510500 中证500ETF（中盘均衡）
 """
 
 import numpy as np
@@ -53,17 +39,14 @@ def initialize(context):
         min_commission=5
     ), type='stock')
 
-    # ---- ETF标的池（5只宽基ETF）----
-    # 不加510050（与510300相关性>80%）、159901（与159915+510300重叠度高）
+    # ---- ETF标的池 ----
     g.etf_pool = [
-        '510300.XSHG',   # 沪深300ETF（大盘均衡）
-        '159915.XSHE',   # 创业板ETF（成长弹性）
-        '510500.XSHG',   # 中证500ETF（中盘均衡）
-        '510880.XSHG',   # 红利ETF（低波防御）
-        '512100.XSHG',   # 中证1000ETF（小盘弹性）
+        '512100.XSHG',   # 中证1000ETF（替换510300，小盘高波动更适合趋势跟踪）
+        '159915.XSHE',   # 创业板ETF
+        '510500.XSHG',   # 中证500ETF
     ]
 
-    # ---- 资金档位配置（与V10.0完全一致）----
+    # ---- 资金档位配置（仅调整持仓数和仓位比例）----
     g.capital_tiers = {
         'micro': {    # <1.5万
             'max_hold': 1,
@@ -141,7 +124,7 @@ def get_tier_param(param_name):
 
 
 # ============================================================
-#  技术指标计算（与V10.0完全一致）
+#  技术指标计算
 # ============================================================
 def calc_sma(series, n, m):
     """通达信SMA函数"""
@@ -153,7 +136,7 @@ def calc_sma(series, n, m):
 
 
 def calc_indicators(code, end_date, count=120):
-    """计算技术指标并生成买卖信号（与V10.0完全一致）"""
+    """计算技术指标并生成买卖信号"""
     df = get_price(code, end_date=end_date, count=count,
                    frequency='daily',
                    fields=['open', 'close', 'high', 'low', 'volume'],
@@ -229,57 +212,59 @@ def calc_indicators(code, end_date, count=120):
     # ======================================================
     #  趋势评分（5维度，每个+1分，满分5）
     # ======================================================
+    # 改进：用EMA20替代MA20对比5日前，响应更快
     EMA20 = C.ewm(span=20, adjust=False).mean()
     趋势分 = (
         (C > MA20).astype(int)                    # 价格在MA20上方
-        + (EMA20 > EMA20.shift(10)).astype(int)   # 20日均线趋势向上
+        + (EMA20 > EMA20.shift(10)).astype(int)   # 20日均线趋势向上（10日对比更稳定）
         + (C > MA60).astype(int)                  # 价格在MA60上方
-        + (DIF0 > 0).astype(int)                  # MACD的DIF在零轴上方
+        + (DIF0 > 0).astype(int)                  # MACD的DIF在零轴上方（比DIF>DEA更稳定）
         + (ROC > 0).astype(int)                   # 20日动量为正
     )
     趋势系数 = 趋势分.map(lambda x: {0: -2, 1: -1, 2: 0, 3: 1}.get(x, 2))
 
     # ======================================================
-    #  买入信号（4个条件，与V10.0完全一致）
+    #  买入信号（4个条件，每个有明确理论依据）
     # ======================================================
 
-    # BU1: 放量突破MA20
+    # BU1: 放量突破MA20（趋势跟踪：价格突破关键均线+成交量确认）
     BU1 = (C > MA20) & (C.shift(1) <= MA20.shift(1)) & (VR > 1.2)
 
-    # BU2: 极度超卖反转
+    # BU2: 极度超卖反转（均值回归：KDJ/RSI极端值+阳线确认）
     BU2 = ((J0 < 10) | (RSI6 < 20)) & 阳线 & (实体 > 0)
 
-    # BU3: MACD零下金叉
+    # BU3: MACD零下金叉（动量反转：空头衰竭的经典信号）
     BU3 = (DIF0 > DEA0) & (DIF0.shift(1) <= DEA0.shift(1)) & (DIF0 < 0)
 
-    # BU4: 底背离
+    # BU4: 底背离（价格新低但RSI未新低，下跌动能衰竭）
     price_low_20 = C.rolling(20).min()
     rsi_low_20 = RSI6.rolling(20).min()
     BU4 = (C <= price_low_20) & (RSI6 > rsi_low_20 * 1.1) & (RSI6 < 40)
 
-    买原分 = (BU1.astype(float) * 1.5
-              + BU2.astype(float) * 1.0
-              + BU3.astype(float) * 1.5
-              + BU4.astype(float) * 1.0)
+    买原分 = (BU1.astype(float) * 1.5       # 趋势突破权重高
+              + BU2.astype(float) * 1.0      # 超卖反弹权重适中
+              + BU3.astype(float) * 1.5      # MACD金叉权重高
+              + BU4.astype(float) * 1.0)     # 底背离权重适中
 
+    # 趋势修正
     买分 = 买原分.copy()
     买分 = 买分 + (趋势系数 >= 1).astype(float) * 1.0
     买分 = 买分 - (趋势系数 <= -1).astype(float) * 1.0
 
     # ======================================================
-    #  卖出信号（4个条件，与V10.0完全一致）
+    #  卖出信号（4个条件）
     # ======================================================
 
-    # SE1: 放量跌破MA20
+    # SE1: 放量跌破MA20（趋势破坏）
     SE1 = (C < MA20) & (C.shift(1) >= MA20.shift(1)) & (VR > 1.0)
 
-    # SE2: 极度超买回落
+    # SE2: 极度超买回落（均值回归：KDJ/RSI极端值+阴线确认）
     SE2 = ((J0 > 90) | (RSI6 > 80)) & 阴线 & (实体 > 0)
 
-    # SE3: 恐慌性下跌
+    # SE3: 恐慌性下跌（单日跌幅>3%且放量）
     SE3 = (C < C.shift(1) * 0.97) & (VR > 1.5)
 
-    # SE4: 顶背离
+    # SE4: 顶背离（价格新高但RSI未新高，上涨动能衰竭）
     price_high_20 = C.rolling(20).max()
     rsi_high_20 = RSI6.rolling(20).max()
     SE4 = (C >= price_high_20) & (RSI6 < rsi_high_20 * 0.9) & (RSI6 > 60)
@@ -294,7 +279,7 @@ def calc_indicators(code, end_date, count=120):
     卖分 = 卖分 - (趋势系数 >= 2).astype(float) * 0.5
 
     # ======================================================
-    #  信号分级（与V10.0完全一致）
+    #  信号分级
     # ======================================================
     idx = -1
     result = {
@@ -337,11 +322,12 @@ def calc_indicators(code, end_date, count=120):
 
 
 # ============================================================
-#  ATR动态止损计算（与V10.0完全一致）
+#  ATR动态止损计算
 # ============================================================
 def calc_trailing_stop_price(code, highest_price, atr_value):
     """基于ATR的跟踪止损价"""
     atr_stop = highest_price - g.params['trailing_atr_mult'] * atr_value
+    # 转换为百分比并限制在[3%, 15%]范围内
     pct_stop = (highest_price - atr_stop) / highest_price
     pct_stop = max(g.params['stop_floor'], min(g.params['stop_cap'], pct_stop))
     return highest_price * (1 - pct_stop)
@@ -356,7 +342,7 @@ def calc_max_loss_price(entry_price, entry_atr):
 
 
 # ============================================================
-#  冷却与记录（与V10.0完全一致）
+#  冷却与记录
 # ============================================================
 def check_cooldown(history_dict, code, today, cooldown_days):
     if code not in history_dict:
@@ -373,7 +359,7 @@ def record_signal(history_dict, code, today):
 
 
 # ============================================================
-#  跟踪止损：每日更新最高价（与V10.0完全一致）
+#  跟踪止损：每日更新最高价
 # ============================================================
 def update_highest(context):
     for code in list(context.portfolio.positions.keys()):
@@ -389,22 +375,29 @@ def update_highest(context):
 
 
 # ============================================================
-#  波动率调整仓位（与V10.0完全一致）
+#  波动率调整仓位
 # ============================================================
 def calc_position_size(context, signal, signal_level):
-    """仓位 = 基础比例 * 信号强度系数 * 波动率反比系数"""
+    """
+    仓位 = 基础比例 * 信号强度系数 * 波动率反比系数
+
+    波动率反比：波动率高 → 仓位小，波动率低 → 仓位大
+    这是风险平价(Risk Parity)的简化版，学术界广泛验证有效
+    """
     available = context.portfolio.available_cash
     base_ratio = get_tier_param('base_position_ratio')
 
+    # 信号强度系数：强信号给更大仓位
     strength_mult = {3: 1.0, 2: 0.8, 1: 0.6}.get(signal_level, 0.5)
 
+    # 波动率反比系数：目标波动率15%，实际波动率越高仓位越小
     target_vol = 0.15
-    actual_vol = max(signal['volatility'], 0.05)
-    vol_mult = min(target_vol / actual_vol, 1.5)
-    vol_mult = max(vol_mult, 0.4)
+    actual_vol = max(signal['volatility'], 0.05)  # 防止除零
+    vol_mult = min(target_vol / actual_vol, 1.5)   # 最多放大1.5倍
+    vol_mult = max(vol_mult, 0.4)                   # 最少缩到0.4倍
 
     ratio = base_ratio * strength_mult * vol_mult
-    ratio = min(ratio, 0.95)
+    ratio = min(ratio, 0.95)  # 总仓位不超过95%
 
     price = signal['close']
     amount = available * ratio
@@ -446,7 +439,7 @@ def market_open(context):
 
         current_atr = sig['ATR']
         if pd.isna(current_atr) or current_atr <= 0:
-            current_atr = cur_price * 0.02
+            current_atr = cur_price * 0.02  # 回退值：价格的2%
 
         # --- ATR跟踪止损 ---
         if code in g.highest_since_buy:
@@ -475,25 +468,9 @@ def market_open(context):
                 record_signal(g.sell_signal_history, code, today)
                 continue
 
-        # --- 趋势持有模式（与V10.0完全一致）---
-        trend_score = sig['趋势分']
-        if trend_score >= p['trend_hold_score'] and profit_pct > 0:
-            continue
-
-        # --- 信号卖出（与V10.0完全一致）---
-        sell_level = sig['卖出级别']
-
-        if check_cooldown(g.sell_signal_history, code, today, p['cooldown_days']):
-            if sell_level < 3:
-                continue
-
-        if sell_level >= 2:
-            log.info('[信号卖出] %s 级别=%d 卖分=%.1f 趋势=%d 盈亏=%.1f%%' % (
-                code, sell_level, sig['卖分'], sig['趋势系数'], profit_pct * 100))
-            order_target(code, 0)
-            g.highest_since_buy.pop(code, None)
-            g.entry_atr.pop(code, None)
-            record_signal(g.sell_signal_history, code, today)
+        # --- V12改动：去掉信号卖出，全部依赖ATR止损退出 ---
+        # V10回测中信号卖出9笔亏8笔（-17.3%），属于负贡献
+        # 趋势持有模式也不再需要（因为已经没有信号卖出可跳过）
 
     # ========== 第二步：检查是否可以买入 ==========
     hold_count = len([c for c in context.portfolio.positions
@@ -505,7 +482,7 @@ def market_open(context):
     if context.portfolio.available_cash < 500:
         return
 
-    # ========== 第三步：扫描ETF池信号（与V10.0完全一致）==========
+    # ========== 第三步：扫描ETF池信号 ==========
     buy_candidates = []
     for code in g.etf_pool:
         if code in context.portfolio.positions and \
@@ -525,12 +502,14 @@ def market_open(context):
         buy_level = sig['买入级别']
         sell_level = sig['卖出级别']
 
+        # 基本过滤
         if buy_level == 0 or sell_level >= 1:
             continue
 
         if sig['买分'] < p['buy_threshold']:
             continue
 
+        # 趋势过滤：至少偏多（趋势系数>=1）
         if sig['趋势系数'] < 1:
             continue
 
@@ -539,7 +518,9 @@ def market_open(context):
     if not buy_candidates:
         return
 
-    # ========== 按风险调整动量排序（与V10.0完全一致）==========
+    # ========== 关键改进：按风险调整动量排序 ==========
+    # 不再只看买分，而是综合考虑买分强度和动量质量
+    # 动量好的ETF在趋势行情中更可能继续涨
     buy_candidates.sort(
         key=lambda x: x['买分'] * 0.6 + x['risk_adj_momentum'] * 0.4,
         reverse=True
@@ -564,7 +545,7 @@ def market_open(context):
 
         order(code, shares)
         g.highest_since_buy[code] = price
-        g.entry_atr[code] = sig['ATR']
+        g.entry_atr[code] = sig['ATR']  # 记录买入时ATR
         record_signal(g.buy_signal_history, code, today)
 
 

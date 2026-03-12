@@ -20,7 +20,10 @@
       "Bash(ls -lh /k/financial/select_stocks/*.py)",
       "Bash(xxd:*)",
       "WebFetch(domain:180.169.107.9)",
-      "Bash(ls -la \"K:\\\\\\\\financial\\\\\\\\select_stocks\\\\\\\\PTrade-API.html\" 2>/dev/null || dir \"K:\\\\financial\\\\select_stocks\\\\PTrade-API.html\" 2>/dev/null || echo \"checking with find\" && find \"K:/financial\" -name \"PTrade-API*\" 2>/dev/null)"
+      "Bash(ls -la \"K:\\\\\\\\financial\\\\\\\\select_stocks\\\\\\\\PTrade-API.html\" 2>/dev/null || dir \"K:\\\\financial\\\\select_stocks\\\\PTrade-API.html\" 2>/dev/null || echo \"checking with find\" && find \"K:/financial\" -name \"PTrade-API*\" 2>/dev/null)",
+      "Bash(iconv -f GBK -t UTF-8 \"K:/financial/select_stocks/logs/201511-2026312.txt\" | head -50)",
+      "Bash(python3 -c \"\nwith open\\('K:/financial/select_stocks/logs/201511-2026312.txt', 'r', encoding='gbk'\\) as f:\n    for i, line in enumerate\\(f\\):\n        if i < 50:\n            print\\(line.rstrip\\(\\)\\)\n\")",
+      "Bash(python \"K:/financial/select_stocks/logs/analyze.py\" > \"K:/financial/select_stocks/logs/analysis_output.txt\" 2>&1)"
     ]
   }
 }
