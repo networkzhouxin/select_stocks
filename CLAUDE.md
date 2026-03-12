@@ -8,10 +8,10 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 
 ## Key Files
 
-- `smart_trade_joinquant_v10_etf.py` — **V10.0 JoinQuant, the proven best** (45.18% return, 0.833 Sharpe, 3 ETFs)
+- `smart_trade_joinquant_v10_etf.py` — **V10.0 JoinQuant, highest absolute return** (58% return over 10yr, 27.9% max drawdown, 3 ETFs)
 - `smart_trade_ptrade_v10_etf.py` — V10.0 PTrade version (production-ready, dual-mode backtest+live)
 - `smart_trade_joinquant_v11_etf.py` — V11.0 JoinQuant (5 ETFs, expanded pool)
-- `smart_trade_ptrade_v11_etf.py` — V11.0 PTrade version
+- `smart_trade_joinquant_v13_etf.py` — **V13.0 JoinQuant, best risk-adjusted** (57.5% return, ~12.5% max drawdown, bear market half-position)
 - `策略说明文档.md` — Complete strategy documentation (Chinese)
 - `PTrade-API.html` — Official PTrade API reference
 - `smart_trade_v10_tdx.txt` / `smart_trade_v10_tdx_main.txt` — TDX (通达信) indicator formulas
@@ -90,6 +90,8 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **V10**: Simplified back, added trend hold + momentum ranking → **optimal** (45.18%)
 - **V10.1/V10.2**: Attempted KAMA/adaptive indicators → degraded performance, confirming V10.0 is the complexity ceiling
 - **V11**: Only change is ETF pool (3→5), all logic identical to V10.0
+- **V12**: Two changes tested: (1) removed signal-based selling, (2) replaced 510300 with 512100 (中证1000). Result: total return dropped from 58% to 42.5%. Signal sells look bad standalone (9 trades, 8 losses) but serve critical capital-recycling role — without them, capital gets trapped in stagnant positions. 512100 contributed +5.8%, nearly identical to 510300's +5.4%, so the swap was neutral. **Lesson: don't remove signal sells; don't swap ETFs based on volatility alone — trend persistence matters more.**
+- **V13**: One change vs V10: bear market position reduction (all ETFs below MA60 → halve position size). Result: 57.5% return (vs V10's 58%), max drawdown ~12.5% (vs V10's 27.9%). Worst years dramatically improved: 2018 -4.0% (was -15.2%), 2023 -7.6% (was -25.8%). 10-year 12 bear-mode triggers, condition strict enough to avoid false positives. **Lesson: same return with half the drawdown — bear market filter is the single most valuable risk-management addition. V13 is the best risk-adjusted version.**
 
 ## Chinese Variable Reference
 

@@ -23,7 +23,12 @@
       "Bash(ls -la \"K:\\\\\\\\financial\\\\\\\\select_stocks\\\\\\\\PTrade-API.html\" 2>/dev/null || dir \"K:\\\\financial\\\\select_stocks\\\\PTrade-API.html\" 2>/dev/null || echo \"checking with find\" && find \"K:/financial\" -name \"PTrade-API*\" 2>/dev/null)",
       "Bash(iconv -f GBK -t UTF-8 \"K:/financial/select_stocks/logs/201511-2026312.txt\" | head -50)",
       "Bash(python3 -c \"\nwith open\\('K:/financial/select_stocks/logs/201511-2026312.txt', 'r', encoding='gbk'\\) as f:\n    for i, line in enumerate\\(f\\):\n        if i < 50:\n            print\\(line.rstrip\\(\\)\\)\n\")",
-      "Bash(python \"K:/financial/select_stocks/logs/analyze.py\" > \"K:/financial/select_stocks/logs/analysis_output.txt\" 2>&1)"
+      "Bash(python \"K:/financial/select_stocks/logs/analyze.py\" > \"K:/financial/select_stocks/logs/analysis_output.txt\" 2>&1)",
+      "Bash(which python:*)",
+      "Bash(iconv -f GBK -t UTF-8 201511-2026312.txt)",
+      "Read(//tmp/**)",
+      "Bash(python3 -c \"\nwith open\\(r'K:/financial/select_stocks/logs/201511-2026312.txt', 'rb'\\) as f:\n    data = f.read\\(\\)\ntext = data.decode\\('gbk', errors='replace'\\)\nwith open\\('/tmp/v13_utf8.txt', 'w', encoding='utf-8'\\) as f:\n    f.write\\(text\\)\nprint\\('Lines:', text.count\\('\\\\n'\\)\\)\n\")",
+      "Bash(python3 -c \"\nwith open\\('K:/financial/select_stocks/logs/201511-2026312.txt', 'r', encoding='gbk', errors='replace'\\) as f:\n    for i, line in enumerate\\(f\\):\n        if i < 5:\n            print\\(line.rstrip\\(\\)\\)\n        if i > 5:\n            break\n\")"
     ]
   }
 }
