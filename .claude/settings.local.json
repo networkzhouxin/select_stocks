@@ -18,7 +18,9 @@
       "Bash(PYTHONIOENCODING=utf-8 python:*)",
       "Bash(wc:*)",
       "Bash(ls -lh /k/financial/select_stocks/*.py)",
-      "Bash(xxd:*)"
+      "Bash(xxd:*)",
+      "WebFetch(domain:180.169.107.9)",
+      "Bash(ls -la \"K:\\\\\\\\financial\\\\\\\\select_stocks\\\\\\\\PTrade-API.html\" 2>/dev/null || dir \"K:\\\\financial\\\\select_stocks\\\\PTrade-API.html\" 2>/dev/null || echo \"checking with find\" && find \"K:/financial\" -name \"PTrade-API*\" 2>/dev/null)"
     ]
   }
 }

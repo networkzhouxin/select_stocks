@@ -43,6 +43,16 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 | Scheduling | `run_daily(func, time)` | `run_daily(context, func, time)` |
 | Backtest mode | `run_daily` works normally | `handle_data` drives all logic (daily `run_daily` fixed at 15:00) |
 | Live detection | N/A | `is_trade()` returns True for live |
+| Snapshot fields | N/A | `get_snapshot()` returns `last_px`, `high_px`, `preclose_px` etc. |
+
+### PTrade Live Trading Constraints
+
+- **`run_daily` + `run_interval` total ≤ 5**: exceeding causes thread blocking, tasks silently won't fire.
+- **`order_target` has 6-second sync delay**: portfolio syncs with broker every 6s. Calling `order_target(code, 0)` twice within 6s will duplicate the sell order. Use `g.sold_today` flag to guard.
+- **`order` without `limit_price`**: system uses `get_snapshot` latest price; if snapshot fails, order fails.
+- **`get_price`/`get_history` not thread-safe**: don't call from `run_daily` and `handle_data` simultaneously.
+- **Persistence**: `g` is auto-pickled. Variables prefixed with `__` (e.g. `g.__is_live`) are excluded — use this for non-serializable objects. On restart, `initialize` runs first, then persisted data overwrites.
+- **Broker**: 国金证券 PTrade. API docs at `PTrade-API.html` (local copy).
 
 ### Capital Tiers
 
@@ -62,6 +72,15 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **Trend hold mode**: When trend_score ≥ 4 AND profitable → skip signal-based selling, use only ATR stop. Core mechanism for capturing big trends.
 - **Cooldown**: 5-day cooldown between buy/sell signals on same ETF to avoid whipsaws.
 - **ETF correlation matters**: Don't add 510050 (overlaps 510300) or 159901 (overlaps 159915+510300). Only add truly uncorrelated ETFs like 510880 (红利) and 512100 (中证1000).
+- **Highest price uses closing price, not intraday high**: Intraday highs contain noise (upper wicks/spikes). ATR multiplier (2.5×) is calibrated against closing prices — using intraday high would systematically tighten stops, contradicting "let profits run".
+
+## Platform Backtesting Rules
+
+- **JoinQuant backtest is the authority for strategy performance.** `run_daily` executes at the exact time specified (09:30, 09:35, 15:00, 15:30), matching real trading behavior.
+- **PTrade daily backtest CANNOT validate strategy returns.** `run_daily` and `handle_data` are both fixed at 15:00 regardless of time parameter — all logic executes at close price in a single pass. This fundamentally distorts entry timing, stop-loss behavior, and signal response vs real 09:35 execution. PTrade V10 backtest returned +6.26% vs JoinQuant's +45.18% — the gap is caused by the backtest mechanism, not strategy quality.
+- **PTrade daily backtest is only useful for verifying code runs without errors.**
+- **PTrade live trading matches JoinQuant**: `run_daily` honors the specified time (00:00~23:59), so the 09:30/09:35/15:00/15:30 schedule works identically to JoinQuant.
+- **Workflow**: JoinQuant backtest (validate returns) → PTrade backtest (validate no errors) → PTrade live.
 
 ## Version History Lessons
 

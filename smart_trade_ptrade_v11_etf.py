@@ -542,6 +542,25 @@ def _record_signal(history_dict, code, today):
 
 
 # ============================================================
+#  价格合理性校验（防止PTrade个别标的数据异常）
+# ============================================================
+def _validate_price(cur_price, ref_price, code):
+    """
+    用参考价格（如T-1收盘价或持仓成本）校验当前价格。
+    ETF单日涨跌幅不可能超过15%，偏差超过此阈值判定为数据异常。
+    返回True表示价格正常，False表示异常。
+    """
+    if cur_price is None or ref_price is None or ref_price <= 0:
+        return True  # 无参考价时放行，不误杀
+    deviation = abs(cur_price - ref_price) / ref_price
+    if deviation > 0.15:
+        log.warn('[价格异常] %s 当前价%.3f 参考价%.3f 偏差%.1f%%，跳过本次判断' % (
+            code, cur_price, ref_price, deviation * 100))
+        return False
+    return True
+
+
+# ============================================================
 #  更新最高价
 # ============================================================
 def _update_highest_prices(context):
@@ -552,6 +571,10 @@ def _update_highest_prices(context):
             continue
         cur = _get_current_price(code)
         if cur is None:
+            continue
+        # 价格校验：用持仓成本作参考，防止异常价格污染最高价记录
+        ref = g.highest_since_buy.get(code, _pos_cost(pos))
+        if not _validate_price(cur, ref, code):
             continue
         if code in g.highest_since_buy:
             if cur > g.highest_since_buy[code]:
@@ -608,17 +631,21 @@ def _do_trading(context):
         if _is_paused(code):
             continue
 
+        # 先计算指标（T-1数据），获取可靠的参考价格
+        sig = _calc_indicators(code, prev_date, count=120)
+        if sig is None:
+            continue
+
         cur_price = _get_current_price(code)
         if cur_price is None:
             continue
 
+        # 价格校验：用T-1收盘价（来自get_price，数据可靠）校验当前价
+        if not _validate_price(cur_price, sig['close'], code):
+            continue  # 数据异常，跳过本标的全部止损/卖出判断
+
         cost = _pos_cost(pos)
         profit_pct = (cur_price - cost) / cost
-
-        # 计算当前ATR
-        sig = _calc_indicators(code, prev_date, count=120)
-        if sig is None:
-            continue
 
         current_atr = sig['ATR']
         if pd.isna(current_atr) or current_atr <= 0:

@@ -69,6 +69,7 @@ def initialize(context):
     g.sell_signal_history = {}
     g.highest_since_buy = {}
     g.entry_atr = {}
+    g.sold_today = {}  # 实盘防重复卖出标记（当日已卖出的code）
 
     # ---- 模式检测 ----
     # is_trade()：实盘返回True，回测返回False
@@ -77,11 +78,13 @@ def initialize(context):
     except Exception:
         g.__is_live = False
 
-    # 实盘模式：使用run_daily精确控制执行时间
+    # 实盘模式：使用run_daily精确控制执行时间（与聚宽版对齐）
+    # 注意：PTrade实盘run_daily+run_interval累计不能超过5个
     if g.__is_live:
-        run_daily(context, _update_tier_wrapper, time='09:25')
-        run_daily(context, _market_open_wrapper, time='09:35')
-        run_daily(context, _update_highest_wrapper, time='14:50')
+        run_daily(context, _update_tier_wrapper, time='09:30')       # 聚宽09:30
+        run_daily(context, _market_open_wrapper, time='09:35')       # 聚宽09:35
+        run_daily(context, _update_highest_wrapper, time='15:00')    # 聚宽15:00
+        run_daily(context, _after_close_wrapper, time='15:30')       # 聚宽15:30
 
 
 def handle_data(context, data):
@@ -109,11 +112,13 @@ def handle_data(context, data):
 def before_trading_start(context, data):
     """盘前准备（回测8:30/实盘9:10）"""
     g.__data = data
+    g.sold_today = {}  # 每个交易日重置，防止策略重启后跨日残留
 
 
 def after_trading_end(context, data):
     """盘后记录"""
     _after_close(context)
+    g.sold_today = {}  # 重置当日卖出标记
 
 
 # ============================================================
@@ -129,6 +134,12 @@ def _market_open_wrapper(context):
 
 def _update_highest_wrapper(context):
     _update_highest_prices(context)
+
+
+def _after_close_wrapper(context):
+    _after_close(context)
+    # 重置当日卖出标记，为下一交易日做准备
+    g.sold_today = {}
 
 
 # ============================================================
@@ -171,23 +182,25 @@ def _get_current_price(code):
     """
     获取当前价格（兼容回测和实盘）
     回测：从g.__data获取
-    实盘：优先get_snapshot，回退到get_history
+    实盘：优先get_snapshot获取实时价
     """
-    # 方式1：从handle_data的data参数获取
-    if hasattr(g, '__data') and g.__data is not None:
-        try:
-            return g.__data[code].price
-        except Exception:
-            pass
-
-    # 方式2：实盘用get_snapshot
+    # 方式1：实盘优先用get_snapshot获取实时价（官方文档字段名为last_px）
+    # 不能优先用g.__data，因为它在before_trading_start(09:10)设置，
+    # 到09:35交易时已是25分钟前的旧价，会导致止损判断不准
     if g.__is_live:
         try:
             snap = get_snapshot(code)
-            if snap and 'price' in snap:
-                return snap['price']
-            if snap and 'last' in snap:
-                return snap['last']
+            if snap and code in snap:
+                snap = snap[code]  # get_snapshot返回嵌套dict: {code: {字段...}}
+            if snap and snap.get('last_px', 0) > 0:
+                return snap['last_px']
+        except Exception:
+            pass
+
+    # 方式2：从handle_data的data参数获取（回测走这里）
+    if hasattr(g, '__data') and g.__data is not None:
+        try:
+            return g.__data[code].price
         except Exception:
             pass
 
@@ -523,7 +536,29 @@ def _record_signal(history_dict, code, today):
 
 
 # ============================================================
-#  更新最高价
+#  价格合理性校验（防止PTrade个别标的数据异常）
+# ============================================================
+def _validate_price(cur_price, ref_price, code):
+    """
+    用参考价格（如T-1收盘价或持仓成本）校验当前价格。
+    ETF单日涨跌幅不可能超过15%，偏差超过此阈值判定为数据异常。
+    返回True表示价格正常，False表示异常。
+    """
+    if cur_price is None or ref_price is None or ref_price <= 0:
+        return True  # 无参考价时放行，不误杀
+    deviation = abs(cur_price - ref_price) / ref_price
+    if deviation > 0.15:
+        log.warn('[价格异常] %s 当前价%.3f 参考价%.3f 偏差%.1f%%，跳过本次判断' % (
+            code, cur_price, ref_price, deviation * 100))
+        return False
+    return True
+
+
+# ============================================================
+#  更新最高价（与聚宽版一致，使用收盘价/最新价）
+#  说明：不用日内最高价，因为盘中冲高回落是噪声，
+#  且ATR倍数(2.5x)是基于收盘价校准的，用日内高点会使止损系统性偏紧，
+#  违背趋势跟踪"让利润奔跑"的核心理念。
 # ============================================================
 def _update_highest_prices(context):
     positions = _get_positions(context)
@@ -533,6 +568,10 @@ def _update_highest_prices(context):
             continue
         cur = _get_current_price(code)
         if cur is None:
+            continue
+        # 价格校验：用持仓成本作参考，防止异常价格污染最高价记录
+        ref = g.highest_since_buy.get(code, _pos_cost(pos))
+        if not _validate_price(cur, ref, code):
             continue
         if code in g.highest_since_buy:
             if cur > g.highest_since_buy[code]:
@@ -586,20 +625,29 @@ def _do_trading(context):
         if _pos_amount(pos) <= 0:
             continue
 
+        # 实盘防重复卖出：PTrade持仓同步有6秒延迟，
+        # order_target(code,0)后持仓未立即清零，循环中可能重复下单
+        if g.__is_live and g.sold_today.get(code, False):
+            continue
+
         if _is_paused(code):
+            continue
+
+        # 先计算指标（T-1数据），获取可靠的参考价格
+        sig = _calc_indicators(code, prev_date, count=120)
+        if sig is None:
             continue
 
         cur_price = _get_current_price(code)
         if cur_price is None:
             continue
 
+        # 价格校验：用T-1收盘价（来自get_price，数据可靠）校验当前价
+        if not _validate_price(cur_price, sig['close'], code):
+            continue  # 数据异常，跳过本标的全部止损/卖出判断
+
         cost = _pos_cost(pos)
         profit_pct = (cur_price - cost) / cost
-
-        # 计算当前ATR
-        sig = _calc_indicators(code, prev_date, count=120)
-        if sig is None:
-            continue
 
         current_atr = sig['ATR']
         if pd.isna(current_atr) or current_atr <= 0:
@@ -615,6 +663,7 @@ def _do_trading(context):
                     code, highest, cur_price, current_atr,
                     drawdown * 100, profit_pct * 100))
                 order_target(code, 0)
+                g.sold_today[code] = True
                 g.highest_since_buy.pop(code, None)
                 g.entry_atr.pop(code, None)
                 _record_signal(g.sell_signal_history, code, today)
@@ -627,6 +676,7 @@ def _do_trading(context):
                 log.info('[ATR最大止损] %s 成本%.3f 现价%.3f 亏损%.1f%%' % (
                     code, cost, cur_price, profit_pct * 100))
                 order_target(code, 0)
+                g.sold_today[code] = True
                 g.highest_since_buy.pop(code, None)
                 g.entry_atr.pop(code, None)
                 _record_signal(g.sell_signal_history, code, today)
@@ -648,6 +698,7 @@ def _do_trading(context):
             log.info('[信号卖出] %s 级别=%d 卖分=%.1f 趋势=%d 盈亏=%.1f%%' % (
                 code, sell_level, sig['卖分'], sig['趋势系数'], profit_pct * 100))
             order_target(code, 0)
+            g.sold_today[code] = True
             g.highest_since_buy.pop(code, None)
             g.entry_atr.pop(code, None)
             _record_signal(g.sell_signal_history, code, today)
