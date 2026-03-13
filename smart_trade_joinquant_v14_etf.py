@@ -2,12 +2,14 @@
 """
 智能ETF量化交易策略 V14.0 - 熊市减仓 + 5ETF
 =============================================
-基于V13.0（熊市减仓）+ V11的5只ETF池。
-两个已验证改动的组合：
-  1. 熊市减仓（V13验证）：所有ETF在MA60下方 → 仓位缩减50%
-  2. 5只ETF池（V11验证）：增加510880红利ETF和512100中证1000ETF
+基于V13.0（熊市减仓）+ V11的5只ETF池 + 改进熊市检测。
+三个改动：
+  1. 5只ETF池：增加510880红利ETF和512100中证1000ETF
+  2. 熊市减仓：沪深300指数低于MA60且MA60下行 → 仓位缩减50%
+  3. 熊市检测与ETF池解耦：用沪深300指数判断市场环境，不受ETF池变动影响
+     （V13用"所有ETF低于MA60"判断，加入防御型510880后条件几乎不触发）
 
-目的：更多不相关标的 + 熊市保护，进一步分散风险。
+目的：更多不相关标的 + 稳健的熊市保护。
 
 标的池（5只宽基ETF）：
   - 510300 沪深300ETF（大盘均衡）
@@ -422,23 +424,23 @@ def calc_position_size(context, signal, signal_level, bear_mode=False):
 
 
 # ============================================================
-#  熊市判断（V13新增）
+#  熊市判断（V14改进：用沪深300指数，与ETF池解耦）
 # ============================================================
 def is_bear_market(prev_date):
     """
-    判断是否处于系统性熊市：ETF池中所有标的都在MA60下方。
+    判断是否处于系统性熊市：沪深300指数低于MA60且MA60在下行。
     用T-1数据判断，不引入未来函数。
+    与ETF池完全解耦，加减标的不影响判断。
     """
-    for code in g.etf_pool:
-        df = get_price(code, end_date=prev_date, count=60,
-                       frequency='daily', fields=['close'],
-                       skip_paused=True, fq='pre')
-        if df is None or len(df) < 60:
-            continue
-        ma60 = df['close'].mean()
-        if df['close'].iloc[-1] > ma60:
-            return False  # 至少有一只在MA60上方，不是全面熊市
-    return True  # 全部在MA60下方
+    df = get_price('000300.XSHG', end_date=prev_date, count=65,
+                   frequency='daily', fields=['close'],
+                   skip_paused=True, fq='pre')
+    if df is None or len(df) < 60:
+        return False
+    ma60 = df['close'].iloc[-60:].mean()
+    ma60_prev = df['close'].iloc[-65:-5].mean()  # 5日前的MA60
+    price = df['close'].iloc[-1]
+    return price < ma60 and ma60 < ma60_prev  # 价格在MA60下方 且 MA60在下行
 
 
 # ============================================================
