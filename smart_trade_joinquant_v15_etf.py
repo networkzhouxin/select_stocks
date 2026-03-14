@@ -1,30 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-智能ETF量化交易策略 V15.1 - 动量轮动（优化版）
+智能ETF量化交易策略 V15.5 - 国债兜底+趋势排名优化
 =============================================
-基于V15.0，三项优化：
-  1. 轮动周期：5天→3天，更快捕捉动量切换
-  2. 双重动量：ROC(20)短期+ROC(60)中期，双正才买入
-  3. 动态ATR止损：波动率高时收紧止损倍数（2.5x→2.0x），减少极端回撤
+基于V15.1（优化ETF池版，210%收益），两项优化：
+  1. 国债兜底：所有权益类ETF动量为负时，自动买入国债ETF作为"生息现金"
+  2. 排名公式：sort_score = risk_adj_momentum × 0.7 + trend_strength × 0.3
+     trend_strength = (价格-MA20)/MA20，偏好正在加速远离均线的品种
 
-V15.2尝试将ROC60改为软调节（70%仓位），结果更差（140% vs 170%），已回退。
-
-核心框架不变：
+核心框架：
   - 每3个交易日从ETF池选动量最强的N只持有
   - 自然空仓：所有ETF动量为负或在MA20下方时自动空仓
   - ATR跟踪止损作为安全网
 
-ETF池（宽基+行业+跨市场，约10只）：
+ETF池（4A股+3跨市场+3跨资产）：
   - 510300 沪深300（大盘均衡）
   - 159915 创业板（成长弹性）
-  - 510500 中证500（中盘均衡）
-  - 159928 消费ETF（内需消费）
-  - 512010 医药ETF（医药健康）
   - 512100 中证1000（小盘弹性）
-  - 510880 红利ETF（高股息防御）
+  - 159928 消费ETF（内需消费）
   - 513100 纳指ETF（海外科技）
-  - 518880 黄金ETF（避险资产）
-  - 512660 军工ETF（主题弹性，2016年7月上市）
+  - 513500 标普500ETF（海外均衡）
+  - 159920 恒生ETF（港股）
+  - 518880 黄金ETF（避险）
+  - 511010 国债ETF（债券对冲）
+  - 159985 豆粕ETF（商品周期）
 """
 
 import numpy as np
@@ -63,9 +61,10 @@ def initialize(context):
         '159920.XSHE',   # 恒生ETF（港股）
         # ---- 跨资产 3只 ----
         '518880.XSHG',   # 黄金ETF（避险）
-        '511010.XSHG',   # 国债ETF（债券对冲）
+        '511010.XSHG',   # 国债ETF（债券对冲/兜底）
         '159985.XSHE',   # 豆粕ETF（商品周期）
     ]
+    g.bond_etf = '511010.XSHG'  # 国债ETF作为兜底标的
 
     # ---- 资金档位配置 ----
     g.capital_tiers = {
@@ -86,6 +85,7 @@ def initialize(context):
         'high_vol_threshold': 0.30,  # 年化波动率>30%视为高波动 - V15.1新增
         'stop_floor': 0.03,          # 止损下限3%
         'stop_cap': 0.15,            # 止损上限15%
+        'trend_weight': 0.3,         # 排名公式中趋势强度权重
     }
 
     g.current_tier = None
@@ -179,6 +179,13 @@ def calc_momentum(code, end_date):
     if roc_long < 0:
         return None  # 中期负动量不买
 
+    # ---- 趋势强度：价格偏离MA20的程度 ----
+    trend_strength = (C.iloc[-1] - ma20) / ma20
+
+    # ---- 综合排名分：风险调整动量 × 0.7 + 趋势强度 × 0.3 ----
+    tw = g.params['trend_weight']
+    sort_score = risk_adj_mom * (1 - tw) + trend_strength * tw
+
     # ---- ATR（用于止损）----
     atr_period = g.params['atr_period']
     TR = pd.concat([
@@ -190,7 +197,9 @@ def calc_momentum(code, end_date):
 
     return {
         'code': code,
-        'momentum': risk_adj_mom,
+        'momentum': sort_score,
+        'risk_adj_mom': risk_adj_mom,
+        'trend_strength': trend_strength,
         'roc': roc_short,
         'roc_long': roc_long,
         'volatility': vol,
@@ -283,16 +292,30 @@ def do_trading(context):
     target_list = candidates[:max_hold]  # 取动量最强的N只
     target_codes = set(t['code'] for t in target_list)
 
-    # 如果没有任何ETF满足条件（全部负动量/MA20下方），清仓
+    # 如果没有任何ETF满足条件 → 国债兜底
     if not target_list:
+        bond = g.bond_etf
+        # 卖出所有非国债持仓
         for code in list(context.portfolio.positions.keys()):
             pos = context.portfolio.positions[code]
-            if pos.total_amount > 0:
+            if pos.total_amount > 0 and code != bond:
                 profit_pct = (current_data[code].last_price - pos.avg_cost) / pos.avg_cost
                 log.info('[全部弱势清仓] %s 盈亏%.1f%%' % (code, profit_pct * 100))
                 order_target(code, 0)
                 g.highest_since_buy.pop(code, None)
                 g.entry_atr.pop(code, None)
+        # 如果未持有国债，买入国债作为兜底
+        bond_pos = context.portfolio.positions.get(bond)
+        if bond_pos is None or bond_pos.total_amount <= 0:
+            if not current_data[bond].paused:
+                available = context.portfolio.available_cash
+                price = current_data[bond].last_price
+                shares = int(available * 0.95 / price / 100) * 100
+                if shares >= 100:
+                    log.info('[国债兜底] 全部弱势，买入%s %d股 @%.3f' % (bond, shares, price))
+                    order(bond, shares)
+                    g.highest_since_buy[bond] = price
+                    g.entry_atr[bond] = price * 0.005  # 国债ATR极小，给一个保守值
         return
 
     # ======== 第五步：卖出不在目标中的持仓（轮动换仓）========
@@ -354,8 +377,9 @@ def do_trading(context):
             else:
                 continue
 
-        log.info('[轮动买入] %s 动量=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
-            code, sig['momentum'], sig['roc'] * 100, sig['roc_long'] * 100,
+        log.info('[轮动买入] %s 综合=%.3f 动量=%.3f 趋势=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
+            code, sig['momentum'], sig['risk_adj_mom'], sig['trend_strength'],
+            sig['roc'] * 100, sig['roc_long'] * 100,
             sig['volatility'] * 100, shares, price))
 
         order(code, shares)

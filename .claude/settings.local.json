@@ -1,7 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Bash(file *:*)",
       "Bash(ls:*)",
       "Bash(sed:*)",
       "WebSearch",
@@ -29,10 +28,7 @@
       "Read(//tmp/**)",
       "Bash(python3 -c \"\nwith open\\(r'K:/financial/select_stocks/logs/201511-2026312.txt', 'rb'\\) as f:\n    data = f.read\\(\\)\ntext = data.decode\\('gbk', errors='replace'\\)\nwith open\\('/tmp/v13_utf8.txt', 'w', encoding='utf-8'\\) as f:\n    f.write\\(text\\)\nprint\\('Lines:', text.count\\('\\\\n'\\)\\)\n\")",
       "Bash(python3 -c \"\nwith open\\('K:/financial/select_stocks/logs/201511-2026312.txt', 'r', encoding='gbk', errors='replace'\\) as f:\n    for i, line in enumerate\\(f\\):\n        if i < 5:\n            print\\(line.rstrip\\(\\)\\)\n        if i > 5:\n            break\n\")",
-      "Bash(grep -E '\\(ATR止损|轮动卖出\\)' \"K:/financial/select_stocks/logs/201511-2026312.txt\" | grep -oP '\\\\d{4}-\\\\d{2}-\\\\d{2}.*盈亏[-0-9.]+%' | sort -t'亏' -k2 -n | head -5)",
-      "Bash(grep -E '\\(ATR止损|轮动卖出\\)' \"K:/financial/select_stocks/logs/201511-2026312.txt\" | grep -oP '\\\\d{4}-\\\\d{2}-\\\\d{2}.*盈亏[-0-9.]+%' | sort -t'亏' -k2 -rn | head -10)",
-      "Bash(cat \"C:\\\\Users\\\\biging88\\\\.claude\\\\projects\\\\K--financial-select-stocks\\\\b9827f43-dba0-4946-98ba-b9abe25a6573\\\\tool-results\\\\toolu_01APE7HuskFuz5RHzCL1n1E3.txt\" | grep -oP '盈亏\\(\\\\d+\\\\.\\\\d+\\)%' | sed 's/盈亏//;s/%//' | sort -t. -k1,1nr -k2,2nr | head -20)",
-      "Bash(cat \"C:\\\\Users\\\\biging88\\\\.claude\\\\projects\\\\K--financial-select-stocks\\\\b9827f43-dba0-4946-98ba-b9abe25a6573\\\\tool-results\\\\toolu_01N2iHuMTzMhEZxkWvBExXRX.txt\" | grep -oP '盈亏-\\(\\\\d+\\\\.\\\\d+\\)%' | sed 's/盈亏-//;s/%//' | sort -t. -k1,1nr -k2,2nr | head -20)"
+      "Bash(grep -E '\\(ATR止损|轮动卖出\\)' \"K:/financial/select_stocks/logs/201511-2026312.txt\" | grep -oP '\\\\d{4}-\\\\d{2}-\\\\d{2}.*盈亏[-0-9.]+%' | sort -t'亏' -k2 -rn | head -10)"
     ]
   }
 }
