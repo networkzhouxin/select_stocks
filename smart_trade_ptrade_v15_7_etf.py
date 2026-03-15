@@ -306,17 +306,6 @@ def _get_price_data(code, end_date, count):
         return None
 
 
-def _validate_price(cur_price, ref_price, code):
-    """价格合理性校验（防止PTrade数据异常）"""
-    if cur_price is None or ref_price is None or ref_price <= 0:
-        return True
-    deviation = abs(cur_price - ref_price) / ref_price
-    if deviation > 0.15:
-        log.warn('[价格异常] %s 当前价%.3f 参考价%.3f 偏差%.1f%%，跳过' % (
-            code, cur_price, ref_price, deviation * 100))
-        return False
-    return True
-
 
 # ============================================================
 #  动态资金档位（与聚宽版100%一致）
@@ -455,12 +444,7 @@ def _check_stop_loss(context):
         if cur_price is None:
             continue
 
-        # 价格校验
         cost = _pos_cost(pos)
-        ref = g.highest_since_buy.get(code, cost)
-        if not _validate_price(cur_price, ref, code):
-            continue
-
         profit_pct = (cur_price - cost) / cost
 
         # ATR跟踪止损
@@ -627,10 +611,6 @@ def _update_highest(context):
             continue
         cur = _get_current_price(code)
         if cur is None:
-            continue
-        # 价格校验
-        ref = g.highest_since_buy.get(code, _pos_cost(pos))
-        if not _validate_price(cur, ref, code):
             continue
         if code in g.highest_since_buy:
             if cur > g.highest_since_buy[code]:
