@@ -355,8 +355,11 @@ def do_trading(context):
         price = current_data[code].last_price
         is_bond_fill = sig.get('_is_bond_fill', False)
 
-        # 仓位计算：等权分配 × 波动率反比
-        alloc = available / slots * base_ratio
+        # 仓位计算：国债填空用剩余全部资金，权益类等权分配 × 波动率反比
+        if is_bond_fill:
+            alloc = available * 0.95  # 国债填空：尽量多买
+        else:
+            alloc = available / slots * base_ratio
 
         if not is_bond_fill:
             # 波动率反比调整（仅权益类标的）
