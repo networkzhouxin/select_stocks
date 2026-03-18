@@ -273,23 +273,9 @@ def _get_price_data(code, end_date, count):
                        count=count,
                        frequency='1d',
                        fields=['open', 'close', 'high', 'low', 'volume'],
-                       skip_paused=True,
                        fq='pre')
         if df is not None and len(df) > 0:
-            return df
-    except Exception:
-        pass
-
-    # PTrade可能不支持skip_paused参数，回退不带该参数重试
-    try:
-        df = get_price(code,
-                       end_date=end_date_str,
-                       count=count,
-                       frequency='1d',
-                       fields=['open', 'close', 'high', 'low', 'volume'],
-                       fq='pre')
-        if df is not None and len(df) > 0:
-            # 手动过滤停牌日（成交量为0的日期）
+            # 手动过滤停牌日（成交量为0的日期，等效于聚宽的skip_paused=True）
             if 'volume' in df.columns:
                 df = df[df['volume'] > 0]
             return df
