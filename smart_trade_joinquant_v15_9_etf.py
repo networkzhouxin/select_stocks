@@ -264,7 +264,6 @@ def check_stop_loss(context, current_data):
 #  核心交易逻辑
 # ============================================================
 def do_trading(context):
-    today = context.current_dt.date()
     prev_date = get_prev_trade_date(context)
     current_data = get_current_data()
 

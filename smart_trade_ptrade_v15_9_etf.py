@@ -528,7 +528,6 @@ def _check_stop_loss(context):
 #  核心交易逻辑（与聚宽版100%一致）
 # ============================================================
 def _do_trading(context):
-    today = context.current_dt.date()
     prev_date = _get_prev_trade_date(context)
 
     # ======== 第一步：每日止损检查 ========
