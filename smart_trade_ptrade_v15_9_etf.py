@@ -9,15 +9,27 @@ V15.9相对V15.7的改动：
   1. ETF池从10只扩展到12只（+日经ETF+中概互联ETF）
   2. 统一所有资金档位max_hold=3
 
+V15.9.1 实盘健壮性优化（不改变策略逻辑）：
+  1. 所有order/order_target传limit_price，避免PTrade内部snapshot二次调用失败
+  2. 止损/轮动卖出用跌停价作limit_price，确保下跌行情中成交
+  3. QDII ETF溢价过滤：iopv溢价>5%时跳过买入，防止高溢价接盘
+  4. 买入前check_limit涨停过滤，避免挂单涨停板浪费资金
+  5. 实盘用snapshot的trade_status替代get_stock_status，减少API调用
+  6. on_trade_response成交回调，确认买入成交后才设置止损基准
+  7. on_order_response委托回调，检测止损单失败并告警+重置sold_today允许重试
+  8. 盘前清理snapshot缓存/pending_orders，避免跨日残留数据
+  9. 持仓entry_atr恢复机制，PTrade重启后自动从历史数据重建ATR止损基准
+
 适配要点（根据PTrade-API.html官方文档）：
   1. 代码格式：.XSHG/.XSHE → .SS/.SZ
   2. Portfolio属性：portfolio_value/cash 替代 total_value/available_cash
   3. Position属性：amount/cost_basis/last_sale_price 替代 total_amount/avg_cost/price
   4. 当前行情：data[code].price / get_snapshot 替代 get_current_data()
-  5. 停牌检测：get_stock_status 替代 paused属性
+  5. 停牌检测：实盘用snapshot trade_status，回测用get_stock_status
   6. run_daily签名：run_daily(context, func, time) 需传context
   7. 回测兼容：日频回测run_daily固定15:00，改用handle_data驱动全部逻辑
   8. 实盘防重复：sold_today防止6秒同步延迟导致重复卖出
+  9. 限价精度：ETF限价单必须3位小数（PTrade API要求）
 
 策略逻辑（与聚宽V15.9 100%一致）：
   - 动量轮动：每3个交易日从ETF池选动量最强的N只持有
@@ -94,11 +106,29 @@ def initialize(context):
         'trend_weight': 0.3,
     }
 
+    # ---- QDII标的（需要溢价检测）----
+    g.qdii_etfs = {
+        '513100.SS',    # 纳指ETF
+        '513500.SS',    # 标普500ETF
+        '159920.SZ',    # 恒生ETF
+        '513880.SS',    # 日经ETF
+        '513050.SS',    # 中概互联ETF
+    }
+    g.qdii_premium_limit = 0.05  # QDII溢价上限5%
+
     g.current_tier = None
     g.day_count = 0
     g.highest_since_buy = {}
     g.entry_atr = {}
     g.sold_today = {}  # 实盘防重复卖出标记
+    g.__last_snapshot = {}  # 缓存最近一次snapshot结果
+    g.__pending_orders = {}  # 待确认买入订单 {code: {'price': x, 'atr': x}}
+
+    # ---- 注册标的池（回测模式下data[code]需要set_universe才能访问）----
+    try:
+        set_universe(g.etf_pool)
+    except Exception:
+        pass
 
     # ---- 模式检测 ----
     try:
@@ -135,6 +165,17 @@ def before_trading_start(context, data):
     """盘前准备"""
     g.__data = data
     g.sold_today = {}
+    g.__last_snapshot = {}  # 清除前日snapshot缓存
+
+    # 清理未成交的pending_orders（前日下单未回调的视为未成交）
+    if g.__pending_orders:
+        for code in list(g.__pending_orders.keys()):
+            log.warning('[订单超时] %s 前日买入未收到成交确认，清理pending' % code)
+        g.__pending_orders = {}
+
+    # 恢复缺失entry_atr的持仓（PTrade重启/pending丢失导致）
+    if g.__is_live:
+        _recover_missing_atr(context)
 
 
 def after_trading_end(context, data):
@@ -196,7 +237,7 @@ def _pos_price(pos):
 def _get_current_price(code):
     """
     获取当前价格（兼容回测和实盘）
-    实盘：优先get_snapshot获取实时价
+    实盘：优先get_snapshot获取实时价，并缓存snapshot供trade_status/iopv使用
     回测：从handle_data的data参数获取
     """
     if g.__is_live:
@@ -205,6 +246,7 @@ def _get_current_price(code):
             if snap and code in snap:
                 snap = snap[code]
             if snap and snap.get('last_px', 0) > 0:
+                g.__last_snapshot[code] = snap  # 缓存供后续使用
                 return snap['last_px']
         except Exception:
             pass
@@ -225,7 +267,19 @@ def _get_current_price(code):
 
 
 def _is_paused(code):
-    """检查是否停牌"""
+    """
+    检查是否停牌
+    实盘：优先用缓存的snapshot trade_status判断，减少API调用
+    回测：使用get_stock_status
+    """
+    # 实盘：优先检查缓存的snapshot trade_status
+    if g.__is_live and code in g.__last_snapshot:
+        ts = g.__last_snapshot[code].get('trade_status', '')
+        if ts in ('HALT', 'SUSP', 'STOPT', 'DELISTED'):
+            return True
+        if ts in ('TRADE', 'OCALL', 'BREAK', 'ENDTR', 'POSTR'):
+            return False  # 可交易或盘中状态，不算停牌
+
     try:
         status = get_stock_status([code], 'HALT')
         return status.get(code, False)
@@ -248,7 +302,7 @@ def _get_prev_trade_date(context):
     except Exception:
         pass
     try:
-        all_days = get_all_trades_days(date=today)
+        all_days = get_all_trades_days(date=today.strftime('%Y%m%d'))
         past_days = [d for d in all_days if d < today]
         if past_days:
             return past_days[-1]
@@ -287,12 +341,16 @@ def _get_price_data(code, end_date, count):
         df_o = get_history(count, '1d', 'open', [code], fq='pre')
         df_h = get_history(count, '1d', 'high', [code], fq='pre')
         df_l = get_history(count, '1d', 'low', [code], fq='pre')
+        df_v = get_history(count, '1d', 'volume', [code], fq='pre')
         df = pd.DataFrame({
             'open': df_o[code],
             'close': df_c[code],
             'high': df_h[code],
             'low': df_l[code],
+            'volume': df_v[code],
         })
+        # 手动过滤停牌日
+        df = df[df['volume'] > 0]
         return df
     except Exception as e:
         log.error('获取行情失败 %s: %s' % (code, str(e)))
@@ -448,7 +506,16 @@ def _check_stop_loss(context):
                 drawdown = (highest - cur_price) / highest
                 log.info('[ATR止损] %s 最高%.3f 现价%.3f 回撤%.1f%% 盈亏%.1f%%' % (
                     code, highest, cur_price, drawdown * 100, profit_pct * 100))
-                order_target(code, 0)
+                # 止损用跌停价作limit_price，确保在下跌行情中成交
+                sell_lmt = round(cur_price, 3)
+                if g.__is_live and code in g.__last_snapshot:
+                    try:
+                        down_px = float(g.__last_snapshot[code].get('down_px', 0))
+                    except (ValueError, TypeError):
+                        down_px = 0
+                    if down_px > 0:
+                        sell_lmt = round(down_px, 3)
+                order_target(code, 0, limit_price=sell_lmt)
                 g.sold_today[code] = True
                 g.highest_since_buy.pop(code, None)
                 g.entry_atr.pop(code, None)
@@ -524,7 +591,19 @@ def _do_trading(context):
             if cur_price and cost > 0:
                 profit_pct = (cur_price - cost) / cost
                 log.info('[轮动卖出] %s 盈亏%.1f%%（被更强标的替换）' % (code, profit_pct * 100))
-            order_target(code, 0)
+            # 卖出用跌停价作limit_price，确保成交
+            sell_lmt = round(cur_price, 3) if cur_price else None
+            if g.__is_live and code in g.__last_snapshot:
+                try:
+                    down_px = float(g.__last_snapshot[code].get('down_px', 0))
+                except (ValueError, TypeError):
+                    down_px = 0
+                if down_px > 0:
+                    sell_lmt = round(down_px, 3)
+            if sell_lmt:
+                order_target(code, 0, limit_price=sell_lmt)
+            else:
+                order_target(code, 0)
             g.sold_today[code] = True
             g.highest_since_buy.pop(code, None)
             g.entry_atr.pop(code, None)
@@ -556,6 +635,29 @@ def _do_trading(context):
         price = _get_current_price(code)  # T日实时价
         if price is None or price <= 0:
             continue
+
+        # ---- 涨停过滤：避免挂单涨停板浪费资金 ----
+        try:
+            limit_status = check_limit(code)
+            if limit_status and limit_status.get(code, 0) >= 1:
+                log.info('[涨停跳过] %s 涨停中，跳过买入' % code)
+                continue
+        except Exception:
+            pass
+
+        # ---- QDII溢价过滤：溢价过高时跳过，防止高溢价接盘 ----
+        if g.__is_live and code in g.qdii_etfs and code in g.__last_snapshot:
+            snap = g.__last_snapshot[code]
+            try:
+                iopv = float(snap.get('iopv', 0))
+            except (ValueError, TypeError):
+                iopv = 0
+            if iopv > 0:
+                premium = price / iopv - 1
+                if premium > g.qdii_premium_limit:
+                    log.info('[溢价跳过] %s 溢价%.1f%%超限%.0f%%，跳过买入' % (
+                        code, premium * 100, g.qdii_premium_limit * 100))
+                    continue
 
         is_bond_fill = sig.get('_is_bond_fill', False)
 
@@ -589,9 +691,16 @@ def _do_trading(context):
                 sig['roc'] * 100, sig['roc_long'] * 100,
                 sig['volatility'] * 100, shares, price))
 
-        order(code, shares)
-        g.highest_since_buy[code] = price
-        g.entry_atr[code] = sig['atr']
+        order(code, shares, limit_price=round(price, 3))
+
+        # 实盘：记录待确认订单，等on_trade_response确认后再设止损基准
+        # 回测：直接设置（回测无回调机制）
+        if g.__is_live:
+            g.__pending_orders[code] = {'price': price, 'atr': sig['atr']}
+        else:
+            g.highest_since_buy[code] = price
+            g.entry_atr[code] = sig['atr']
+
         available -= shares * price * 1.003
         slots -= 1
 
@@ -613,6 +722,51 @@ def _update_highest(context):
                 g.highest_since_buy[code] = cur
         else:
             g.highest_since_buy[code] = max(cur, _pos_cost(pos))
+
+
+# ============================================================
+#  恢复缺失的ATR止损基准（实盘重启/pending丢失后的安全网）
+# ============================================================
+def _recover_missing_atr(context):
+    """
+    检查所有持仓，如果有持仓缺少entry_atr（重启或pending_orders丢失导致），
+    从历史数据重新计算ATR并补上，确保止损保护不中断。
+    """
+    positions = _get_positions(context)
+    prev_date = _get_prev_trade_date(context)
+    for code in list(positions.keys()):
+        pos = positions[code]
+        if _pos_amount(pos) <= 0:
+            continue
+        if code in g.entry_atr:
+            continue
+        # 缺少entry_atr，需要恢复
+        atr_period = g.params['atr_period']
+        df = _get_price_data(code, prev_date, count=atr_period + 5)
+        if df is not None and len(df) >= atr_period:
+            H = df['high']
+            L = df['low']
+            C = df['close']
+            TR = pd.concat([
+                H - L,
+                (H - C.shift(1)).abs(),
+                (L - C.shift(1)).abs()
+            ], axis=1).max(axis=1)
+            atr = TR.iloc[-atr_period:].mean()
+            if not pd.isna(atr):
+                g.entry_atr[code] = atr
+                cost = _pos_cost(pos)
+                if code not in g.highest_since_buy:
+                    g.highest_since_buy[code] = max(cost, C.iloc[-1])
+                log.info('[ATR恢复] %s 重建ATR=%.4f 最高价=%.3f' % (
+                    code, atr, g.highest_since_buy[code]))
+                continue
+        # fallback：用成本价估算ATR
+        cost = _pos_cost(pos)
+        g.entry_atr[code] = cost * 0.02
+        if code not in g.highest_since_buy:
+            g.highest_since_buy[code] = cost
+        log.warning('[ATR恢复] %s 数据不足，使用成本2%%估算ATR=%.4f' % (code, cost * 0.02))
 
 
 # ============================================================
@@ -641,3 +795,71 @@ def _after_close(context):
         log.info('  %s 成本:%.3f 现价:%.3f 高:%.3f 盈亏:%.1f%%' % (
             code, cost, cur_price, highest, profit_pct))
     log.info('=' * 60)
+
+
+# ============================================================
+#  委托回调（实盘模式，检测下单失败）
+# ============================================================
+def on_order_response(context, order_list):
+    """
+    实盘委托状态推送回调。
+    检测被拒绝/废单的委托，特别是止损单失败需要告警。
+    """
+    for od in order_list:
+        code = od.get('stock_code', '')
+        status = od.get('status', '')
+        error_info = od.get('error_info', '')
+        amount = od.get('amount', 0)
+        price = od.get('price', 0)
+
+        # status: '5'=部分撤单, '6'=已撤单, '9'=废单/被拒
+        if str(status) in ('5', '6', '9'):
+            # 判断买卖方向：amount>0为买入委托，<=0或在sold_today中为卖出
+            is_sell = (code in g.sold_today) or (amount <= 0)
+            log.error('[委托失败] %s %s %d股 @%.3f 状态:%s 原因:%s' % (
+                code, '卖出' if is_sell else '买入',
+                amount, price, status, error_info))
+
+            if is_sell:
+                # 卖出失败（可能是止损单被拒）：严重告警
+                log.error('[止损告警] %s 卖出委托失败！持仓未减少，需人工处理。原因: %s' % (
+                    code, error_info))
+                # 重置sold_today标记，允许后续重试
+                g.sold_today.pop(code, None)
+            else:
+                # 买入失败：清理pending_orders
+                if code in g.__pending_orders:
+                    g.__pending_orders.pop(code, None)
+                log.warning('[买入失败] %s 委托被拒，已清理pending。原因: %s' % (code, error_info))
+
+
+# ============================================================
+#  成交回调（实盘模式，确认买入成交后设置止损基准）
+# ============================================================
+def on_trade_response(context, trade_list):
+    """
+    实盘成交推送回调。
+    买入成交后，用实际成交价设置highest_since_buy和entry_atr，
+    比下单时盲设更准确（避免未成交/部分成交导致止损基准错误）。
+    """
+    for trade in trade_list:
+        code = trade.get('stock_code', '')
+        direction = trade.get('entrust_bs', '')  # '1'=买入, '2'=卖出
+        filled_qty = trade.get('business_amount', 0)
+        filled_price = trade.get('business_price', 0)
+
+        if not code or filled_qty <= 0:
+            continue
+
+        # 买入成交：从待确认订单中取出ATR，用实际成交价设止损基准
+        if direction == '1' and code in g.__pending_orders:
+            pending = g.__pending_orders.pop(code)
+            g.highest_since_buy[code] = filled_price
+            g.entry_atr[code] = pending['atr']
+            log.info('[成交确认] 买入 %s %d股 @%.3f ATR=%.4f' % (
+                code, filled_qty, filled_price, pending['atr']))
+
+        # 卖出成交：清理止损记录
+        elif direction == '2':
+            log.info('[成交确认] 卖出 %s %d股 @%.3f' % (
+                code, filled_qty, filled_price))
