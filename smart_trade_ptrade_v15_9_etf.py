@@ -57,7 +57,7 @@ from datetime import datetime, timedelta
 def initialize(context):
     set_benchmark('000300.SS')
 
-    # ---- 佣金与滑点（仅回测生效，实盘由券商设置）----
+    # ---- 佣金与滑点（仅回测生效，实盘/模拟会提示WARNING，不影响运行）----
     try:
         set_commission(commission_ratio=0.0003, min_commission=5.0, type='ETF')
         set_slippage(slippage=0.001)
@@ -92,7 +92,7 @@ def initialize(context):
         'large': {'max_hold': 3, 'base_position_ratio': 0.60},
     }
 
-    # ---- 策略参数（与聚宽版100%一致）----
+    # ---- 策略参数（与聚宽版一致）----
     g.params = {
         'rebalance_interval': 3,
         'momentum_period': 20,
@@ -120,17 +120,17 @@ def initialize(context):
     g.day_count = 0
     g.highest_since_buy = {}
     g.entry_atr = {}
-    g.sold_today = {}  # 实盘防重复卖出标记
-    g.__last_snapshot = {}  # 缓存最近一次snapshot结果
-    g.__pending_orders = {}  # 待确认买入订单 {code: {'price': x, 'atr': x}}
+    g.sold_today = {}  # 实盘防重复卖出标记（order_target有6秒同步延迟）
+    g.__last_snapshot = {}  # 缓存get_snapshot结果，供trade_status/iopv/down_px复用（__前缀不持久化）
+    g.__pending_orders = {}  # 待on_trade_response确认的买入订单（__前缀不持久化）
 
-    # ---- 注册标的池（回测模式下data[code]需要set_universe才能访问）----
+    # ---- 注册标的池（set_universe后handle_data的data[code]才能访问BarData）----
     try:
         set_universe(g.etf_pool)
     except Exception:
         pass
 
-    # ---- 模式检测 ----
+    # ---- 模式检测（is_trade()：实盘返回True，回测返回False）----
     try:
         g.__is_live = is_trade()
     except Exception:
@@ -147,8 +147,9 @@ def initialize(context):
 
 def handle_data(context, data):
     """
-    回测模式：日频在15:00调用，承担全部逻辑。
-    实盘模式：主逻辑由run_daily处理，这里不做操作。
+    回测模式：日频回测固定在15:00调用，承担全部策略逻辑。
+    实盘模式：主逻辑由run_daily在指定时间处理，handle_data仅保存data引用。
+    注意：get_price/get_history不支持handle_data与run_daily同时调用（官方文档）。
     """
     g.__data = data
 
@@ -162,7 +163,7 @@ def handle_data(context, data):
 
 
 def before_trading_start(context, data):
-    """盘前准备"""
+    """盘前准备（回测8:30调用，实盘9:10调用）"""
     g.__data = data
     g.sold_today = {}
     g.__last_snapshot = {}  # 清除前日snapshot缓存
@@ -179,8 +180,11 @@ def before_trading_start(context, data):
 
 
 def after_trading_end(context, data):
-    """盘后记录"""
-    _after_close(context)
+    """盘后清理（回测15:30调用，实盘15:30后调用）"""
+    # 实盘模式下_after_close已由run_daily 15:30的_after_close_wrapper调用，这里只清理标记
+    # 回测模式下handle_data不调_after_close，由这里补上
+    if not g.__is_live:
+        _after_close(context)
     g.sold_today = {}
 
 
@@ -236,9 +240,10 @@ def _pos_price(pos):
 # ============================================================
 def _get_current_price(code):
     """
-    获取当前价格（兼容回测和实盘）
-    实盘：优先get_snapshot获取实时价，并缓存snapshot供trade_status/iopv使用
-    回测：从handle_data的data参数获取
+    获取当前价格（兼容回测和实盘，三级回退）
+    1. 实盘：get_snapshot获取实时价，并缓存供trade_status/iopv/down_px复用
+    2. 回测/实盘回退：data[code].price（需set_universe注册）
+    3. 最终回退：get_history取最近收盘价
     """
     if g.__is_live:
         try:
@@ -268,9 +273,10 @@ def _get_current_price(code):
 
 def _is_paused(code):
     """
-    检查是否停牌
-    实盘：优先用缓存的snapshot trade_status判断，减少API调用
-    回测：使用get_stock_status
+    检查是否停牌（三级回退）
+    1. 实盘：用缓存的snapshot trade_status判断（HALT/SUSP/STOPT/DELISTED=停牌）
+    2. 回测/实盘回退：get_stock_status([code], 'HALT')
+    3. 最终回退：data[code].is_open == 0
     """
     # 实盘：优先检查缓存的snapshot trade_status
     if g.__is_live and code in g.__last_snapshot:
@@ -315,7 +321,12 @@ def _get_prev_trade_date(context):
 
 
 def _get_price_data(code, end_date, count):
-    """获取历史行情数据"""
+    """
+    获取历史行情数据（两级回退）
+    1. get_price：一次获取多字段，支持end_date+count组合，返回不含当天数据
+    2. get_history：逐字段获取，作为get_price失败时的回退
+    两条路径都过滤volume=0的停牌日（等效聚宽skip_paused=True）
+    """
     if hasattr(end_date, 'strftime'):
         end_date_str = end_date.strftime('%Y-%m-%d')
     else:
@@ -359,7 +370,7 @@ def _get_price_data(code, end_date, count):
 
 
 # ============================================================
-#  动态资金档位（与聚宽版100%一致）
+#  动态资金档位
 # ============================================================
 def _update_tier(context):
     total = _get_total_value(context)
@@ -385,7 +396,7 @@ def _get_tier_param(param_name):
 
 
 # ============================================================
-#  动量计算（与聚宽版100%一致）
+#  动量计算（策略逻辑与聚宽版一致）
 # ============================================================
 def _calc_momentum(code, end_date):
     """
@@ -460,7 +471,7 @@ def _calc_momentum(code, end_date):
 
 
 # ============================================================
-#  ATR跟踪止损（与聚宽版100%一致）
+#  ATR跟踪止损（策略逻辑与聚宽版一致，实盘用跌停价limit_price确保成交）
 # ============================================================
 def _calc_trailing_stop_price(highest_price, atr_value):
     """动态倍数：高波动2.0x，正常2.5x"""
@@ -506,7 +517,8 @@ def _check_stop_loss(context):
                 drawdown = (highest - cur_price) / highest
                 log.info('[ATR止损] %s 最高%.3f 现价%.3f 回撤%.1f%% 盈亏%.1f%%' % (
                     code, highest, cur_price, drawdown * 100, profit_pct * 100))
-                # 止损用跌停价作limit_price，确保在下跌行情中成交
+                # 止损用跌停价(down_px)作limit_price，确保在下跌行情中成交
+                # 不传limit_price时PTrade内部调get_snapshot取价，若snapshot失败则下单失败
                 sell_lmt = round(cur_price, 3)
                 if g.__is_live and code in g.__last_snapshot:
                     try:
@@ -525,7 +537,7 @@ def _check_stop_loss(context):
 
 
 # ============================================================
-#  核心交易逻辑（与聚宽版100%一致）
+#  核心交易逻辑（策略逻辑与聚宽版一致，增加涨停/溢价过滤+成交回调机制）
 # ============================================================
 def _do_trading(context):
     prev_date = _get_prev_trade_date(context)
@@ -635,7 +647,7 @@ def _do_trading(context):
         if price is None or price <= 0:
             continue
 
-        # ---- 涨停过滤：避免挂单涨停板浪费资金 ----
+        # ---- 涨停过滤：check_limit返回{code:int}，>=1为涨停，避免挂单浪费资金 ----
         try:
             limit_status = check_limit(code)
             if limit_status and limit_status.get(code, 0) >= 1:
@@ -644,7 +656,7 @@ def _do_trading(context):
         except Exception:
             pass
 
-        # ---- QDII溢价过滤：溢价过高时跳过，防止高溢价接盘 ----
+        # ---- QDII溢价过滤：用snapshot的iopv计算溢价率，>5%时跳过 ----
         if g.__is_live and code in g.qdii_etfs and code in g.__last_snapshot:
             snap = g.__last_snapshot[code]
             try:
@@ -692,8 +704,8 @@ def _do_trading(context):
 
         order(code, shares, limit_price=round(price, 3))
 
-        # 实盘：记录待确认订单，等on_trade_response确认后再设止损基准
-        # 回测：直接设置（回测无回调机制）
+        # 实盘：记录待确认订单，等on_trade_response确认成交后再设止损基准
+        # 回测：直接设置（on_trade_response仅交易模式可用，回测无回调）
         if g.__is_live:
             g.__pending_orders[code] = {'price': price, 'atr': sig['atr']}
         else:
@@ -705,7 +717,7 @@ def _do_trading(context):
 
 
 # ============================================================
-#  每日更新最高价（与聚宽版100%一致）
+#  每日更新最高价
 # ============================================================
 def _update_highest(context):
     positions = _get_positions(context)
@@ -797,13 +809,25 @@ def _after_close(context):
 
 
 # ============================================================
-#  委托回调（实盘模式，检测下单失败）
+#  委托回调（仅交易模式可用，回测不支持）
 # ============================================================
 def on_order_response(context, order_list):
     """
-    实盘委托状态推送回调。
-    检测被拒绝/废单的委托，特别是止损单失败需要告警。
+    委托状态推送回调（仅交易模式可用，回测模式直接跳过）。
+    order_list为dict列表，字段：stock_code/status/amount/price/error_info/entrust_type/entrust_no等。
+    注意：entrust_type是委托类别（'0'=普通,'2'=撤单），不是买卖方向。
+    status：'5'=部分撤单,'6'=已撤单,'9'=废单。amount始终为正数（买卖均正）。
     """
+    try:
+        if not g.__is_live:
+            return
+    except AttributeError:
+        return
+
+    # 兼容单个对象和列表
+    if not isinstance(order_list, list):
+        order_list = [order_list]
+
     for od in order_list:
         code = od.get('stock_code', '')
         status = od.get('status', '')
@@ -813,37 +837,48 @@ def on_order_response(context, order_list):
 
         # status: '5'=部分撤单, '6'=已撤单, '9'=废单/被拒
         if str(status) in ('5', '6', '9'):
-            # 判断买卖方向：amount>0为买入委托，<=0或在sold_today中为卖出
-            is_sell = (code in g.sold_today) or (amount <= 0)
-            log.error('[委托失败] %s %s %d股 @%.3f 状态:%s 原因:%s' % (
-                code, '卖出' if is_sell else '买入',
-                amount, price, status, error_info))
-
-            if is_sell:
+            # 判断买卖方向：先查pending_orders（买入），再查sold_today（卖出）
+            # 必须先查买入，因为同一ETF可能同日先卖后买（止损后重入场）
+            if code in g.__pending_orders:
+                # 买入失败：清理pending_orders
+                g.__pending_orders.pop(code, None)
+                log.warning('[买入失败] %s %d股 @%.3f 状态:%s 原因:%s' % (
+                    code, amount, price, status, error_info))
+            elif code in g.sold_today:
                 # 卖出失败（可能是止损单被拒）：严重告警
-                log.error('[止损告警] %s 卖出委托失败！持仓未减少，需人工处理。原因: %s' % (
-                    code, error_info))
+                log.error('[止损告警] %s 卖出委托失败！持仓未减少，需人工处理。状态:%s 原因:%s' % (
+                    code, status, error_info))
                 # 重置sold_today标记，允许后续重试
                 g.sold_today.pop(code, None)
             else:
-                # 买入失败：清理pending_orders
-                if code in g.__pending_orders:
-                    g.__pending_orders.pop(code, None)
-                log.warning('[买入失败] %s 委托被拒，已清理pending。原因: %s' % (code, error_info))
+                # 未知来源（可能是策略外交易的主推）
+                log.warning('[委托异常] %s %d股 @%.3f 状态:%s 原因:%s（非本策略委托）' % (
+                    code, amount, price, status, error_info))
 
 
 # ============================================================
-#  成交回调（实盘模式，确认买入成交后设置止损基准）
+#  成交回调（仅交易模式可用，回测不支持）
 # ============================================================
 def on_trade_response(context, trade_list):
     """
-    实盘成交推送回调。
-    买入成交后，用实际成交价设置highest_since_buy和entry_atr，
-    比下单时盲设更准确（避免未成交/部分成交导致止损基准错误）。
+    成交推送回调（仅交易模式可用，回测模式直接跳过）。
+    trade_list为dict列表，字段：stock_code/entrust_bs/business_amount/business_price等。
+    entrust_bs：'1'=买入,'2'=卖出。
+    买入成交后用实际成交价设置止损基准，比下单时盲设更准确。
     """
+    try:
+        if not g.__is_live:
+            return
+    except AttributeError:
+        return
+
+    # 实盘模式：trade_list是dict列表
+    if not isinstance(trade_list, list):
+        trade_list = [trade_list]
+
     for trade in trade_list:
         code = trade.get('stock_code', '')
-        direction = trade.get('entrust_bs', '')  # '1'=买入, '2'=卖出
+        direction = trade.get('entrust_bs', '')  # '1'=买入,'2'=卖出（on_trade_response独有字段）
         filled_qty = trade.get('business_amount', 0)
         filled_price = trade.get('business_price', 0)
 
