@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-智能ETF量化交易策略 V15.9 - 统一持仓上限+12只ETF
+智能ETF量化交易策略 V15.9-Tranche - 组合分层消除路径偏移
 =============================================
-基于V15.7-Expanded（12只ETF，267.9%收益），一项改动：
-  1. 统一所有资金档位max_hold=3，让小资金也享受3只持仓的分散优势
-  2. ETF池保持12只（4A股+5跨市场+3跨资产），与V15.7-Expanded一致
-  ETF价格普遍很低（100-1100元/手），2万资金分3仓完全可行。
-  唯一例外是国债ETF（~14000元/手），小资金买不起时代码会自动跳过。
+基于V15.9，核心改动：Portfolio Tranching（组合分层）。
+  将排名信号分为两个梯队，交替更新：
+    - 梯队A：偶数天更新排名，记住top-N
+    - 梯队B：奇数天更新排名，记住top-N
+    - 实际目标 = 两个梯队共识（出现在两个梯队中的优先，再按得分排序）
+  效果：等效每日轮动（消除路径偏移），但换仓更平滑（需两个梯队共识才换）。
+  学术来源：Newfound Research "Rebalance Timing Luck" (SSRN #3673910)
+其余框架不变：12只ETF、max_hold=3、ATR止损、国债填空、纯ROC评分。
 
 ETF池（4A股+5跨市场+3跨资产 = 12只）：
   A股4只：
@@ -95,6 +98,8 @@ def initialize(context):
     g.day_count = 0
     g.highest_since_buy = {}
     g.entry_atr = {}
+    g.tranche_a = []  # 梯队A的目标ETF代码列表（偶数天更新）
+    g.tranche_b = []  # 梯队B的目标ETF代码列表（奇数天更新）
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
@@ -261,23 +266,17 @@ def check_stop_loss(context, current_data):
 
 
 # ============================================================
-#  核心交易逻辑
+#  核心交易逻辑（Tranching版：两个梯队交替更新，共识决策）
 # ============================================================
 def do_trading(context):
     prev_date = get_prev_trade_date(context)
     current_data = get_current_data()
 
-    # ======== 第一步：每日止损检查 ========
+    # ======== 第一步：每日止损检查（不受梯队影响）========
     stopped_codes = check_stop_loss(context, current_data)
 
-    # ======== 第二步：判断是否到轮动日 ========
+    # ======== 第二步：每日计算动量排名 ========
     g.day_count += 1
-    if g.day_count < g.params['rebalance_interval'] and not stopped_codes:
-        return  # 未到轮动日且无止损，跳过
-    if g.day_count >= g.params['rebalance_interval']:
-        g.day_count = 0  # 重置计数
-
-    # ======== 第三步：计算所有ETF动量并排名 ========
     candidates = []
     for code in g.etf_pool:
         if current_data[code].paused:
@@ -286,34 +285,76 @@ def do_trading(context):
         if result is not None:
             candidates.append(result)
 
-    # 按风险调整动量排序
     candidates.sort(key=lambda x: x['momentum'], reverse=True)
 
-    # ======== 第四步：确定目标持仓（候选不足时国债填空）========
     max_hold = get_tier_param('max_hold')
-    target_list = candidates[:max_hold]  # 取动量最强的N只
+    today_top = [c['code'] for c in candidates[:max_hold]]
 
-    # 候选不足max_hold时，用国债ETF填满剩余仓位
+    # ======== 第三步：交替更新梯队 ========
+    if g.day_count % 2 == 0:
+        g.tranche_a = today_top
+    else:
+        g.tranche_b = today_top
+
+    # 首次运行时两个梯队可能为空，用当前排名填充
+    if not g.tranche_a:
+        g.tranche_a = today_top
+    if not g.tranche_b:
+        g.tranche_b = today_top
+
+    # ======== 第四步：共识排名（两个梯队都选中的优先）========
+    # 统计每个ETF被几个梯队选中，以及累计得分
+    consensus = {}
+    all_candidates = {c['code']: c for c in candidates}
+
+    for code in g.tranche_a + g.tranche_b:
+        if code not in consensus:
+            consensus[code] = {'count': 0, 'score': 0}
+        consensus[code]['count'] += 1
+        if code in all_candidates:
+            consensus[code]['score'] += all_candidates[code]['momentum']
+
+    # 排序：先按被选中次数（2=共识>1=单方），再按得分
+    sorted_consensus = sorted(consensus.items(),
+                              key=lambda x: (x[1]['count'], x[1]['score']),
+                              reverse=True)
+
+    target_list = []
+    for code, info in sorted_consensus[:max_hold]:
+        if code in all_candidates:
+            target_list.append(all_candidates[code])
+        elif code == g.bond_etf:
+            # 国债可能不在candidates中（未通过动量过滤），但梯队选中了
+            target_list.append({
+                'code': code,
+                'momentum': 0, 'risk_adj_mom': 0, 'trend_strength': 0,
+                'roc': 0, 'roc_long': 0,
+                'volatility': 0.03,
+                'close': current_data[code].last_price,
+                'atr': current_data[code].last_price * 0.005,
+                '_is_bond_fill': True,
+            })
+
+    # 候选不足时国债填空
     bond = g.bond_etf
     bond_in_targets = any(t['code'] == bond for t in target_list)
     if len(target_list) < max_hold and not bond_in_targets:
         if not current_data[bond].paused:
-            # 国债作为填空标的，给一个最低优先级的虚拟信号
             target_list.append({
                 'code': bond,
                 'momentum': 0, 'risk_adj_mom': 0, 'trend_strength': 0,
                 'roc': 0, 'roc_long': 0,
-                'volatility': 0.03,  # 国债低波动
+                'volatility': 0.03,
                 'close': current_data[bond].last_price,
                 'atr': current_data[bond].last_price * 0.005,
-                '_is_bond_fill': True,  # 标记为国债填空
+                '_is_bond_fill': True,
             })
             log.info('[国债填空] 候选%d只不足%d，国债补位' % (
                 len(target_list) - 1, max_hold))
 
     target_codes = set(t['code'] for t in target_list)
 
-    # ======== 第五步：卖出不在目标中的持仓（轮动换仓）========
+    # ======== 第五步：卖出不在目标中的持仓 ========
     for code in list(context.portfolio.positions.keys()):
         pos = context.portfolio.positions[code]
         if pos.total_amount <= 0:
@@ -326,20 +367,17 @@ def do_trading(context):
             g.entry_atr.pop(code, None)
 
     # ======== 第六步：买入目标持仓 ========
-    # 计算当前已持有的目标标的数量
     current_holds = set()
     for code in context.portfolio.positions:
         if context.portfolio.positions[code].total_amount > 0:
             current_holds.add(code)
 
-    # 需要新买入的标的
     to_buy = [sig for sig in target_list if sig['code'] not in current_holds]
     if not to_buy:
         return
 
-    # 可用资金（考虑卖出后的资金需要T+1到账，ETF是T+1）
     available = context.portfolio.available_cash
-    slots = max_hold - len(current_holds & target_codes)  # 空余仓位数
+    slots = max_hold - len(current_holds & target_codes)
 
     if slots <= 0 or available < 500:
         return
@@ -354,14 +392,12 @@ def do_trading(context):
         price = current_data[code].last_price
         is_bond_fill = sig.get('_is_bond_fill', False)
 
-        # 仓位计算：国债填空用剩余全部资金，权益类等权分配 × 波动率反比
         if is_bond_fill:
-            alloc = available * 0.95  # 国债填空：尽量多买
+            alloc = available * 0.95
         else:
             alloc = available / slots * base_ratio
 
         if not is_bond_fill:
-            # 波动率反比调整（仅权益类标的）
             target_vol = 0.15
             actual_vol = max(sig['volatility'], 0.05)
             vol_mult = min(target_vol / actual_vol, 1.5)
@@ -388,7 +424,7 @@ def do_trading(context):
         order(code, shares)
         g.highest_since_buy[code] = price
         g.entry_atr[code] = sig['atr']
-        available -= shares * price * 1.003  # 预留手续费
+        available -= shares * price * 1.003
         slots -= 1
 
 

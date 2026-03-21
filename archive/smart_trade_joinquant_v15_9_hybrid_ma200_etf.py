@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-智能ETF量化交易策略 V15.9 - 统一持仓上限+12只ETF
+智能ETF量化交易策略 V15.9-Hybrid-MA200 - 混合评分+200日均线过滤
 =============================================
-基于V15.7-Expanded（12只ETF，267.9%收益），一项改动：
-  1. 统一所有资金档位max_hold=3，让小资金也享受3只持仓的分散优势
-  2. ETF池保持12只（4A股+5跨市场+3跨资产），与V15.7-Expanded一致
-  ETF价格普遍很低（100-1100元/手），2万资金分3仓完全可行。
-  唯一例外是国债ETF（~14000元/手），小资金买不起时代码会自动跳过。
+基于Hybrid每日轮动版（146.7%收益），新增MA200长期趋势过滤：
+  - 过滤层1：ROC20>0, ROC60>0, 价格>MA20（短中期动量+趋势）
+  - 过滤层2：价格>MA200（长期趋势，学术验证的熊市过滤器）
+  - 过滤层3：LR×R² > 0（趋势纯度）
+  - 排名层：score = ROC风险调整动量 × 0.5 + LR×R² × 0.5
+  每日轮动，无路径偏移。
 
 ETF池（4A股+5跨市场+3跨资产 = 12只）：
   A股4只：
@@ -28,6 +29,7 @@ ETF池（4A股+5跨市场+3跨资产 = 12只）：
 
 import numpy as np
 import pandas as pd
+import math
 from jqdata import *
 
 
@@ -79,7 +81,7 @@ def initialize(context):
 
     # ---- 策略参数 ----
     g.params = {
-        'rebalance_interval': 2,     # 2天轮动（降低再平衡时机运气，路径差距从161pp降至34pp）
+        'rebalance_interval': 1,     # 每日轮动 + ROC×LR双重过滤抑制噪音
         'momentum_period': 20,       # 短期动量计算周期
         'momentum_period_long': 60,  # 中期动量计算周期 - V15.1新增
         'atr_period': 14,            # ATR周期
@@ -138,12 +140,14 @@ def get_tier_param(param_name):
 # ============================================================
 def calc_momentum(code, end_date):
     """
-    计算单只ETF的动量得分。
-    V15.1：双重动量（短期ROC20+中期ROC60），双正才买入。
+    计算单只ETF的动量得分（ROC+LR混合版）。
+    过滤层：ROC20>0, ROC60>0, 价格>MA20, LR×R²>0（交集）
+    排名层：score = ROC风险调整动量(归一化) × 0.5 + LR×R²(归一化) × 0.5
     返回None表示不满足买入条件。
     """
     mom_long = g.params['momentum_period_long']
-    df = get_price(code, end_date=end_date, count=mom_long + 10,
+    data_count = max(mom_long + 10, 210)  # 至少210天用于MA200计算
+    df = get_price(code, end_date=end_date, count=data_count,
                    frequency='daily',
                    fields=['open', 'close', 'high', 'low', 'volume'],
                    skip_paused=True, fq='pre')
@@ -168,26 +172,50 @@ def calc_momentum(code, end_date):
     if vol <= 0 or pd.isna(vol):
         return None
 
-    # ---- 风险调整动量 ----
-    risk_adj_mom = roc_short / vol
-
-    # ---- 过滤：双重动量+趋势确认 ----
+    # ---- 过滤层1：双重动量+趋势确认（V15.9原版）----
     ma20 = C.iloc[-20:].mean()
     if C.iloc[-1] < ma20:
-        return None  # 价格在MA20下方，不买
-
+        return None
     if roc_short < 0:
-        return None  # 短期负动量不买
-
+        return None
     if roc_long < 0:
-        return None  # 中期负动量不买
+        return None
 
-    # ---- 趋势强度：价格偏离MA20的程度 ----
+    # ---- 过滤层1.5：MA200长期趋势过滤（学术验证的熊市过滤器）----
+    if len(C) >= 200:
+        ma200 = C.iloc[-200:].mean()
+        if C.iloc[-1] < ma200:
+            return None  # 价格在200日均线下方，严重下行趋势，不买
+
+    # ---- ROC风险调整动量（V15.9原版评分）----
+    risk_adj_mom = roc_short / vol
     trend_strength = (C.iloc[-1] - ma20) / ma20
-
-    # ---- 综合排名分：风险调整动量 × 0.7 + 趋势强度 × 0.3 ----
     tw = g.params['trend_weight']
-    sort_score = risk_adj_mom * (1 - tw) + trend_strength * tw
+    roc_score = risk_adj_mom * (1 - tw) + trend_strength * tw
+
+    # ---- 线性回归评分（LR×R²）----
+    prices = C.iloc[-mom_period:].values
+    y = np.log(prices)
+    x = np.arange(len(y))
+    weights = np.linspace(1, 2, len(y))
+
+    slope, intercept = np.polyfit(x, y, 1, w=weights)
+    annualized_return = math.exp(slope * 250) - 1
+
+    y_fit = slope * x + intercept
+    ss_res = np.sum(weights * (y - y_fit) ** 2)
+    ss_tot = np.sum(weights * (y - np.mean(y)) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+    r2 = max(r2, 0)
+
+    lr_score = annualized_return * r2
+
+    # ---- 过滤层2：LR评分也必须为正（交集过滤）----
+    if lr_score <= 0:
+        return None
+
+    # ---- 混合排名分：ROC评分 × 0.5 + LR评分 × 0.5 ----
+    sort_score = roc_score * 0.5 + lr_score * 0.5
 
     # ---- ATR（用于止损）----
     atr_period = g.params['atr_period']
@@ -202,7 +230,7 @@ def calc_momentum(code, end_date):
         'code': code,
         'momentum': sort_score,
         'risk_adj_mom': risk_adj_mom,
-        'trend_strength': trend_strength,
+        'trend_strength': r2,
         'roc': roc_short,
         'roc_long': roc_long,
         'volatility': vol,
@@ -380,7 +408,7 @@ def do_trading(context):
         if is_bond_fill:
             log.info('[国债填空买入] %s %d股 @%.3f' % (code, shares, price))
         else:
-            log.info('[轮动买入] %s 综合=%.3f 动量=%.3f 趋势=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
+            log.info('[轮动买入] %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
                 code, sig['momentum'], sig['risk_adj_mom'], sig['trend_strength'],
                 sig['roc'] * 100, sig['roc_long'] * 100,
                 sig['volatility'] * 100, shares, price))

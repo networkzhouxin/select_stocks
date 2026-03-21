@@ -79,7 +79,7 @@ def initialize(context):
 
     # ---- 策略参数 ----
     g.params = {
-        'rebalance_interval': 2,     # 2天轮动（降低再平衡时机运气，路径差距从161pp降至34pp）
+        'rebalance_interval': 1,     # 每日轮动（连续轮动，消除再平衡时机运气）
         'momentum_period': 20,       # 短期动量计算周期
         'momentum_period_long': 60,  # 中期动量计算周期 - V15.1新增
         'atr_period': 14,            # ATR周期

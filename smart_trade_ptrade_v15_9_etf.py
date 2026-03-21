@@ -94,7 +94,7 @@ def initialize(context):
 
     # ---- 策略参数（与聚宽版一致）----
     g.params = {
-        'rebalance_interval': 3,
+        'rebalance_interval': 2,     # 2天轮动（降低再平衡时机运气，路径差距从161pp降至34pp）
         'momentum_period': 20,
         'momentum_period_long': 60,
         'atr_period': 14,
@@ -167,6 +167,7 @@ def before_trading_start(context, data):
     g.__data = data
     g.sold_today = {}
     g.__last_snapshot = {}  # 清除前日snapshot缓存
+    log.info('[盘前] 策略启动，清理缓存完毕')
 
     # 清理未成交的pending_orders（前日下单未回调的视为未成交）
     if g.__pending_orders:
@@ -192,14 +193,17 @@ def after_trading_end(context, data):
 #  run_daily包装函数（实盘模式使用）
 # ============================================================
 def _update_tier_wrapper(context):
+    log.info('[09:30] 档位检查开始')
     _update_tier(context)
 
 
 def _do_trading_wrapper(context):
+    log.info('[09:35] 交易逻辑开始')
     _do_trading(context)
 
 
 def _update_highest_wrapper(context):
+    log.info('[15:00] 更新最高价')
     _update_highest(context)
 
 
@@ -544,13 +548,19 @@ def _do_trading(context):
 
     # ======== 第一步：每日止损检查 ========
     stopped_codes = _check_stop_loss(context)
+    if stopped_codes:
+        log.info('[09:35] 止损触发%d只：%s，提前进入轮动' % (len(stopped_codes), ', '.join(stopped_codes)))
+    else:
+        log.info('[09:35] 止损检查完毕，无触发')
 
     # ======== 第二步：判断是否到轮动日 ========
     g.day_count += 1
     if g.day_count < g.params['rebalance_interval'] and not stopped_codes:
+        log.info('[09:35] 非轮动日（%d/%d），等待下次轮动' % (g.day_count, g.params['rebalance_interval']))
         return
     if g.day_count >= g.params['rebalance_interval']:
         g.day_count = 0
+        log.info('[09:35] 轮动日到达，开始计算动量排名')
 
     # ======== 第三步：计算所有ETF动量并排名 ========
     candidates = []
@@ -562,6 +572,11 @@ def _do_trading(context):
             candidates.append(result)
 
     candidates.sort(key=lambda x: x['momentum'], reverse=True)
+
+    log.info('[09:35] 动量筛选完毕：%d/%d只ETF通过过滤' % (len(candidates), len(g.etf_pool)))
+    for c in candidates[:5]:  # 打印前5名
+        log.info('  %s 综合=%.3f ROC20=%.1f%% ROC60=%.1f%%' % (
+            c['code'], c['momentum'], c['roc'] * 100, c['roc_long'] * 100))
 
     # ======== 第四步：确定目标持仓（候选不足时国债填空）========
     max_hold = _get_tier_param('max_hold')
@@ -587,6 +602,7 @@ def _do_trading(context):
                     len(target_list) - 1, max_hold))
 
     target_codes = set(t['code'] for t in target_list)
+    log.info('[09:35] 目标持仓：%s' % ', '.join(target_codes) if target_codes else '[09:35] 目标持仓：无（全部弱势）')
 
     # ======== 第五步：卖出不在目标中的持仓 ========
     positions = _get_positions(context)
@@ -628,12 +644,14 @@ def _do_trading(context):
 
     to_buy = [sig for sig in target_list if sig['code'] not in current_holds]
     if not to_buy:
+        log.info('[09:35] 持仓与目标一致，无需换仓')
         return
 
     available = _get_available_cash(context)
     slots = max_hold - len(current_holds & target_codes)
 
     if slots <= 0 or available < 500:
+        log.info('[09:35] 无空余仓位(slots=%d)或资金不足(%.0f)，跳过买入' % (slots, available))
         return
 
     base_ratio = _get_tier_param('base_position_ratio')
