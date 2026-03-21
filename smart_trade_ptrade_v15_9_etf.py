@@ -31,9 +31,10 @@ V15.9.1 实盘健壮性优化（不改变策略逻辑）：
   8. 实盘防重复：sold_today防止6秒同步延迟导致重复卖出
   9. 限价精度：ETF限价单必须3位小数（PTrade API要求）
 
-策略逻辑（与聚宽V15.9 100%一致）：
-  - 动量轮动：每3个交易日从ETF池选动量最强的N只持有
-  - 双重动量过滤：ROC20>0 且 ROC60>0 且 价格>MA20
+策略逻辑（与聚宽V15.9-Hybrid一致）：
+  - 动量轮动：每日从ETF池选动量最强的N只持有（无路径偏移）
+  - 混合评分：ROC风险调整动量 × 0.5 + 线性回归斜率×R² × 0.5
+  - 交集过滤：ROC20>0 且 ROC60>0 且 价格>MA20 且 LR×R²>0
   - ATR跟踪止损：动态倍数（高波动2.0x，正常2.5x）
   - 国债填空：候选不足max_hold时，国债自动补位
   - 买入价使用T日实时价
@@ -48,6 +49,7 @@ ETF池（4A股+5跨市场+3跨资产 = 12只）：
 
 import numpy as np
 import pandas as pd
+import math
 from datetime import datetime, timedelta
 
 
@@ -94,7 +96,7 @@ def initialize(context):
 
     # ---- 策略参数（与聚宽版一致）----
     g.params = {
-        'rebalance_interval': 2,     # 2天轮动（降低再平衡时机运气，路径差距从161pp降至34pp）
+        'rebalance_interval': 1,     # 每日轮动 + ROC×LR双重过滤抑制噪音
         'momentum_period': 20,
         'momentum_period_long': 60,
         'atr_period': 14,
@@ -400,12 +402,13 @@ def _get_tier_param(param_name):
 
 
 # ============================================================
-#  动量计算（策略逻辑与聚宽版一致）
+#  动量计算（ROC+LR混合评分，策略逻辑与聚宽Hybrid版一致）
 # ============================================================
 def _calc_momentum(code, end_date):
     """
-    计算单只ETF的动量得分。
-    双重动量（短期ROC20+中期ROC60），双正才买入。
+    计算单只ETF的动量得分（ROC+LR混合版）。
+    过滤层：ROC20>0, ROC60>0, 价格>MA20, LR×R²>0（交集）
+    排名层：score = ROC风险调整动量 × 0.5 + LR×R² × 0.5
     返回None表示不满足买入条件。
     """
     mom_long = g.params['momentum_period_long']
@@ -431,26 +434,44 @@ def _calc_momentum(code, end_date):
     if vol <= 0 or pd.isna(vol):
         return None
 
-    # ---- 风险调整动量 ----
-    risk_adj_mom = roc_short / vol
-
-    # ---- 过滤：双重动量+趋势确认 ----
+    # ---- 过滤层1：双重动量+趋势确认 ----
     ma20 = C.iloc[-20:].mean()
     if C.iloc[-1] < ma20:
         return None
-
     if roc_short < 0:
         return None
-
     if roc_long < 0:
         return None
 
-    # ---- 趋势强度 ----
+    # ---- ROC风险调整动量评分 ----
+    risk_adj_mom = roc_short / vol
     trend_strength = (C.iloc[-1] - ma20) / ma20
-
-    # ---- 综合排名分 ----
     tw = g.params['trend_weight']
-    sort_score = risk_adj_mom * (1 - tw) + trend_strength * tw
+    roc_score = risk_adj_mom * (1 - tw) + trend_strength * tw
+
+    # ---- 线性回归评分（LR×R²）----
+    prices = C.iloc[-mom_period:].values
+    y = np.log(prices)
+    x = np.arange(len(y))
+    weights = np.linspace(1, 2, len(y))
+
+    slope, intercept = np.polyfit(x, y, 1, w=weights)
+    annualized_return = math.exp(slope * 250) - 1
+
+    y_fit = slope * x + intercept
+    ss_res = np.sum(weights * (y - y_fit) ** 2)
+    ss_tot = np.sum(weights * (y - np.mean(y)) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+    r2 = max(r2, 0)
+
+    lr_score = annualized_return * r2
+
+    # ---- 过滤层2：LR评分也必须为正（交集过滤）----
+    if lr_score <= 0:
+        return None
+
+    # ---- 混合排名分：ROC评分 × 0.5 + LR评分 × 0.5 ----
+    sort_score = roc_score * 0.5 + lr_score * 0.5
 
     # ---- ATR ----
     atr_period = g.params['atr_period']
@@ -465,7 +486,7 @@ def _calc_momentum(code, end_date):
         'code': code,
         'momentum': sort_score,
         'risk_adj_mom': risk_adj_mom,
-        'trend_strength': trend_strength,
+        'trend_strength': r2,
         'roc': roc_short,
         'roc_long': roc_long,
         'volatility': vol,
@@ -575,8 +596,8 @@ def _do_trading(context):
 
     log.info('[09:35] 动量筛选完毕：%d/%d只ETF通过过滤' % (len(candidates), len(g.etf_pool)))
     for c in candidates[:5]:  # 打印前5名
-        log.info('  %s 综合=%.3f ROC20=%.1f%% ROC60=%.1f%%' % (
-            c['code'], c['momentum'], c['roc'] * 100, c['roc_long'] * 100))
+        log.info('  %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%%' % (
+            c['code'], c['momentum'], c['risk_adj_mom'], c['trend_strength'], c['roc'] * 100))
 
     # ======== 第四步：确定目标持仓（候选不足时国债填空）========
     max_hold = _get_tier_param('max_hold')
@@ -715,7 +736,7 @@ def _do_trading(context):
         if is_bond_fill:
             log.info('[国债填空买入] %s %d股 @%.3f' % (code, shares, price))
         else:
-            log.info('[轮动买入] %s 综合=%.3f 动量=%.3f 趋势=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
+            log.info('[轮动买入] %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
                 code, sig['momentum'], sig['risk_adj_mom'], sig['trend_strength'],
                 sig['roc'] * 100, sig['roc_long'] * 100,
                 sig['volatility'] * 100, shares, price))
