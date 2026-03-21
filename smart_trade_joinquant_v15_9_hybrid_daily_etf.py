@@ -194,11 +194,12 @@ def calc_momentum(code, end_date):
     weights = np.linspace(1, 2, len(y))
 
     slope, intercept = np.polyfit(x, y, 1, w=weights)
-    annualized_return = math.exp(slope * 250) - 1
+    annualized_return = math.exp(slope * 252) - 1
 
     y_fit = slope * x + intercept
     ss_res = np.sum(weights * (y - y_fit) ** 2)
-    ss_tot = np.sum(weights * (y - np.mean(y)) ** 2)
+    y_wmean = np.average(y, weights=weights)
+    ss_tot = np.sum(weights * (y - y_wmean) ** 2)
     r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
     r2 = max(r2, 0)
 
@@ -207,9 +208,6 @@ def calc_momentum(code, end_date):
     # ---- 过滤层2：LR评分也必须为正（交集过滤）----
     if lr_score <= 0:
         return None
-
-    # ---- 混合排名分：ROC评分 × 0.5 + LR评分 × 0.5 ----
-    sort_score = roc_score * 0.5 + lr_score * 0.5
 
     # ---- ATR（用于止损）----
     atr_period = g.params['atr_period']
@@ -222,9 +220,10 @@ def calc_momentum(code, end_date):
 
     return {
         'code': code,
-        'momentum': sort_score,
+        'roc_score': roc_score,
+        'lr_score': lr_score,
         'risk_adj_mom': risk_adj_mom,
-        'trend_strength': r2,
+        'r2': r2,
         'roc': roc_short,
         'roc_long': roc_long,
         'volatility': vol,
@@ -264,7 +263,7 @@ def check_stop_loss(context, current_data):
             continue
 
         cur_price = current_data[code].last_price
-        profit_pct = (cur_price - pos.avg_cost) / pos.avg_cost
+        profit_pct = (cur_price - pos.avg_cost) / pos.avg_cost if pos.avg_cost > 0 else 0
 
         # ATR跟踪止损
         if code in g.highest_since_buy and code in g.entry_atr:
@@ -308,7 +307,19 @@ def do_trading(context):
         if result is not None:
             candidates.append(result)
 
-    # 按风险调整动量排序
+    # 分位数归一化：确保ROC和LR两个评分维度等权贡献排名
+    if len(candidates) >= 2:
+        n = len(candidates) - 1
+        for rank, idx in enumerate(sorted(range(len(candidates)), key=lambda i: candidates[i]['roc_score'])):
+            candidates[idx]['_roc_rank'] = rank / n
+        for rank, idx in enumerate(sorted(range(len(candidates)), key=lambda i: candidates[i]['lr_score'])):
+            candidates[idx]['_lr_rank'] = rank / n
+        for c in candidates:
+            c['momentum'] = c['_roc_rank'] * 0.5 + c['_lr_rank'] * 0.5
+    elif len(candidates) == 1:
+        candidates[0]['momentum'] = 1.0
+
+    # 按归一化后的混合排名排序
     candidates.sort(key=lambda x: x['momentum'], reverse=True)
 
     # ======== 第四步：确定目标持仓（候选不足时国债填空）========
@@ -323,7 +334,7 @@ def do_trading(context):
             # 国债作为填空标的，给一个最低优先级的虚拟信号
             target_list.append({
                 'code': bond,
-                'momentum': 0, 'risk_adj_mom': 0, 'trend_strength': 0,
+                'momentum': 0, 'risk_adj_mom': 0, 'r2': 0,
                 'roc': 0, 'roc_long': 0,
                 'volatility': 0.03,  # 国债低波动
                 'close': current_data[bond].last_price,
@@ -341,8 +352,9 @@ def do_trading(context):
         if pos.total_amount <= 0:
             continue
         if code not in target_codes:
-            profit_pct = (current_data[code].last_price - pos.avg_cost) / pos.avg_cost
-            log.info('[轮动卖出] %s 盈亏%.1f%%（被更强标的替换）' % (code, profit_pct * 100))
+            if pos.avg_cost > 0:
+                profit_pct = (current_data[code].last_price - pos.avg_cost) / pos.avg_cost
+                log.info('[轮动卖出] %s 盈亏%.1f%%（被更强标的替换）' % (code, profit_pct * 100))
             order_target(code, 0)
             g.highest_since_buy.pop(code, None)
             g.entry_atr.pop(code, None)
@@ -403,7 +415,7 @@ def do_trading(context):
             log.info('[国债填空买入] %s %d股 @%.3f' % (code, shares, price))
         else:
             log.info('[轮动买入] %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
-                code, sig['momentum'], sig['risk_adj_mom'], sig['trend_strength'],
+                code, sig['momentum'], sig['risk_adj_mom'], sig['r2'],
                 sig['roc'] * 100, sig['roc_long'] * 100,
                 sig['volatility'] * 100, shares, price))
 
@@ -446,7 +458,7 @@ def after_close(context):
         get_tier_param('max_hold')))
 
     for code, pos in hold.items():
-        profit_pct = (pos.price - pos.avg_cost) / pos.avg_cost * 100
+        profit_pct = (pos.price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
         highest = g.highest_since_buy.get(code, pos.price)
         log.info('  %s 成本:%.3f 现价:%.3f 高:%.3f 盈亏:%.1f%%' % (
             code, pos.avg_cost, pos.price, highest, profit_pct))

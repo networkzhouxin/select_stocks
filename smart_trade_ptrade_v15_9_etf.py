@@ -366,6 +366,12 @@ def _get_price_data(code, end_date, count):
             'low': df_l[code],
             'volume': df_v[code],
         })
+        # 截断到end_date，防止get_history返回当日数据导致未来数据泄露
+        try:
+            cutoff = pd.Timestamp(end_date_str)
+            df = df[df.index <= cutoff]
+        except Exception:
+            pass
         # 手动过滤停牌日
         df = df[df['volume'] > 0]
         return df
@@ -456,11 +462,12 @@ def _calc_momentum(code, end_date):
     weights = np.linspace(1, 2, len(y))
 
     slope, intercept = np.polyfit(x, y, 1, w=weights)
-    annualized_return = math.exp(slope * 250) - 1
+    annualized_return = math.exp(slope * 252) - 1
 
     y_fit = slope * x + intercept
     ss_res = np.sum(weights * (y - y_fit) ** 2)
-    ss_tot = np.sum(weights * (y - np.mean(y)) ** 2)
+    y_wmean = np.average(y, weights=weights)
+    ss_tot = np.sum(weights * (y - y_wmean) ** 2)
     r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
     r2 = max(r2, 0)
 
@@ -469,9 +476,6 @@ def _calc_momentum(code, end_date):
     # ---- 过滤层2：LR评分也必须为正（交集过滤）----
     if lr_score <= 0:
         return None
-
-    # ---- 混合排名分：ROC评分 × 0.5 + LR评分 × 0.5 ----
-    sort_score = roc_score * 0.5 + lr_score * 0.5
 
     # ---- ATR ----
     atr_period = g.params['atr_period']
@@ -484,9 +488,10 @@ def _calc_momentum(code, end_date):
 
     return {
         'code': code,
-        'momentum': sort_score,
+        'roc_score': roc_score,
+        'lr_score': lr_score,
         'risk_adj_mom': risk_adj_mom,
-        'trend_strength': r2,
+        'r2': r2,
         'roc': roc_short,
         'roc_long': roc_long,
         'volatility': vol,
@@ -529,10 +534,11 @@ def _check_stop_loss(context):
 
         cur_price = _get_current_price(code)
         if cur_price is None:
+            log.warning('[止损告警] %s 无法获取价格，当日止损检查跳过' % code)
             continue
 
         cost = _pos_cost(pos)
-        profit_pct = (cur_price - cost) / cost
+        profit_pct = (cur_price - cost) / cost if cost > 0 else 0
 
         # ATR跟踪止损
         if code in g.highest_since_buy and code in g.entry_atr:
@@ -592,12 +598,25 @@ def _do_trading(context):
         if result is not None:
             candidates.append(result)
 
+    # 分位数归一化：确保ROC和LR两个评分维度等权贡献排名
+    if len(candidates) >= 2:
+        n = len(candidates) - 1
+        for rank, idx in enumerate(sorted(range(len(candidates)), key=lambda i: candidates[i]['roc_score'])):
+            candidates[idx]['_roc_rank'] = rank / n
+        for rank, idx in enumerate(sorted(range(len(candidates)), key=lambda i: candidates[i]['lr_score'])):
+            candidates[idx]['_lr_rank'] = rank / n
+        for c in candidates:
+            c['momentum'] = c['_roc_rank'] * 0.5 + c['_lr_rank'] * 0.5
+    elif len(candidates) == 1:
+        candidates[0]['momentum'] = 1.0
+
+    # 按归一化后的混合排名排序
     candidates.sort(key=lambda x: x['momentum'], reverse=True)
 
     log.info('[09:35] 动量筛选完毕：%d/%d只ETF通过过滤' % (len(candidates), len(g.etf_pool)))
     for c in candidates[:5]:  # 打印前5名
         log.info('  %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%%' % (
-            c['code'], c['momentum'], c['risk_adj_mom'], c['trend_strength'], c['roc'] * 100))
+            c['code'], c['momentum'], c['risk_adj_mom'], c['r2'], c['roc'] * 100))
 
     # ======== 第四步：确定目标持仓（候选不足时国债填空）========
     max_hold = _get_tier_param('max_hold')
@@ -612,7 +631,7 @@ def _do_trading(context):
             if bond_price is not None:
                 target_list.append({
                     'code': bond,
-                    'momentum': 0, 'risk_adj_mom': 0, 'trend_strength': 0,
+                    'momentum': 0, 'risk_adj_mom': 0, 'r2': 0,
                     'roc': 0, 'roc_long': 0,
                     'volatility': 0.03,
                     'close': bond_price,
@@ -623,7 +642,7 @@ def _do_trading(context):
                     len(target_list) - 1, max_hold))
 
     target_codes = set(t['code'] for t in target_list)
-    log.info('[09:35] 目标持仓：%s' % ', '.join(target_codes) if target_codes else '[09:35] 目标持仓：无（全部弱势）')
+    log.info('[09:35] 目标持仓：%s' % (', '.join(target_codes) if target_codes else '无（全部弱势）'))
 
     # ======== 第五步：卖出不在目标中的持仓 ========
     positions = _get_positions(context)
@@ -636,11 +655,14 @@ def _do_trading(context):
         if code not in target_codes:
             cur_price = _get_current_price(code)
             cost = _pos_cost(pos)
-            if cur_price and cost > 0:
+            if cur_price is None or cur_price <= 0:
+                cur_price = cost  # 价格获取失败，用成本价作为限价基准
+                log.warning('[轮动卖出] %s 无法获取实时价，使用成本价%.3f估算' % (code, cost))
+            if cost > 0:
                 profit_pct = (cur_price - cost) / cost
                 log.info('[轮动卖出] %s 盈亏%.1f%%（被更强标的替换）' % (code, profit_pct * 100))
             # 卖出用跌停价作limit_price，确保成交
-            sell_lmt = round(cur_price, 3) if cur_price else None
+            sell_lmt = round(cur_price, 3)
             if g.__is_live and code in g.__last_snapshot:
                 try:
                     down_px = float(g.__last_snapshot[code].get('down_px', 0))
@@ -737,7 +759,7 @@ def _do_trading(context):
             log.info('[国债填空买入] %s %d股 @%.3f' % (code, shares, price))
         else:
             log.info('[轮动买入] %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%% ROC60=%.1f%% 波动率=%.1f%% %d股 @%.3f' % (
-                code, sig['momentum'], sig['risk_adj_mom'], sig['trend_strength'],
+                code, sig['momentum'], sig['risk_adj_mom'], sig['r2'],
                 sig['roc'] * 100, sig['roc_long'] * 100,
                 sig['volatility'] * 100, shares, price))
 
