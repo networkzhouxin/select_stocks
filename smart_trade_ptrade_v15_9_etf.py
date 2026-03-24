@@ -143,8 +143,7 @@ def initialize(context):
     if g.__is_live:
         run_daily(context, _update_tier_wrapper, time='09:30')
         run_daily(context, _do_trading_wrapper, time='09:35')
-        run_daily(context, _update_highest_wrapper, time='15:00')
-        run_daily(context, _after_close_wrapper, time='15:30')
+        run_daily(context, _after_close_wrapper, time='15:30')  # 合并更新最高价+盘后记录，确保收盘数据落定
 
 
 def handle_data(context, data):
@@ -210,6 +209,7 @@ def _update_highest_wrapper(context):
 
 
 def _after_close_wrapper(context):
+    _update_highest(context)  # 先更新最高价，再打印日志
     _after_close(context)
     g.sold_today = {}
 
