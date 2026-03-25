@@ -172,10 +172,8 @@ def calc_momentum(code, end_date):
     if vol <= 0 or pd.isna(vol):
         return None
 
-    # ---- 过滤层1：双重动量+趋势确认（V15.9原版）----
+    # ---- 过滤层1：双重动量（去掉MA20过滤，保留MA20用于趋势评分）----
     ma20 = C.iloc[-20:].mean()
-    if C.iloc[-1] < ma20:
-        return None
     if roc_short < 0:
         return None
     if roc_long < 0:

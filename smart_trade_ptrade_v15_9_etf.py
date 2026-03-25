@@ -108,15 +108,15 @@ def initialize(context):
         'trend_weight': 0.3,
     }
 
-    # ---- QDII标的（需要溢价检测）----
-    g.qdii_etfs = {
+    # ---- 需要溢价检测的ETF（仅QDII类，受额度限制易出现大幅溢价）----
+    g.premium_check_etfs = {
         '513100.SS',    # 纳指ETF
         '513500.SS',    # 标普500ETF
         '159920.SZ',    # 恒生ETF
         '513880.SS',    # 日经ETF
         '513050.SS',    # 中概互联ETF
     }
-    g.qdii_premium_limit = 0.05  # QDII溢价上限5%
+    g.premium_limit = 0.05  # 溢价上限5%
 
     g.current_tier = None
     g.day_count = 0
@@ -440,10 +440,8 @@ def _calc_momentum(code, end_date):
     if vol <= 0 or pd.isna(vol):
         return None
 
-    # ---- 过滤层1：双重动量+趋势确认 ----
+    # ---- 过滤层1：双重动量（去掉MA20过滤，保留MA20用于趋势评分）----
     ma20 = C.iloc[-20:].mean()
-    if C.iloc[-1] < ma20:
-        return None
     if roc_short < 0:
         return None
     if roc_long < 0:
@@ -618,28 +616,9 @@ def _do_trading(context):
         log.info('  %s 混合=%.3f 动量=%.3f R²=%.3f ROC20=%.1f%%' % (
             c['code'], c['momentum'], c['risk_adj_mom'], c['r2'], c['roc'] * 100))
 
-    # ======== 第四步：确定目标持仓（候选不足时国债填空）========
+    # ======== 第四步：确定目标持仓 ========
     max_hold = _get_tier_param('max_hold')
     target_list = candidates[:max_hold]
-
-    # 候选不足max_hold时，用国债ETF填满剩余仓位
-    bond = g.bond_etf
-    bond_in_targets = any(t['code'] == bond for t in target_list)
-    if len(target_list) < max_hold and not bond_in_targets:
-        if not _is_paused(bond):
-            bond_price = _get_current_price(bond)
-            if bond_price is not None:
-                target_list.append({
-                    'code': bond,
-                    'momentum': 0, 'risk_adj_mom': 0, 'r2': 0,
-                    'roc': 0, 'roc_long': 0,
-                    'volatility': 0.03,
-                    'close': bond_price,
-                    'atr': bond_price * 0.005,
-                    '_is_bond_fill': True,
-                })
-                log.info('[国债填空] 候选%d只不足%d，国债补位' % (
-                    len(target_list) - 1, max_hold))
 
     target_codes = set(t['code'] for t in target_list)
     log.info('[09:35] 目标持仓：%s' % (', '.join(target_codes) if target_codes else '无（全部弱势）'))
@@ -718,7 +697,7 @@ def _do_trading(context):
             pass
 
         # ---- QDII溢价过滤：用snapshot的iopv计算溢价率，>5%时跳过 ----
-        if g.__is_live and code in g.qdii_etfs and code in g.__last_snapshot:
+        if g.__is_live and code in g.premium_check_etfs and code in g.__last_snapshot:
             snap = g.__last_snapshot[code]
             try:
                 iopv = float(snap.get('iopv', 0))
@@ -726,9 +705,9 @@ def _do_trading(context):
                 iopv = 0
             if iopv > 0:
                 premium = price / iopv - 1
-                if premium > g.qdii_premium_limit:
+                if premium > g.premium_limit:
                     log.info('[溢价跳过] %s 溢价%.1f%%超限%.0f%%，跳过买入' % (
-                        code, premium * 100, g.qdii_premium_limit * 100))
+                        code, premium * 100, g.premium_limit * 100))
                     continue
 
         is_bond_fill = sig.get('_is_bond_fill', False)
