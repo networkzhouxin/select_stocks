@@ -12,7 +12,7 @@ V15.9相对V15.7的改动：
 V15.9.1 实盘健壮性优化（不改变策略逻辑）：
   1. 所有order/order_target传limit_price，避免PTrade内部snapshot二次调用失败
   2. 止损/轮动卖出用跌停价作limit_price，确保下跌行情中成交
-  3. QDII ETF溢价过滤：iopv溢价>5%时跳过买入，防止高溢价接盘
+  3. QDII ETF溢价过滤：仅对5只QDII ETF检测iopv溢价>5%时跳过买入
   4. 买入前check_limit涨停过滤，避免挂单涨停板浪费资金
   5. 实盘用snapshot的trade_status替代get_stock_status，减少API调用
   6. on_trade_response成交回调，确认买入成交后才设置止损基准
@@ -34,9 +34,8 @@ V15.9.1 实盘健壮性优化（不改变策略逻辑）：
 策略逻辑（与聚宽V15.9-Hybrid一致）：
   - 动量轮动：每日从ETF池选动量最强的N只持有（无路径偏移）
   - 混合评分：ROC风险调整动量 × 0.5 + 线性回归斜率×R² × 0.5
-  - 交集过滤：ROC20>0 且 ROC60>0 且 价格>MA20 且 LR×R²>0
+  - 交集过滤：ROC20>0 且 ROC60>0 且 LR×R²>0（无MA20过滤）
   - ATR跟踪止损：动态倍数（高波动2.0x，正常2.5x）
-  - 国债填空：候选不足max_hold时，国债自动补位
   - 买入价使用T日实时价
   - 统一max_hold=3，小资金也持3只
 
@@ -413,7 +412,7 @@ def _get_tier_param(param_name):
 def _calc_momentum(code, end_date):
     """
     计算单只ETF的动量得分（ROC+LR混合版）。
-    过滤层：ROC20>0, ROC60>0, 价格>MA20, LR×R²>0（交集）
+    过滤层：ROC20>0, ROC60>0, LR×R²>0（交集，无MA20过滤）
     排名层：score = ROC风险调整动量 × 0.5 + LR×R² × 0.5
     返回None表示不满足买入条件。
     """
@@ -566,7 +565,7 @@ def _check_stop_loss(context):
 
 
 # ============================================================
-#  核心交易逻辑（策略逻辑与聚宽版一致，增加涨停/溢价过滤+成交回调机制）
+#  核心交易逻辑（策略逻辑与聚宽版一致，增加涨停/QDII溢价过滤+成交回调机制）
 # ============================================================
 def _do_trading(context):
     prev_date = _get_prev_trade_date(context)
