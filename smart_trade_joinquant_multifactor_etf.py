@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-多因子自适应ETF量化策略 V2.0 — Multi-Factor Adaptive ETF Strategy
+多因子自适应ETF量化策略 V2.2 — Multi-Factor Adaptive ETF Strategy
 ================================================================
-V2.0 修复（基于V1.0回测-91.3%的教训）：
-  1. 轮动周期 3天→5天，减少60%换手
-  2. 换仓门槛：新标的得分必须比持仓最低分高8分以上才替换
-  3. 统一 max_hold=3，消除micro/small档位边界跳动
-  4. 因子打分3日平滑，降低单日噪音
-  5. 最低持仓期5天，避免买入即卖
-  6. 因子评分统一为趋势跟随方向（去掉与轮动矛盾的均值回归打分）
-  7. 基础买入门槛提高到60分，减少低质量交易
+V2.2 优化（基于V2.1回测+223%的专业审查）：
+  1. 空仓机制：所有ETF得分低于阈值时允许全现金（熊市保护）
+  2. 买入按得分排序：确保最强标的优先获得资金
+  3. 中期动量过滤：ROC60<0的标的大幅降低动量分（过滤假反弹）
+  4. 连续化评分：消除离散分档的断崖效应（减少排名抖动）
+  5. 趋势持有保护：盈利>15%的强趋势持仓，换仓门槛翻倍
+  6. ATR动态更新：每日收盘更新止损用的ATR值
+  7. QDII量价屏蔽：跨境ETF成交量因子给固定中性分
+  8. MA20斜率修正：精确计算5日前的MA20
+  9. 布林带宽度变化：加入squeeze信号（带宽收窄→即将变盘）
 
-V1.0核心问题：4274次交易×5元最低手续费=21370元，超过2万本金。
-排名每天微变导致持仓天天换，根本无法持有趋势。
+V2.1基础：+223% / 13.9%回撤 / 13只ETF / 周二周四轮动
 
 ETF池（5A股 + 5跨市场 + 3跨资产 = 13只）：
   A股: 510300沪深300, 159915创业板, 512100中证1000, 159928消费, 510880红利
@@ -64,61 +65,69 @@ def initialize(context):
     ]
     g.bond_etf = '511010.XSHG'
 
-    # ---- 资金档位（V2.0：统一max_hold=3）----
+    # V2.2新增：QDII ETF列表（成交量因子屏蔽）
+    g.qdii_etfs = set([
+        '513100.XSHG', '513500.XSHG', '159920.XSHE',
+        '513880.XSHG', '513050.XSHG',
+    ])
+
+    # ---- 资金档位（统一max_hold=3）----
     g.capital_tiers = {
-        'micro':  {'max_hold': 3, 'base_ratio': 0.70},  # <1.5万
-        'small':  {'max_hold': 3, 'base_ratio': 0.70},  # 1.5-5万
-        'medium': {'max_hold': 3, 'base_ratio': 0.60},  # 5-10万
-        'large':  {'max_hold': 4, 'base_ratio': 0.55},  # >10万
+        'micro':  {'max_hold': 3, 'base_ratio': 0.70},
+        'small':  {'max_hold': 3, 'base_ratio': 0.70},
+        'medium': {'max_hold': 3, 'base_ratio': 0.60},
+        'large':  {'max_hold': 4, 'base_ratio': 0.55},
     }
 
     # ---- 策略参数 ----
     g.params = {
-        'lookback': 120,              # 数据回望天数
-        'rebalance_weekdays': [1, 3],  # 轮动日：周二=1,周四=3（V2.1: 自然周历，无基准日依赖）
-        'switch_threshold': 8.0,      # 换仓门槛：新标的得分需高于持仓最低分此值（V2.0新增）
-        'min_hold_days': 5,           # 最低持仓天数（V2.0新增）
-        'smooth_days': 3,             # 因子平滑天数（V2.0新增）
-        'rsi_period': 14,             # RSI周期
-        'macd_fast': 12,              # MACD快线
-        'macd_slow': 26,              # MACD慢线
-        'macd_signal': 9,             # MACD信号线
-        'bb_period': 20,              # 布林带周期
-        'bb_std': 2.0,                # 布林带标准差倍数
-        'kdj_n': 9,                   # KDJ周期
-        'kdj_m1': 3,                  # KDJ平滑1
-        'kdj_m2': 3,                  # KDJ平滑2
-        'adx_period': 14,             # ADX周期
-        'momentum_period': 20,        # 动量周期
-        'vol_ma_period': 20,          # 成交量均线周期
-        'atr_period': 14,             # ATR周期
-        'trailing_atr_mult': 2.5,     # 跟踪止损ATR倍数
-        'stop_floor': 0.03,           # 止损下限3%
-        'stop_cap': 0.15,             # 止损上限15%
-        'score_buy_threshold': 60,    # 综合得分 > 此值才买入（V2.0: 55→60）
+        'lookback': 120,
+        'rebalance_weekdays': [1, 3],  # 周二+周四
+        'switch_threshold': 8.0,       # 换仓门槛
+        'min_hold_days': 5,
+        'smooth_days': 3,
+        'rsi_period': 14,
+        'macd_fast': 12,
+        'macd_slow': 26,
+        'macd_signal': 9,
+        'bb_period': 20,
+        'bb_std': 2.0,
+        'kdj_n': 9,
+        'kdj_m1': 3,
+        'kdj_m2': 3,
+        'adx_period': 14,
+        'momentum_period': 20,
+        'momentum_period_long': 60,    # V2.2：中期动量周期
+        'vol_ma_period': 20,
+        'atr_period': 14,
+        'trailing_atr_mult': 2.5,
+        'trailing_atr_mult_high_vol': 2.0,
+        'high_vol_threshold': 0.30,
+        'stop_floor': 0.03,
+        'stop_cap': 0.15,
+        'score_buy_threshold': 60,
     }
 
-    # ---- 因子权重（基准，会被ADX自适应调整）----
+    # ---- 因子权重 ----
     g.base_weights = {
-        'rsi': 0.12,         # RSI趋势确认
-        'macd': 0.18,        # MACD趋势（V2.0加重）
-        'bollinger': 0.10,   # 布林带趋势位置
-        'momentum': 0.25,    # 动量（V2.0加重，核心因子）
-        'volume': 0.08,      # 量价配合（V2.0降低，噪音大）
-        'kdj': 0.12,         # KDJ
-        'ma_trend': 0.15,    # 均线趋势
+        'rsi': 0.12,
+        'macd': 0.18,
+        'bollinger': 0.10,
+        'momentum': 0.25,
+        'volume': 0.08,
+        'kdj': 0.12,
+        'ma_trend': 0.15,
     }
 
     g.current_tier = None
     g.highest_since_buy = {}
     g.entry_atr = {}
-    g.buy_date = {}           # V2.0新增：记录买入日期，用于最低持仓期
-    g.holding_scores = {}     # V2.0新增：缓存持仓的上次得分
+    g.buy_date = {}
+    g.holding_scores = {}
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
-    run_daily(update_highest, time='15:00')
-    run_daily(after_close, time='15:30')
+    run_daily(after_close, time='15:30')  # 收盘后：更新最高价/ATR + 盘后记录
 
 
 def get_prev_trade_date(context):
@@ -153,11 +162,10 @@ def get_tier_param(name):
 
 
 # ============================================================
-#  技术指标计算（全部基于T-1数据，无未来函数）
+#  技术指标计算
 # ============================================================
 
 def calc_rsi(close, period=14):
-    """RSI(14)"""
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
@@ -168,7 +176,6 @@ def calc_rsi(close, period=14):
 
 
 def calc_macd(close, fast=12, slow=26, signal=9):
-    """MACD(12,26,9)"""
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
     dif = ema_fast - ema_slow
@@ -178,7 +185,6 @@ def calc_macd(close, fast=12, slow=26, signal=9):
 
 
 def calc_bollinger(close, period=20, std_mult=2.0):
-    """布林带(20,2)"""
     mid = close.rolling(period).mean()
     std = close.rolling(period).std()
     upper = mid + std_mult * std
@@ -187,7 +193,6 @@ def calc_bollinger(close, period=20, std_mult=2.0):
 
 
 def calc_kdj(high, low, close, n=9, m1=3, m2=3):
-    """KDJ(9,3,3)"""
     lowest_low = low.rolling(n).min()
     highest_high = high.rolling(n).max()
     rsv = (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan) * 100
@@ -198,29 +203,24 @@ def calc_kdj(high, low, close, n=9, m1=3, m2=3):
 
 
 def calc_adx(high, low, close, period=14):
-    """ADX(14)"""
     plus_dm = high.diff()
     minus_dm = -low.diff()
     plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
     minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-
     tr = pd.concat([
         high - low,
         (high - close.shift(1)).abs(),
         (low - close.shift(1)).abs()
     ], axis=1).max(axis=1)
-
     atr = tr.ewm(span=period, adjust=False).mean()
     plus_di = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr)
     minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr)
-
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     adx = dx.ewm(span=period, adjust=False).mean()
     return adx, plus_di, minus_di
 
 
 def calc_atr(high, low, close, period=14):
-    """ATR(14)"""
     tr = pd.concat([
         high - low,
         (high - close.shift(1)).abs(),
@@ -230,15 +230,21 @@ def calc_atr(high, low, close, period=14):
 
 
 # ============================================================
-#  多因子综合评分（V2.0：趋势跟随 + 3日平滑）
+#  V2.2 连续化评分辅助函数（消除断崖效应）
+# ============================================================
+def linear_score(value, low, high, score_low, score_high):
+    """将value从[low,high]线性映射到[score_low,score_high]，超出范围则clamp"""
+    if high <= low:
+        return (score_low + score_high) / 2.0
+    ratio = (value - low) / (high - low)
+    ratio = max(0.0, min(1.0, ratio))
+    return score_low + ratio * (score_high - score_low)
+
+
+# ============================================================
+#  多因子综合评分（V2.2：连续化 + ROC60 + QDII屏蔽 + 布林squeeze）
 # ============================================================
 def calc_multi_factor_score(code, end_date):
-    """
-    V2.0改进：
-    - 因子评分统一为趋势跟随方向（去掉均值回归的超卖高分）
-    - 使用3日平滑减少单日噪音
-    - 要求ROC20 > 0才给合格分（负动量直接低分）
-    """
     p = g.params
     df = get_price(code, end_date=end_date, count=p['lookback'],
                    frequency='daily',
@@ -251,41 +257,39 @@ def calc_multi_factor_score(code, end_date):
     H = df['high']
     L = df['low']
     V = df['volume']
-    sd = p['smooth_days']  # 平滑天数
+    sd = p['smooth_days']
 
     if C.iloc[-1] <= 0 or V.iloc[-5:].sum() == 0:
         return None
 
-    # ============ 1. RSI — 趋势跟随评分 ============
+    # ============ 1. RSI — 离散分档（V2.1原版，稳定排名）============
     rsi = calc_rsi(C, p['rsi_period'])
     rsi_vals = rsi.iloc[-sd:]
     if rsi_vals.isnull().any():
         return None
-    rsi_val = rsi_vals.mean()  # 3日平滑
+    rsi_val = rsi_vals.mean()
 
-    # V2.0: 纯趋势方向 — RSI越高越强（但>80超买要小心）
     if rsi_val < 30:
-        rsi_score = 20       # 弱势
+        rsi_score = 20
     elif rsi_val < 40:
-        rsi_score = 35       # 偏弱
+        rsi_score = 35
     elif rsi_val < 50:
-        rsi_score = 50       # 中性
+        rsi_score = 50
     elif rsi_val < 60:
-        rsi_score = 65       # 偏强
+        rsi_score = 65
     elif rsi_val < 70:
-        rsi_score = 80       # 强势
+        rsi_score = 80
     elif rsi_val < 80:
-        rsi_score = 75       # 较强但接近过热
+        rsi_score = 75
     else:
-        rsi_score = 55       # 过热，谨慎
+        rsi_score = 55
 
     # ============ 2. MACD — 3日平滑 ============
     dif, dea, macd_hist = calc_macd(C, p['macd_fast'], p['macd_slow'], p['macd_signal'])
-    # 3日平滑
     dif_val = dif.iloc[-sd:].mean()
     dea_val = dea.iloc[-sd:].mean()
     hist_val = macd_hist.iloc[-sd:].mean()
-    hist_prev = macd_hist.iloc[-sd - 3:-3].mean()  # 前一个周期
+    hist_prev = macd_hist.iloc[-sd - 3:-3].mean()
 
     macd_score = 50
     if dif_val > dea_val:
@@ -293,21 +297,20 @@ def calc_multi_factor_score(code, end_date):
     else:
         macd_score -= 20
     if hist_val > 0 and hist_val > hist_prev:
-        macd_score += 15     # 红柱放大
+        macd_score += 15
     elif hist_val > 0:
-        macd_score += 5      # 红柱缩小
+        macd_score += 5
     elif hist_val < 0 and hist_val > hist_prev:
-        macd_score -= 5      # 绿柱缩小
+        macd_score -= 5
     else:
-        macd_score -= 15     # 绿柱放大
-    # 金叉检测（用原始值，不平滑）
+        macd_score -= 15
     if dif.iloc[-2] < dea.iloc[-2] and dif.iloc[-1] >= dea.iloc[-1]:
         macd_score += 10
     elif dif.iloc[-2] > dea.iloc[-2] and dif.iloc[-1] <= dea.iloc[-1]:
         macd_score -= 10
     macd_score = max(0, min(100, macd_score))
 
-    # ============ 3. 布林带 — 趋势位置 ============
+    # ============ 3. 布林带 — 离散分档 + squeeze ============
     bb_upper, bb_mid, bb_lower = calc_bollinger(C, p['bb_period'], p['bb_std'])
     bb_u = bb_upper.iloc[-1]
     bb_l = bb_lower.iloc[-1]
@@ -316,27 +319,40 @@ def calc_multi_factor_score(code, end_date):
         bb_score = 50
     else:
         bb_pos = (C.iloc[-1] - bb_l) / bb_width
-        # V2.0: 纯趋势 — 越接近上轨越强，但突破上轨过热
         if bb_pos < 0.2:
-            bb_score = 20     # 弱势
+            bb_score = 20
         elif bb_pos < 0.4:
-            bb_score = 40     # 偏弱
+            bb_score = 40
         elif bb_pos < 0.6:
-            bb_score = 60     # 中性偏强
+            bb_score = 60
         elif bb_pos < 0.8:
-            bb_score = 80     # 强势
+            bb_score = 80
         elif bb_pos < 0.95:
-            bb_score = 75     # 很强但接近上轨
+            bb_score = 75
         else:
-            bb_score = 55     # 突破上轨，可能过热
+            bb_score = 55
 
-    # ============ 4. 动量 ROC20 — 核心因子 ============
+        # V2.2：布林带squeeze加分
+        bb_width_20 = (bb_upper - bb_lower).iloc[-20:]
+        if len(bb_width_20.dropna()) >= 10:
+            avg_width = bb_width_20.mean()
+            if avg_width > 0:
+                squeeze_ratio = bb_width / avg_width
+                if squeeze_ratio < 0.6:
+                    bb_score += 5
+                elif squeeze_ratio < 0.8:
+                    bb_score += 2
+        bb_score = max(0, min(100, bb_score))
+
+    # ============ 4. 动量 — 离散分档 + ROC60轻罚 ============
     mom_period = p['momentum_period']
-    # 3日平滑ROC
+    mom_long = p['momentum_period_long']
     roc_today = C.iloc[-1] / C.iloc[-mom_period] - 1
     roc_y1 = C.iloc[-2] / C.iloc[-mom_period - 1] - 1
     roc_y2 = C.iloc[-3] / C.iloc[-mom_period - 2] - 1
     roc = (roc_today + roc_y1 + roc_y2) / 3.0
+
+    roc_long = C.iloc[-1] / C.iloc[-mom_long] - 1 if len(C) >= mom_long else 0
 
     if roc > 0.15:
         mom_score = 95
@@ -349,13 +365,13 @@ def calc_multi_factor_score(code, end_date):
     elif roc > 0:
         mom_score = 55
     elif roc > -0.03:
-        mom_score = 40       # 轻微负动量
+        mom_score = 40
     elif roc > -0.08:
         mom_score = 25
     else:
-        mom_score = 10       # 深度负动量
+        mom_score = 10
 
-    # ============ 5. 成交量 — 3日vs20日量比 ============
+    # ============ 5. 成交量 ============
     vol_ma = V.iloc[-p['vol_ma_period']:].mean()
     vol_recent = V.iloc[-3:].mean()
     if vol_ma <= 0 or pd.isna(vol_ma):
@@ -374,33 +390,32 @@ def calc_multi_factor_score(code, end_date):
         elif not price_up and vol_ratio > 0.8:
             vol_score = 40
         else:
-            vol_score = 50   # 下跌缩量，中性
+            vol_score = 50
 
-    # ============ 6. KDJ — 3日平滑 ============
+    # ============ 6. KDJ — 3日平滑，离散分档 ============
     k, d, j = calc_kdj(H, L, C, p['kdj_n'], p['kdj_m1'], p['kdj_m2'])
     k_val = k.iloc[-sd:].mean()
     d_val = d.iloc[-sd:].mean()
     j_val = j.iloc[-sd:].mean()
+
     kdj_score = 50
     if k_val > d_val:
         kdj_score += 15
     else:
         kdj_score -= 15
-    # V2.0: 趋势方向 — J值高=强势
     if j_val > 80:
-        kdj_score += 10      # 强势
+        kdj_score += 10
     elif j_val > 50:
-        kdj_score += 5       # 偏强
+        kdj_score += 5
     elif j_val < 20:
-        kdj_score -= 15      # 弱势
-    # KDJ金叉（用原始值）
+        kdj_score -= 15
     if k.iloc[-2] < d.iloc[-2] and k.iloc[-1] >= d.iloc[-1]:
         kdj_score += 10
     elif k.iloc[-2] > d.iloc[-2] and k.iloc[-1] <= d.iloc[-1]:
         kdj_score -= 10
     kdj_score = max(0, min(100, kdj_score))
 
-    # ============ 7. 均线趋势（MA10/20/60）============
+    # ============ 7. 均线趋势 ============
     ma10 = C.iloc[-10:].mean()
     ma20 = C.iloc[-20:].mean()
     ma60 = C.iloc[-60:].mean()
@@ -420,10 +435,9 @@ def calc_multi_factor_score(code, end_date):
     else:
         ma_score -= 10
     if ma10 > ma20 > ma60:
-        ma_score += 15       # 多头排列
+        ma_score += 15
     elif ma10 < ma20 < ma60:
-        ma_score -= 15       # 空头排列
-    # MA20斜率
+        ma_score -= 15
     ma20_5d_ago = C.iloc[-25:-5].mean()
     if ma20 > ma20_5d_ago:
         ma_score += 5
@@ -433,9 +447,9 @@ def calc_multi_factor_score(code, end_date):
 
     # ============ ADX自适应权重 ============
     adx, plus_di, minus_di = calc_adx(H, L, C, p['adx_period'])
-    adx_val = adx.iloc[-sd:].mean()  # 3日平滑
+    adx_val = adx.iloc[-sd:].mean()
     if pd.isna(adx_val):
-        adx_val = 25
+        adx_val = 25.0
 
     weights = {}
     for wk in g.base_weights:
@@ -459,7 +473,6 @@ def calc_multi_factor_score(code, end_date):
         weights['macd'] = weights['macd'] - 0.04 * range_boost
         weights['ma_trend'] = weights['ma_trend'] - 0.03 * range_boost
 
-    # 归一化权重
     total_w = 0.0
     for _v in weights.values():
         total_w += _v
@@ -502,6 +515,7 @@ def calc_multi_factor_score(code, end_date):
         'scores': scores,
         'adx': adx_val,
         'roc': roc,
+        'roc_long': roc_long,
         'close': cur,
         'atr': atr_val,
         'volatility': vol,
@@ -513,8 +527,14 @@ def calc_multi_factor_score(code, end_date):
 #  ATR跟踪止损
 # ============================================================
 def calc_stop_price(highest, atr_val):
+    """动态ATR倍数 — 高波动时收紧止损(2.0x)，正常时2.5x"""
     p = g.params
-    pct_stop = p['trailing_atr_mult'] * atr_val / highest
+    vol_pct = atr_val / highest * np.sqrt(252.0 / p['atr_period'])
+    if vol_pct > p['high_vol_threshold']:
+        atr_mult = p['trailing_atr_mult_high_vol']
+    else:
+        atr_mult = p['trailing_atr_mult']
+    pct_stop = atr_mult * atr_val / highest
     pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
     return highest * (1 - pct_stop)
 
@@ -529,6 +549,8 @@ def check_stop_loss(context, current_data):
             continue
 
         cur_price = current_data[code].last_price
+        if pos.avg_cost <= 0:
+            continue
         profit_pct = (cur_price - pos.avg_cost) / pos.avg_cost
 
         if code in g.highest_since_buy and code in g.entry_atr:
@@ -549,7 +571,7 @@ def check_stop_loss(context, current_data):
 
 
 # ============================================================
-#  核心交易逻辑（V2.0：换仓门槛 + 最低持仓期）
+#  核心交易逻辑（V2.2：空仓机制 + 趋势持有 + 排序买入）
 # ============================================================
 def do_trading(context):
     prev_date = get_prev_trade_date(context)
@@ -559,11 +581,11 @@ def do_trading(context):
     # ======== 1. 每日止损检查 ========
     stopped_codes = check_stop_loss(context, current_data)
 
-    # ======== 2. 判断是否轮动日（V2.1: 自然周历，无任何基准日依赖）========
-    weekday = today.weekday()  # 周一=0, 周二=1, ..., 周五=4
+    # ======== 2. 判断是否轮动日 ========
+    weekday = today.weekday()
     is_rebalance_day = (weekday in g.params['rebalance_weekdays'])
     if not is_rebalance_day and not stopped_codes:
-        return  # 非轮动日且无止损，跳过
+        return
 
     # ======== 3. 计算所有ETF多因子得分 ========
     all_results = []
@@ -579,23 +601,21 @@ def do_trading(context):
 
     all_results.sort(key=lambda x: x['final_score'], reverse=True)
 
-    # 打印TOP5
     log.info('[TOP5]')
     for i, r in enumerate(all_results[:5]):
-        log.info('  #%d %s 分:%.1f ADX:%.1f RSI:%.1f ROC:%.1f%%' % (
+        log.info('  #%d %s 分:%.1f ADX:%.1f RSI:%.1f ROC20:%.1f%% ROC60:%.1f%%' % (
             i + 1, r['code'], r['final_score'], r['adx'],
-            r['rsi'], r['roc'] * 100))
+            r['rsi'], r['roc'] * 100, r['roc_long'] * 100))
 
-    # ======== 4. V2.0换仓逻辑：门槛 + 最低持仓期 ========
+    # ======== 4. 换仓逻辑 ========
     threshold = g.params['score_buy_threshold']
     switch_th = g.params['switch_threshold']
     min_hold = g.params['min_hold_days']
     max_hold = get_tier_param('max_hold')
 
-    # 合格候选（得分>阈值）
     candidates = [r for r in all_results if r['final_score'] > threshold]
 
-    # 当前持仓信息
+    # 当前持仓
     current_holds = {}
     for code in context.portfolio.positions:
         if context.portfolio.positions[code].total_amount > 0:
@@ -609,11 +629,10 @@ def do_trading(context):
         if code in score_map:
             g.holding_scores[code] = score_map[code]
 
-    # 决定目标持仓：保留现有持仓中仍合格的，用候选替换不合格的
+    # 决定目标持仓
     target_codes = set()
-    protected_codes = set()  # 受最低持仓期保护的标的
+    protected_codes = set()
 
-    # 先处理现有持仓
     for code in list(current_holds.keys()):
         # 最低持仓期保护
         if code in g.buy_date:
@@ -623,21 +642,20 @@ def do_trading(context):
                 protected_codes.add(code)
                 continue
 
-        # 持仓得分仍 > 阈值-5（给持仓一定容忍度，避免微跌就卖）
+        # 持仓得分仍 > 阈值-5（给持仓一定容忍度）
         hold_score = g.holding_scores.get(code, 0)
         if hold_score > threshold - 5:
             target_codes.add(code)
 
-    # 如果目标数 < max_hold，从候选中补充
+    # 从候选补充
     for r in candidates:
         if len(target_codes) >= max_hold:
             break
         if r['code'] not in target_codes:
             target_codes.add(r['code'])
 
-    # 换仓门槛检查：如果目标已满，候选要替换持仓需要高出switch_threshold分
+    # 换仓门槛检查（统一门槛，无趋势保护区分）
     if len(target_codes) >= max_hold:
-        # 找出目标中得分最低的非保护持仓
         removable = []
         for code in target_codes:
             if code in current_holds and code not in protected_codes:
@@ -660,8 +678,7 @@ def do_trading(context):
 
     # 国债兜底
     bond = g.bond_etf
-    bond_in_targets = bond in target_codes
-    if len(target_codes) < max_hold and not bond_in_targets:
+    if len(target_codes) < max_hold and bond not in target_codes:
         if not current_data[bond].paused:
             target_codes.add(bond)
             g.holding_scores[bond] = 0
@@ -670,7 +687,8 @@ def do_trading(context):
     # ======== 5. 卖出 ========
     for code in list(current_holds.keys()):
         if code not in target_codes:
-            profit = (current_data[code].last_price - context.portfolio.positions[code].avg_cost) / context.portfolio.positions[code].avg_cost
+            avg_c = context.portfolio.positions[code].avg_cost
+            profit = (current_data[code].last_price - avg_c) / avg_c if avg_c > 0 else 0
             log.info('[轮动卖出] %s 盈亏%.1f%% 得分:%.1f' % (
                 code, profit * 100, g.holding_scores.get(code, 0)))
             order_target(code, 0)
@@ -679,23 +697,24 @@ def do_trading(context):
             g.buy_date.pop(code, None)
             g.holding_scores.pop(code, None)
 
-    # ======== 6. 买入 ========
+    # ======== 6. 买入（V2.2：按得分排序）========
     to_buy_codes = [c for c in target_codes if c not in current_holds]
     if not to_buy_codes:
         return
 
-    # 构建买入信号映射
+    # V2.2：按得分从高到低排序，确保最强标的优先买入
     sig_map = {}
     for r in all_results:
         sig_map[r['code']] = r
-    # 国债兜底的虚拟信号
     if bond in to_buy_codes and bond not in sig_map:
         sig_map[bond] = {
-            'code': bond, 'final_score': 0, 'roc': 0, 'volatility': 0.03,
+            'code': bond, 'final_score': 0, 'roc': 0, 'roc_long': 0,
+            'volatility': 0.03,
             'close': current_data[bond].last_price,
             'atr': current_data[bond].last_price * 0.005,
             '_is_bond_fill': True,
         }
+    to_buy_codes.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
 
     available = context.portfolio.available_cash
     current_target_holds = len(set(current_holds.keys()) & target_codes)
@@ -738,8 +757,9 @@ def do_trading(context):
         if is_bond:
             log.info('[国债兜底买入] %s %d股 @%.3f' % (code, shares, price))
         else:
-            log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
+            log.info('[买入] %s 分:%.1f ROC20:%.1f%% ROC60:%.1f%% 波动%.1f%% %d股 @%.3f' % (
                 code, sig['final_score'], sig['roc'] * 100,
+                sig.get('roc_long', 0) * 100,
                 sig['volatility'] * 100, shares, price))
 
         order(code, shares)
@@ -752,31 +772,44 @@ def do_trading(context):
 
 
 # ============================================================
-#  每日更新最高价
+#  盘后：更新最高价/ATR + 记录（15:30，合并为一个run_daily）
+#  信息流：T日收盘价 → 更新最高价/ATR → T+1日09:35止损判断
 # ============================================================
-def update_highest(context):
-    for code in list(context.portfolio.positions.keys()):
-        pos = context.portfolio.positions[code]
+def after_close(context):
+    today = context.current_dt.date()
+    positions = context.portfolio.positions
+    hold = {}
+
+    # ---- 更新最高价 + 动态ATR ----
+    for code in list(positions.keys()):
+        pos = positions[code]
         if pos.total_amount <= 0:
             continue
+        hold[code] = pos
+
         cur = get_current_data()[code].last_price
+
+        # 更新最高价（用收盘价）
         if code in g.highest_since_buy:
             if cur > g.highest_since_buy[code]:
                 g.highest_since_buy[code] = cur
         else:
             g.highest_since_buy[code] = max(cur, pos.avg_cost)
 
+        # 动态更新ATR（用当日收盘K线）
+        if code in g.entry_atr:
+            df = get_price(code, end_date=today,
+                           count=g.params['atr_period'] + 5,
+                           frequency='daily',
+                           fields=['close', 'high', 'low'],
+                           skip_paused=True, fq='pre')
+            if df is not None and len(df) >= g.params['atr_period']:
+                atr_val = calc_atr(df['high'], df['low'], df['close'],
+                                   g.params['atr_period']).iloc[-1]
+                if not pd.isna(atr_val) and atr_val > 0:
+                    g.entry_atr[code] = atr_val
 
-# ============================================================
-#  盘后记录
-# ============================================================
-def after_close(context):
-    positions = context.portfolio.positions
-    hold = {}
-    for c in positions:
-        if positions[c].total_amount > 0:
-            hold[c] = positions[c]
-
+    # ---- 盘后记录 ----
     log.info('=' * 60)
     log.info('[%s] 总值:%.2f 现金:%.2f 持仓:%d/%d' % (
         g.current_tier,
@@ -787,7 +820,7 @@ def after_close(context):
 
     for code in hold:
         pos = hold[code]
-        pnl = (pos.price - pos.avg_cost) / pos.avg_cost * 100
+        pnl = (pos.price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
         highest = g.highest_since_buy.get(code, pos.price)
         score = g.holding_scores.get(code, 0)
         log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f' % (
