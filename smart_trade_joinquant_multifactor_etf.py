@@ -3,11 +3,10 @@
 多因子自适应ETF量化策略 V2.3
 ============================
 基于7个经典技术指标（RSI/MACD/布林带/动量/成交量/KDJ/均线趋势）综合评分，
-ADX自适应因子权重，ATR跟踪止损，多市场多资产ETF轮动。
+固定因子权重，ATR跟踪止损，多市场多资产ETF轮动。
 
 核心机制：
-  - 7因子离散分档评分 + 3日平滑（降低噪音，稳定排名）
-  - ADX自适应权重（趋势市加重动量/MACD，震荡市加重RSI/布林/KDJ）
+  - 7因子离散分档评分 + 3日平滑 + 固定权重（稳定排名，减少噪音换仓）
   - 周二+周四固定轮动（无起始日依赖）
   - 换仓门槛8分（新标的必须高出持仓最低分8分才替换）
   - 最低持仓期5天（防止买入即卖）
@@ -89,7 +88,6 @@ def initialize(context):
         'kdj_n': 9,
         'kdj_m1': 3,
         'kdj_m2': 3,
-        'adx_period': 14,
         'momentum_period': 20,
         'vol_ma_period': 20,
         'atr_period': 14,
@@ -189,22 +187,6 @@ def calc_kdj(high, low, close, n, m1, m2):
     d = k.ewm(com=m2 - 1, adjust=False).mean()
     return k, d, 3 * k - 2 * d
 
-
-def calc_adx(high, low, close, period):
-    plus_dm = high.diff()
-    minus_dm = -low.diff()
-    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs()
-    ], axis=1).max(axis=1)
-    atr = tr.ewm(span=period, adjust=False).mean()
-    plus_di = 100 * (plus_dm.ewm(span=period, adjust=False).mean() / atr)
-    minus_di = 100 * (minus_dm.ewm(span=period, adjust=False).mean() / atr)
-    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
-    return dx.ewm(span=period, adjust=False).mean()
 
 
 def calc_atr(high, low, close, period):
@@ -388,51 +370,15 @@ def calc_multi_factor_score(code, end_date):
     ma_score += 5 if ma20 > ma20_5d_ago else -5
     ma_score = max(0, min(100, ma_score))
 
-    # ---- ADX自适应权重 ----
-    adx_val = calc_adx(H, L, C, p['adx_period']).iloc[-sd:].mean()
-    if pd.isna(adx_val):
-        adx_val = 25.0
-
-    weights = {}
-    for wk in g.base_weights:
-        weights[wk] = g.base_weights[wk]
-
-    if adx_val > 30:
-        b = min((adx_val - 30) / 30, 0.5)
-        weights['momentum'] += 0.08 * b
-        weights['macd'] += 0.06 * b
-        weights['ma_trend'] += 0.06 * b
-        weights['rsi'] -= 0.06 * b
-        weights['bollinger'] -= 0.04 * b
-        weights['kdj'] -= 0.05 * b
-        weights['volume'] -= 0.05 * b
-    elif adx_val < 20:
-        b = min((20 - adx_val) / 15, 0.5)
-        weights['rsi'] += 0.06 * b
-        weights['bollinger'] += 0.04 * b
-        weights['kdj'] += 0.05 * b
-        weights['momentum'] -= 0.08 * b
-        weights['macd'] -= 0.04 * b
-        weights['ma_trend'] -= 0.03 * b
-
-    total_w = 0.0
-    for _v in weights.values():
-        total_w += _v
-    if total_w > 0:
-        normed = {}
-        for k_w in weights:
-            normed[k_w] = weights[k_w] / total_w
-        weights = normed
-
-    # ---- 综合得分 ----
+    # ---- 综合得分（固定权重）----
     scores = {
         'rsi': rsi_score, 'macd': macd_score, 'bollinger': bb_score,
         'momentum': mom_score, 'volume': vol_score, 'kdj': kdj_score,
         'ma_trend': ma_score,
     }
     final_score = 0.0
-    for ks in scores:
-        final_score += scores[ks] * weights[ks]
+    for ks in g.base_weights:
+        final_score += scores[ks] * g.base_weights[ks]
 
     # ---- ATR + 波动率 ----
     atr_val = calc_atr(H, L, C, p['atr_period']).iloc[-1]
@@ -445,7 +391,7 @@ def calc_multi_factor_score(code, end_date):
 
     return {
         'code': code, 'final_score': final_score,
-        'adx': adx_val, 'roc': roc, 'close': cur,
+        'roc': roc, 'close': cur,
         'atr': atr_val, 'volatility': vol, 'rsi': rsi_val,
     }
 
@@ -526,8 +472,8 @@ def do_trading(context):
 
     log.info('[TOP5]')
     for i, r in enumerate(all_results[:5]):
-        log.info('  #%d %s 分:%.1f ADX:%.1f RSI:%.1f ROC:%.1f%%' % (
-            i + 1, r['code'], r['final_score'], r['adx'],
+        log.info('  #%d %s 分:%.1f RSI:%.1f ROC:%.1f%%' % (
+            i + 1, r['code'], r['final_score'],
             r['rsi'], r['roc'] * 100))
 
     # 4. 换仓逻辑
