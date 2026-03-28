@@ -115,6 +115,7 @@ def initialize(context):
     g.entry_atr = {}
     g.buy_date = {}
     g.holding_scores = {}
+    g.portfolio_high = 0          # 组合历史最高净值（用于监控回撤）
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
@@ -411,30 +412,36 @@ def calc_stop_price(highest, atr_val):
     return highest * (1 - pct_stop)
 
 
-def check_stop_loss(context, current_data):
-    stopped = []
+def check_stop_triggered(context, current_data):
+    """检查哪些持仓触发了止损线（仅检测，不执行卖出）"""
+    triggered = []
     for code in list(context.portfolio.positions.keys()):
         pos = context.portfolio.positions[code]
         if pos.total_amount <= 0 or pos.avg_cost <= 0:
             continue
         if current_data[code].paused:
             continue
-
         cur_price = current_data[code].last_price
         if code in g.highest_since_buy and code in g.entry_atr:
             stop_price = calc_stop_price(g.highest_since_buy[code], g.entry_atr[code])
             if cur_price <= stop_price:
-                pnl = (cur_price - pos.avg_cost) / pos.avg_cost
-                dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
-                log.info('[止损] %s 最高%.3f 现%.3f 回撤%.1f%% 盈亏%.1f%%' % (
-                    code, g.highest_since_buy[code], cur_price, dd * 100, pnl * 100))
-                order_target(code, 0)
-                g.highest_since_buy.pop(code, None)
-                g.entry_atr.pop(code, None)
-                g.buy_date.pop(code, None)
-                g.holding_scores.pop(code, None)
-                stopped.append(code)
-    return stopped
+                triggered.append(code)
+    return triggered
+
+
+def execute_stop(code, context, current_data):
+    """执行止损卖出"""
+    pos = context.portfolio.positions[code]
+    cur_price = current_data[code].last_price
+    pnl = (cur_price - pos.avg_cost) / pos.avg_cost if pos.avg_cost > 0 else 0
+    dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
+    log.info('[止损] %s 最高%.3f 现%.3f 回撤%.1f%% 盈亏%.1f%%' % (
+        code, g.highest_since_buy[code], cur_price, dd * 100, pnl * 100))
+    order_target(code, 0)
+    g.highest_since_buy.pop(code, None)
+    g.entry_atr.pop(code, None)
+    g.buy_date.pop(code, None)
+    g.holding_scores.pop(code, None)
 
 
 # ============================================================
@@ -445,11 +452,11 @@ def do_trading(context):
     current_data = get_current_data()
     today = context.current_dt.date()
 
-    # 1. 每日止损
-    stopped_codes = check_stop_loss(context, current_data)
+    # 1. 检测止损（仅检测，不执行）
+    stop_triggered = check_stop_triggered(context, current_data)
 
     # 2. 是否轮动日
-    if today.weekday() not in g.params['rebalance_weekdays'] and not stopped_codes:
+    if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
         return
 
     # 3. 轮动日打印资金状态
@@ -466,6 +473,9 @@ def do_trading(context):
             all_results.append(result)
 
     if not all_results:
+        # 无评分结果时，触发的止损必须执行
+        for code in stop_triggered:
+            execute_stop(code, context, current_data)
         return
 
     all_results.sort(key=lambda x: x['final_score'], reverse=True)
@@ -475,6 +485,17 @@ def do_trading(context):
         log.info('  #%d %s 分:%.1f RSI:%.1f ROC:%.1f%%' % (
             i + 1, r['code'], r['final_score'],
             r['rsi'], r['roc'] * 100))
+
+    # 当前持仓得分（便于复盘换仓决策）
+    if context.portfolio.positions:
+        score_map_log = {}
+        for r in all_results:
+            score_map_log[r['code']] = r['final_score']
+        held = [(c, score_map_log.get(c, 0)) for c in context.portfolio.positions
+                if context.portfolio.positions[c].total_amount > 0]
+        if held:
+            held.sort(key=lambda x: x[1], reverse=True)
+            log.info('[持仓得分] %s' % ' | '.join('%s:%.1f' % (c, s) for c, s in held))
 
     # 5. 换仓逻辑
     threshold = g.params['score_buy_threshold']
@@ -537,9 +558,17 @@ def do_trading(context):
                     r['code'], r['final_score'], worst_code, worst_score,
                     r['final_score'] - worst_score))
 
-    # 6. 卖出（停牌标的跳过，保留metadata等复牌后处理）
+    # 6. 执行止损（仅对不在目标中的触发标的）
+    for code in stop_triggered:
+        if code in target_codes:
+            log.info('[止损豁免] %s 得分%.1f仍在目标中，保留持仓' % (
+                code, g.holding_scores.get(code, 0)))
+        else:
+            execute_stop(code, context, current_data)
+
+    # 7. 轮动卖出（停牌标的跳过）
     for code in list(current_holds.keys()):
-        if code not in target_codes:
+        if code not in target_codes and code not in stop_triggered:
             if current_data[code].paused:
                 log.info('[跳过卖出] %s 停牌中，保留持仓' % code)
                 continue
@@ -553,7 +582,7 @@ def do_trading(context):
             g.buy_date.pop(code, None)
             g.holding_scores.pop(code, None)
 
-    # 7. 买入（按得分排序）
+    # 8. 买入（按得分排序）
     to_buy = [c for c in target_codes if c not in current_holds]
     if not to_buy:
         return
@@ -640,10 +669,17 @@ def after_close(context):
                 if not pd.isna(new_atr) and new_atr > 0:
                     g.entry_atr[code] = new_atr
 
+    # 组合回撤监控
+    total_value = context.portfolio.total_value
+    if total_value > g.portfolio_high:
+        g.portfolio_high = total_value
+    portfolio_dd = (g.portfolio_high - total_value) / g.portfolio_high * 100 if g.portfolio_high > 0 else 0
+
     log.info('=' * 60)
-    log.info('[%s] 总值:%.2f 现金:%.2f 持仓:%d/%d' % (
-        g.current_tier, context.portfolio.total_value,
-        context.portfolio.available_cash, len(hold), get_tier_param('max_hold')))
+    log.info('[%s] 总值:%.2f 现金:%.2f 持仓:%d/%d 组合回撤:%.1f%%' % (
+        g.current_tier, total_value,
+        context.portfolio.available_cash, len(hold), get_tier_param('max_hold'),
+        portfolio_dd))
 
     for code, pos in hold.items():
         pnl = (pos.price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0

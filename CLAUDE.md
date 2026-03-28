@@ -141,16 +141,17 @@ Separate framework from V15.x momentum rotation. Uses 7 classic technical indica
 ### Performance
 | Period | Return | Annualized | Max DD | Loss Years |
 |--------|--------|-----------|--------|-----------|
-| 2015-2026 (sample-in) | +215.9% | ~11% | ~14.5% | 2/11 (<2%) |
+| 2015-2026 (sample-in) | +251.5% | ~12% | ~15.8% | 2/11 (<2%) |
 | 2010-2014 (sample-out) | +37% | ~6.4% | — | weak market + incomplete pool |
 
 ### vs V15.9-Hybrid (ROC+LR daily rotation)
 Direct A/B test on same period (2015-2026, 2万起始):
-- **Multi-Factor V2.3: +215.9%, 14.5% max DD, 623 buys, 2 loss years**
+- **Multi-Factor V2.3: +251.5%, 15.8% max DD, 623 buys, 2 loss years (with stop-loss exemption)**
 - **V15.9-Hybrid: +155.7%, 18.6% max DD, 1051 buys, 4 loss years**
 - Multi-Factor wins on every metric. V15.9-Hybrid's daily rotation + no switch threshold = 70% more trades, higher costs, worse returns.
 - **Lesson: "simple code" ≠ "simple trading behavior". 7-factor ensemble + switch threshold + min hold period produces fewer, better trades than pure momentum with daily rotation. Trading stability matters more than signal purity.**
 - **ROC3 dynamic stop-loss**: Tested tightening ATR to 1.5x when 3-day ROC < -3%. Result: -62pp. Too many false triggers in normal pullbacks. **Don't add short-term momentum stop tightening.**
+- **止损豁免 (stop-loss exemption)**: When ATR stop triggers but scoring says ETF is still a top candidate, skip the stop. Saves double commission (sell+buy back) and keeps position in place. Result: **+35pp** (215.9%→251.5%). Resetting highest price on exemption hurt (-44pp), so keep highest/ATR unchanged on exemption. **Key mechanism: let scoring override stop-loss when signals conflict.**
 
 ## Chinese Variable Reference
 
