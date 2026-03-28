@@ -15,7 +15,8 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_etf.py` — **V15.5 JoinQuant, original momentum rotation** (210% return over 11yr, ~10.8% annualized, 5万起始, momentum rotation, optimized 10-ETF pool: 4 A-share + 3 cross-market + 3 cross-asset)
 - `smart_trade_joinquant_v15_7_etf.py` — **V15.7 JoinQuant** (212.8% return, 10万起始, buy price fix + bond slot-filling, 10-ETF pool)
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
-- `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
+- `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
+- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.3 JoinQuant** (209.6% return, 2万起始, 7-factor scoring, 13-ETF pool, separate framework from V15.x)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
 - `策略说明文档.md` — Complete strategy documentation (Chinese)
 - `PTrade-API.html` — Official PTrade API reference
@@ -111,6 +112,45 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **V15.7-Global** (experimental, not adopted): V15.7 framework with no A-share equities — pure overseas+cross-asset pool (纳指/标普/恒生/中概互联/黄金/国债/豆粕/华宝油气/日经/南方原油). Result (10万起始): 161.9% total return (**-51pp vs V15.7**), 14.5% max drawdown. Missed A-share rallies entirely (2015 +14%→0%, 2019 +20%→+8%, 2025 +27%→+7%). 华宝油气+南方原油 combined 162 buys with 37% stop rate — too many correlated energy assets. **Lesson: A-share equities are not a drag — they are an irreplaceable alpha source. The momentum framework already auto-reduces A-share exposure when weak. Permanently removing A-share just forfeits upside. Also, QDII-heavy pools face real-world premium/quota constraints.**
 - **V15.7-Expanded**: V15.7 pool expanded from 10→12 ETFs by adding 513880日经ETF(2019+) and 513050中概互联ETF(2017+). Pool: 4 A-share + 5 cross-market + 3 cross-asset. Result (10万起始): **267.9% total return (+55pp vs V15.7)**, **12.73% max drawdown (-0.7pp better)**, 2 loss years (-1.1%, -2.6%). 日经ETF: 45 buys, 26.7% stop rate; 中概互联: 55 buys, 25.5% stop rate — both genuinely active with healthy stop rates. Key improvement years: 2017 +22.0% (vs +15.8%), 2020 +20.5% (vs +13.4%), 2024 +15.5% (vs +7.6%). **Lesson: wider cross-market diversification compounds the benefit — Japan and China ADR provide momentum opportunities uncorrelated with existing pool. Unlike sector expansion (which hurt) or A-share removal (which hurt), adding genuinely uncorrelated cross-market ETFs is a Pareto improvement (higher return + lower drawdown). The 4+5+3 structure is the new optimum.**
 - **V15.9** (**current best**): V15.7-Expanded + unified max_hold=3 for all capital tiers. Old tiers: micro=1/small=2/medium=3/large=3; new: all=3. Rationale: ETF prices are low enough (100-1100元/手, except 国债14000元/手) that even 2万 can hold 3 positions. Result (2万起始): **256.9% total return**, 14.15% max drawdown, 2 loss years (-2.0%, -3.8%). Critical improvement: **2021 return -2.0% vs old small-tier's -7.3%** — the extra holding slot provides diversification that halves losses in bad years. First trade day verified: 20K successfully bought 3 ETFs (国债100股+消费1800股+沪深300 500股). Stayed in small tier for 9 years until crossing 5万 in 2024. **Lesson: for ETF strategies, capital-tier-based max_hold restrictions are unnecessary — ETFs are cheap enough for even micro capital to hold 3 positions. Unified max_hold=3 eliminates the structural disadvantage of small capital and makes strategy performance consistent across all capital levels. V15.9 = V15.7-Expanded pool (12 ETFs) + unified max_hold.**
+
+## Multi-Factor Strategy (smart_trade_joinquant_multifactor_etf.py)
+
+Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum.
+
+### Architecture
+- **Factors**: RSI(14), MACD(12,26,9), Bollinger(20,2), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights, discrete scoring buckets, 3-day smoothing.
+- **Rotation**: Tuesday + Thursday (fixed weekday calendar, no start-date dependency)
+- **Guards**: Switch threshold 8pts, min hold 5 days, ATR trailing stop (dynamic 2.0x/2.5x), volatility-inverse position sizing
+- **Pool**: 13 ETFs (5 A-share + 5 cross-market + 3 cross-asset), includes 510880红利 and 159985豆粕 (both confirmed beneficial via A/B test)
+- **No bond fallback**: Holds cash when candidates < max_hold (removing bond fallback added +18pp)
+
+### Key Iteration Lessons
+- **V1.0→V2.0**: Daily rotation + no switch threshold = 4274 trades, -91.3%. Fixed by adding 5-day rebalance, 8pt switch threshold, 5-day min hold, trend-following scoring. Result: +234%.
+- **Continuous vs discrete scoring**: Continuous (linear mapping) makes rankings unstable → more unnecessary switching → worse returns. Discrete buckets act as natural "noise filter". **Always use discrete scoring.**
+- **ADX adaptive weights**: Tested and removed. Dynamic per-ETF factor weights increased ranking instability. Fixed weights +7pp better. **Don't use ADX adaptive weights.**
+- **ROC60 penalty**: Penalizing mid-term negative momentum blocked V-shaped rebounds (2020: -8.5pp). Even light penalty (-15%→×0.7) hurt. **Don't penalize ROC60.**
+- **空仓 (empty position) mechanism**: 28 triggers caused missed rebounds. **Don't add empty-position clearing.**
+- **趋势持有 (trend hold) protection**: Higher switch threshold for profitable positions — no measurable benefit. **Don't add special trend protection.**
+- **QDII volume screening**: Fixing QDII volume to neutral score — no benefit. **Don't screen QDII volume.**
+- **4-factor vs 7-factor**: Removing RSI/MACD/KDJ (shared dimension with momentum) reduced returns. 7 "redundant" factors provide **ensemble smoothing** — multiple correlated-but-not-identical factors averaged together stabilize rankings. **Redundancy = stability. Keep all 7.**
+- **Dynamic ATR multiplier (2.0x high vol / 2.5x normal)**: No measurable impact in current framework but kept as insurance.
+- **国债兜底 (bond fallback)**: Removed, +18pp improvement. Bond ETF (511010) remains in pool and competes on score. Holding cash when no candidates qualify is better than forcing bond allocation.
+- **Factor weights are NOT optimized**: 0.25/0.18/0.15/0.12/0.12/0.10/0.08 are design values, not backtested. Changing momentum from 0.25→0.30 had negligible effect, confirming strategy is not sensitive to weight precision.
+- **Out-of-sample validation**: 2010-2014 (before main backtest period) returned +37% (annualized 6.4%) with incomplete ETF pool, confirming strategy logic is valid and not purely overfitted.
+
+### Performance
+| Period | Return | Annualized | Max DD | Loss Years |
+|--------|--------|-----------|--------|-----------|
+| 2015-2026 (sample-in) | +215.9% | ~11% | ~14.5% | 2/11 (<2%) |
+| 2010-2014 (sample-out) | +37% | ~6.4% | — | weak market + incomplete pool |
+
+### vs V15.9-Hybrid (ROC+LR daily rotation)
+Direct A/B test on same period (2015-2026, 2万起始):
+- **Multi-Factor V2.3: +215.9%, 14.5% max DD, 623 buys, 2 loss years**
+- **V15.9-Hybrid: +155.7%, 18.6% max DD, 1051 buys, 4 loss years**
+- Multi-Factor wins on every metric. V15.9-Hybrid's daily rotation + no switch threshold = 70% more trades, higher costs, worse returns.
+- **Lesson: "simple code" ≠ "simple trading behavior". 7-factor ensemble + switch threshold + min hold period produces fewer, better trades than pure momentum with daily rotation. Trading stability matters more than signal purity.**
+- **ROC3 dynamic stop-loss**: Tested tightening ATR to 1.5x when 3-day ROC < -3%. Result: -62pp. Too many false triggers in normal pullbacks. **Don't add short-term momentum stop tightening.**
 
 ## Chinese Variable Reference
 

@@ -456,7 +456,7 @@ def do_trading(context):
     log.info('[资金] 档位:%s 总值:%.0f 现金:%.0f' % (
         g.current_tier, context.portfolio.total_value, context.portfolio.available_cash))
 
-    # 4. 全池评分
+    # 4. 全池评分（T-1日数据）
     all_results = []
     for code in g.etf_pool:
         if current_data[code].paused:
@@ -476,7 +476,7 @@ def do_trading(context):
             i + 1, r['code'], r['final_score'],
             r['rsi'], r['roc'] * 100))
 
-    # 4. 换仓逻辑
+    # 5. 换仓逻辑
     threshold = g.params['score_buy_threshold']
     switch_th = g.params['switch_threshold']
     min_hold = g.params['min_hold_days']
@@ -537,7 +537,7 @@ def do_trading(context):
                     r['code'], r['final_score'], worst_code, worst_score,
                     r['final_score'] - worst_score))
 
-    # 5. 卖出（停牌标的跳过，保留metadata等复牌后处理）
+    # 6. 卖出（停牌标的跳过，保留metadata等复牌后处理）
     for code in list(current_holds.keys()):
         if code not in target_codes:
             if current_data[code].paused:
@@ -553,7 +553,7 @@ def do_trading(context):
             g.buy_date.pop(code, None)
             g.holding_scores.pop(code, None)
 
-    # 6. 买入（按得分排序）
+    # 7. 买入（按得分排序）
     to_buy = [c for c in target_codes if c not in current_holds]
     if not to_buy:
         return
