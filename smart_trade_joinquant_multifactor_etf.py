@@ -14,8 +14,8 @@ ADX自适应因子权重，ATR跟踪止损，多市场多资产ETF轮动。
   - ATR跟踪止损（动态倍数：高波动2.0x，正常2.5x）
   - 每日收盘后更新最高价+ATR（次日止损更准确）
   - 波动率反比仓位（低波动多买，高波动少买）
-  - 国债ETF兜底（候选不足时自动补位）
   - 买入按得分排序（最强标的优先获得资金）
+  - 候选不足时持有现金（不强制兜底，让市场决定持仓数）
 
 ETF池（5A股 + 5跨市场 + 3跨资产 = 13只）：
   A股: 510300沪深300, 159915创业板, 512100中证1000, 159928消费, 510880红利
@@ -63,7 +63,7 @@ def initialize(context):
         '511010.XSHG',   # 国债ETF
         '159985.XSHE',   # 豆粕ETF
     ]
-    g.bond_etf = '511010.XSHG'
+    # 国债ETF保留在池中参与正常评分竞争，不再作为兜底
 
     # ---- 资金档位 ----
     g.capital_tiers = {
@@ -587,14 +587,6 @@ def do_trading(context):
                     r['code'], r['final_score'], worst_code, worst_score,
                     r['final_score'] - worst_score))
 
-    # 国债兜底
-    bond = g.bond_etf
-    if len(target_codes) < max_hold and bond not in target_codes:
-        if not current_data[bond].paused:
-            target_codes.add(bond)
-            g.holding_scores[bond] = 0
-            log.info('[国债兜底] 候选不足%d，国债补位' % max_hold)
-
     # 5. 卖出（停牌标的跳过，保留metadata等复牌后处理）
     for code in list(current_holds.keys()):
         if code not in target_codes:
@@ -619,13 +611,6 @@ def do_trading(context):
     sig_map = {}
     for r in all_results:
         sig_map[r['code']] = r
-    if bond in to_buy and bond not in sig_map:
-        sig_map[bond] = {
-            'code': bond, 'final_score': 0, 'roc': 0, 'volatility': 0.03,
-            'close': current_data[bond].last_price,
-            'atr': current_data[bond].last_price * 0.005,
-            '_is_bond_fill': True,
-        }
     to_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
 
     available = context.portfolio.available_cash
@@ -643,16 +628,12 @@ def do_trading(context):
 
         sig = sig_map[code]
         price = current_data[code].last_price
-        is_bond = sig.get('_is_bond_fill', False)
 
-        if is_bond:
-            alloc = available * 0.95
-        else:
-            alloc = available / slots * base_ratio
-            actual_vol = max(sig['volatility'], 0.05)
-            alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
-
+        alloc = available / slots * base_ratio
+        actual_vol = max(sig['volatility'], 0.05)
+        alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
         alloc = min(alloc, available * 0.95)
+
         shares = int(alloc / price / 100) * 100
         if shares < 100:
             if available >= price * 100 * 1.003:
@@ -660,12 +641,9 @@ def do_trading(context):
             else:
                 continue
 
-        if is_bond:
-            log.info('[国债兜底买入] %s %d股 @%.3f' % (code, shares, price))
-        else:
-            log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
-                code, sig['final_score'], sig['roc'] * 100,
-                sig['volatility'] * 100, shares, price))
+        log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
+            code, sig['final_score'], sig['roc'] * 100,
+            sig['volatility'] * 100, shares, price))
 
         order(code, shares)
         g.highest_since_buy[code] = price
