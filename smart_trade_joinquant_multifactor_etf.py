@@ -506,7 +506,11 @@ def do_trading(context):
     if today.weekday() not in g.params['rebalance_weekdays'] and not stopped_codes:
         return
 
-    # 3. 全池评分
+    # 3. 轮动日打印资金状态
+    log.info('[资金] 档位:%s 总值:%.0f 现金:%.0f' % (
+        g.current_tier, context.portfolio.total_value, context.portfolio.available_cash))
+
+    # 4. 全池评分
     all_results = []
     for code in g.etf_pool:
         if current_data[code].paused:
