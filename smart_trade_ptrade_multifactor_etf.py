@@ -38,6 +38,12 @@ ETF池（5A股 + 5跨市场 + 3跨资产 = 13只）：
   A股: 510300沪深300, 159915创业板, 512100中证1000, 159928消费, 510880红利
   跨市场: 513100纳指, 513500标普500, 159920恒生, 513880日经, 513050中概互联
   跨资产: 518880黄金, 511010国债, 159985豆粕
+
+因子权重（固定，未优化）：
+  动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
+
+聚宽回测业绩（万三+最低5元佣金）：
+  2015-2026（11年）：+251.5%，年化~12%，最大回撤~15.8%，夏普0.63
 """
 
 import numpy as np
@@ -624,9 +630,11 @@ def _do_trading(context):
     if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
         return
 
-    # 3. 资金状态
-    log.info('[资金] 档位:%s 总值:%.0f 现金:%.0f' % (
-        g.current_tier, _total_value(context), _available_cash(context)))
+    # 3. 打印资金状态
+    is_rebalance = today.weekday() in g.params['rebalance_weekdays']
+    trigger_reason = '轮动日' if is_rebalance else '止损触发%d只' % len(stop_triggered)
+    log.info('[%s] 档位:%s 总值:%.0f 现金:%.0f' % (
+        trigger_reason, g.current_tier, _total_value(context), _available_cash(context)))
 
     # 4. 全池评分
     all_results = []
@@ -638,6 +646,8 @@ def _do_trading(context):
             all_results.append(result)
 
     if not all_results:
+        if stop_triggered:
+            log.info('[评分为空] 无可评分标的，%d只止损强制执行' % len(stop_triggered))
         for code in stop_triggered:
             _execute_stop(code, context)
         return
@@ -668,6 +678,7 @@ def _do_trading(context):
     max_hold = _get_tier_param('max_hold')
 
     candidates = [r for r in all_results if r['final_score'] > threshold]
+    log.info('[候选] %d/%d只达标(>%d分)' % (len(candidates), len(all_results), threshold))
 
     current_holds = {}
     for code in positions:
@@ -756,6 +767,7 @@ def _do_trading(context):
     # 8. 买入（按得分排序）
     to_buy = [c for c in target_codes if c not in current_holds]
     if not to_buy:
+        log.info('[无换仓] 持仓与目标一致')
         return
 
     sig_map = {}

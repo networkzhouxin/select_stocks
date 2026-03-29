@@ -22,9 +22,19 @@ ETF池（5A股 + 5跨市场 + 3跨资产 = 13只）：
   跨市场: 513100纳指, 513500标普500, 159920恒生, 513880日经, 513050中概互联
   跨资产: 518880黄金, 511010国债, 159985豆粕
 
+因子权重（固定，未优化）：
+  动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
+
 回测业绩（万三+最低5元佣金）：
-  2015-2026（11年）：+251.5%，年化~12%，最大回撤~15.8%
+  2015-2026（11年）：+251.5%，年化~12%，最大回撤~15.8%，夏普0.63
   2010-2014（样本外）：+37%，年化6.4%，弱市+标的不全仍正收益
+  2008金融危机：仅-2.7%（同期沪深300 -65%）
+
+版本历史：
+  V1.0: 每日轮动无门槛，-91.3%（手续费吞噬本金）
+  V2.0: 加门槛+持仓期+离散分档，+234%
+  V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
+  V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
 """
 
 import numpy as np
@@ -459,9 +469,11 @@ def do_trading(context):
     if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
         return
 
-    # 3. 轮动日打印资金状态
-    log.info('[资金] 档位:%s 总值:%.0f 现金:%.0f' % (
-        g.current_tier, context.portfolio.total_value, context.portfolio.available_cash))
+    # 3. 打印资金状态
+    is_rebalance = today.weekday() in g.params['rebalance_weekdays']
+    trigger_reason = '轮动日' if is_rebalance else '止损触发%d只' % len(stop_triggered)
+    log.info('[%s] 档位:%s 总值:%.0f 现金:%.0f' % (
+        trigger_reason, g.current_tier, context.portfolio.total_value, context.portfolio.available_cash))
 
     # 4. 全池评分（T-1日数据）
     all_results = []
@@ -474,6 +486,8 @@ def do_trading(context):
 
     if not all_results:
         # 无评分结果时，触发的止损必须执行
+        if stop_triggered:
+            log.info('[评分为空] 无可评分标的，%d只止损强制执行' % len(stop_triggered))
         for code in stop_triggered:
             execute_stop(code, context, current_data)
         return
@@ -504,6 +518,7 @@ def do_trading(context):
     max_hold = get_tier_param('max_hold')
 
     candidates = [r for r in all_results if r['final_score'] > threshold]
+    log.info('[候选] %d/%d只达标(>%d分)' % (len(candidates), len(all_results), threshold))
 
     current_holds = {}
     for code in context.portfolio.positions:
@@ -585,6 +600,7 @@ def do_trading(context):
     # 8. 买入（按得分排序）
     to_buy = [c for c in target_codes if c not in current_holds]
     if not to_buy:
+        log.info('[无换仓] 持仓与目标一致')
         return
 
     sig_map = {}
