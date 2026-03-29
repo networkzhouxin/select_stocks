@@ -16,9 +16,11 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_7_etf.py` — **V15.7 JoinQuant** (212.8% return, 10万起始, buy price fix + bond slot-filling, 10-ETF pool)
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
 - `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
-- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.3 JoinQuant** (209.6% return, 2万起始, 7-factor scoring, 13-ETF pool, separate framework from V15.x)
+- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.4 JoinQuant** (251.5% return, 2万起始, 7-factor scoring, 13-ETF pool, separate framework from V15.x)
+- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.4 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
-- `策略说明文档.md` — Complete strategy documentation (Chinese)
+- `策略说明文档.md` — Complete strategy documentation for V15.x (Chinese)
+- `多因子ETF策略说明文档.md` — Complete strategy documentation for Multi-Factor V2.4 (Chinese)
 - `PTrade-API.html` — Official PTrade API reference
 - `smart_trade_v10_tdx.txt` / `smart_trade_v10_tdx_main.txt` — TDX (通达信) indicator formulas
 
@@ -113,9 +115,9 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **V15.7-Expanded**: V15.7 pool expanded from 10→12 ETFs by adding 513880日经ETF(2019+) and 513050中概互联ETF(2017+). Pool: 4 A-share + 5 cross-market + 3 cross-asset. Result (10万起始): **267.9% total return (+55pp vs V15.7)**, **12.73% max drawdown (-0.7pp better)**, 2 loss years (-1.1%, -2.6%). 日经ETF: 45 buys, 26.7% stop rate; 中概互联: 55 buys, 25.5% stop rate — both genuinely active with healthy stop rates. Key improvement years: 2017 +22.0% (vs +15.8%), 2020 +20.5% (vs +13.4%), 2024 +15.5% (vs +7.6%). **Lesson: wider cross-market diversification compounds the benefit — Japan and China ADR provide momentum opportunities uncorrelated with existing pool. Unlike sector expansion (which hurt) or A-share removal (which hurt), adding genuinely uncorrelated cross-market ETFs is a Pareto improvement (higher return + lower drawdown). The 4+5+3 structure is the new optimum.**
 - **V15.9** (**current best**): V15.7-Expanded + unified max_hold=3 for all capital tiers. Old tiers: micro=1/small=2/medium=3/large=3; new: all=3. Rationale: ETF prices are low enough (100-1100元/手, except 国债14000元/手) that even 2万 can hold 3 positions. Result (2万起始): **256.9% total return**, 14.15% max drawdown, 2 loss years (-2.0%, -3.8%). Critical improvement: **2021 return -2.0% vs old small-tier's -7.3%** — the extra holding slot provides diversification that halves losses in bad years. First trade day verified: 20K successfully bought 3 ETFs (国债100股+消费1800股+沪深300 500股). Stayed in small tier for 9 years until crossing 5万 in 2024. **Lesson: for ETF strategies, capital-tier-based max_hold restrictions are unnecessary — ETFs are cheap enough for even micro capital to hold 3 positions. Unified max_hold=3 eliminates the structural disadvantage of small capital and makes strategy performance consistent across all capital levels. V15.9 = V15.7-Expanded pool (12 ETFs) + unified max_hold.**
 
-## Multi-Factor Strategy (smart_trade_joinquant_multifactor_etf.py)
+## Multi-Factor Strategy V2.4 (smart_trade_joinquant_multifactor_etf.py + smart_trade_ptrade_multifactor_etf.py)
 
-Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum.
+Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum. PTrade version available with 100% identical strategy logic.
 
 ### Architecture
 - **Factors**: RSI(14), MACD(12,26,9), Bollinger(20,2), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights, discrete scoring buckets, 3-day smoothing.
@@ -139,10 +141,11 @@ Separate framework from V15.x momentum rotation. Uses 7 classic technical indica
 - **Out-of-sample validation**: 2010-2014 (before main backtest period) returned +37% (annualized 6.4%) with incomplete ETF pool, confirming strategy logic is valid and not purely overfitted.
 
 ### Performance
-| Period | Return | Annualized | Max DD | Loss Years |
-|--------|--------|-----------|--------|-----------|
-| 2015-2026 (sample-in) | +251.5% | ~12% | ~15.8% | 2/11 (<2%) |
-| 2010-2014 (sample-out) | +37% | ~6.4% | — | weak market + incomplete pool |
+| Period | Capital | Return | Annualized | Max DD | Loss Years |
+|--------|---------|--------|-----------|--------|-----------|
+| 2015-2026 (sample-in) | 2万 | +251.5% | ~12% | ~15.8% | 2/11 (<2%) |
+| 2015-2026 (sample-in) | 10万 | +232.0% | ~11.5% | ~11.5% | — |
+| 2010-2014 (sample-out) | 2万 | +37% | ~6.4% | ~8.5% | weak market + incomplete pool |
 
 ### vs V15.9-Hybrid (ROC+LR daily rotation)
 Direct A/B test on same period (2015-2026, 2万起始):
