@@ -467,6 +467,7 @@ def do_trading(context):
 
     # 2. 是否轮动日
     if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
+        log.info('[非轮动日] 止损检查通过，无触发')
         return
 
     # 3. 打印资金状态
@@ -611,6 +612,7 @@ def do_trading(context):
     available = context.portfolio.available_cash
     slots = max_hold - len(set(current_holds.keys()) & target_codes)
     if slots <= 0 or available < 500:
+        log.info('[跳过买入] 无空仓位(slots=%d)或资金不足(%.0f)' % (slots, available))
         return
 
     base_ratio = get_tier_param('base_ratio')
@@ -634,6 +636,7 @@ def do_trading(context):
             if available >= price * 100 * 1.003:
                 shares = 100
             else:
+                log.info('[资金不足] %s 需%.0f元买100股，可用%.0f' % (code, price * 100, available))
                 continue
 
         log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
