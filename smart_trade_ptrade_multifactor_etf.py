@@ -660,17 +660,18 @@ def _do_trading(context):
         log.info('  #%d %s 分:%.1f RSI:%.1f ROC:%.1f%%' % (
             i + 1, r['code'], r['final_score'], r['rsi'], r['roc'] * 100))
 
-    # 持仓得分
+    # 持仓得分（含评分用的T-1收盘价）
     positions = _positions(context)
     if positions:
-        score_map_log = {}
+        score_close_map = {}
         for r in all_results:
-            score_map_log[r['code']] = r['final_score']
-        held = [(c, score_map_log.get(c, 0)) for c in positions
+            score_close_map[r['code']] = (r['final_score'], r['close'])
+        held = [(c, score_close_map.get(c, (0, 0))) for c in positions
                 if _pos_amount(positions[c]) > 0]
         if held:
-            held.sort(key=lambda x: x[1], reverse=True)
-            log.info('[持仓得分] %s' % ' | '.join('%s:%.1f' % (c, s) for c, s in held))
+            held.sort(key=lambda x: x[1][0], reverse=True)
+            log.info('[持仓得分] %s' % ' | '.join(
+                '%s:%.1f(T-1收盘:%.3f)' % (c, sc[0], sc[1]) for c, sc in held))
 
     # 5. 换仓逻辑
     threshold = g.params['score_buy_threshold']

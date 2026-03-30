@@ -501,16 +501,17 @@ def do_trading(context):
             i + 1, r['code'], r['final_score'],
             r['rsi'], r['roc'] * 100))
 
-    # 当前持仓得分（便于复盘换仓决策）
+    # 当前持仓得分（含评分用的T-1收盘价，便于复盘）
     if context.portfolio.positions:
-        score_map_log = {}
+        score_close_map = {}
         for r in all_results:
-            score_map_log[r['code']] = r['final_score']
-        held = [(c, score_map_log.get(c, 0)) for c in context.portfolio.positions
+            score_close_map[r['code']] = (r['final_score'], r['close'])
+        held = [(c, score_close_map.get(c, (0, 0))) for c in context.portfolio.positions
                 if context.portfolio.positions[c].total_amount > 0]
         if held:
-            held.sort(key=lambda x: x[1], reverse=True)
-            log.info('[持仓得分] %s' % ' | '.join('%s:%.1f' % (c, s) for c, s in held))
+            held.sort(key=lambda x: x[1][0], reverse=True)
+            log.info('[持仓得分] %s' % ' | '.join(
+                '%s:%.1f(T-1收盘:%.3f)' % (c, sc[0], sc[1]) for c, sc in held))
 
     # 5. 换仓逻辑
     threshold = g.params['score_buy_threshold']
