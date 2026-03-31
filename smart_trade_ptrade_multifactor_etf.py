@@ -737,11 +737,16 @@ def _do_trading(context):
                     r['final_score'] - worst_score))
 
     # 6. 执行止损（止损豁免：仍在目标中的不卖）
+    sold_proceeds = 0  # 追踪卖出释放的资金（PTrade实盘cash有6秒同步延迟）
     for code in stop_triggered:
         if code in target_codes:
             log.info('[止损豁免] %s 得分%.1f仍在目标中，保留持仓' % (
                 code, g.holding_scores.get(code, 0)))
         else:
+            # 记录卖出市值
+            cur_price = _get_current_price(code)
+            if cur_price and code in positions:
+                sold_proceeds += cur_price * _pos_amount(positions[code])
             _execute_stop(code, context)
 
     # 7. 轮动卖出
@@ -758,6 +763,9 @@ def _do_trading(context):
                 pnl = (cur_price - cost) / cost
                 log.info('[轮动卖出] %s 盈亏%.1f%% 得分:%.1f' % (
                     code, pnl * 100, g.holding_scores.get(code, 0)))
+            # 记录卖出市值
+            if cur_price and code in positions:
+                sold_proceeds += cur_price * _pos_amount(positions[code])
             sell_lmt = _get_sell_limit_price(code, cur_price or cost)
             order_target(code, 0, limit_price=sell_lmt)
             g.sold_today[code] = True
@@ -777,7 +785,13 @@ def _do_trading(context):
         sig_map[r['code']] = r
     to_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
 
-    available = _available_cash(context)
+    # 可用资金：实盘cash有6秒同步延迟需补偿，回测cash即时更新不需要
+    if g.__is_live and sold_proceeds > 0:
+        available = _available_cash(context) + sold_proceeds
+        log.info('[资金] 当前现金:%.0f + 卖出释放:%.0f = 可用:%.0f' % (
+            _available_cash(context), sold_proceeds, available))
+    else:
+        available = _available_cash(context)
     slots = max_hold - len(set(current_holds.keys()) & target_codes)
     if slots <= 0 or available < 500:
         log.info('[跳过买入] 无空仓位(slots=%d)或资金不足(%.0f)' % (slots, available))

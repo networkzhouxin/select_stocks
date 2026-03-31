@@ -610,6 +610,7 @@ def do_trading(context):
         sig_map[r['code']] = r
     to_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
 
+    # 聚宽回测中available_cash即时更新，无需加sold_proceeds
     available = context.portfolio.available_cash
     slots = max_hold - len(set(current_holds.keys()) & target_codes)
     if slots <= 0 or available < 500:
