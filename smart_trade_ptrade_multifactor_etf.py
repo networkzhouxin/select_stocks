@@ -927,8 +927,14 @@ def _after_close(context):
         pnl = (cur - cost) / cost * 100 if cost > 0 else 0
         highest = g.highest_since_buy.get(code, cur)
         score = g.holding_scores.get(code, 0)
-        log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f' % (
-            code, cost, cur, highest, pnl, score))
+        atr_val = g.entry_atr.get(code, None)
+        if atr_val is not None and highest > 0:
+            stop_price = _calc_stop_price(highest, atr_val)
+            log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f ATR:%.4f 止损价:%.3f' % (
+                code, cost, cur, highest, pnl, score, atr_val, stop_price))
+        else:
+            log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f' % (
+                code, cost, cur, highest, pnl, score))
     log.info('=' * 60)
 
 
