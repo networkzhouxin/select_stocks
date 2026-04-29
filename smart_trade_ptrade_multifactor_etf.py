@@ -172,7 +172,26 @@ def before_trading_start(context, data):
         g.__pending_orders = {}
 
     if g.__is_live:
-        _recover_missing_atr(context)
+        today = context.blotter.current_dt.date()
+        prev_date = _get_prev_trade_date(context)
+        positions = _positions(context)
+        hold_codes = [c for c, p in positions.items() if _pos_amount(p) > 0]
+        log.info('[盘前恢复] 今日%s prev_date=%s 持仓%d只(%s)' % (
+            today, prev_date, len(hold_codes), ', '.join(hold_codes) if hold_codes else '空仓'))
+        missing_atr = [c for c in hold_codes if c not in g.entry_atr]
+        missing_high = [c for c in hold_codes if c not in g.highest_since_buy]
+        missing_buy = [c for c in hold_codes if g.buy_date.get(c) is None]
+        if missing_atr or missing_high or missing_buy:
+            log.info('[盘前恢复] 缺失: entry_atr=%s highest=%s buy_date=%s' % (
+                missing_atr or '无', missing_high or '无', missing_buy or '无'))
+        else:
+            log.info('[盘前恢复] 数据完整，无需恢复')
+            return
+        # 一次性查询交割单，所有恢复函数共用
+        deliver_records = _fetch_deliver_records(prev_date)
+        _recover_missing_atr(context, deliver_records)
+        _recover_missing_highest(context, deliver_records)
+        _recover_missing_buy_date(context, deliver_records)
 
 
 def after_trading_end(context, data):
@@ -272,7 +291,10 @@ def _is_paused(code):
 def _get_prev_trade_date(context):
     today = context.blotter.current_dt.date()
     try:
-        return get_trade_days(end_date=today, count=2)[0]
+        result = get_trade_days(end_date=today, count=2)[0]
+        if isinstance(result, str):
+            return datetime.strptime(result, '%Y-%m-%d').date()
+        return result
     except Exception:
         pass
     try:
@@ -871,7 +893,7 @@ def _update_highest_and_atr(context):
 # ============================================================
 #  恢复缺失ATR（实盘重启安全网）
 # ============================================================
-def _recover_missing_atr(context):
+def _recover_missing_atr(context, deliver_records=None):
     positions = _positions(context)
     prev_date = _get_prev_trade_date(context)
     for code in list(positions.keys()):
@@ -886,16 +908,147 @@ def _recover_missing_atr(context):
             atr_val = _calc_atr(df['high'], df['low'], df['close'], atr_period).iloc[-1]
             if not pd.isna(atr_val):
                 g.entry_atr[code] = atr_val
-                cost = _pos_cost(pos)
-                if code not in g.highest_since_buy:
-                    g.highest_since_buy[code] = max(cost, df['close'].iloc[-1])
+                _ensure_buy_date_and_highest(code, pos, prev_date, deliver_records)
                 log.info('[ATR恢复] %s ATR=%.4f' % (code, atr_val))
                 continue
         cost = _pos_cost(pos)
         g.entry_atr[code] = cost * 0.02
-        if code not in g.highest_since_buy:
-            g.highest_since_buy[code] = cost
+        _ensure_buy_date_and_highest(code, pos, prev_date, deliver_records)
         log.warning('[ATR恢复] %s 数据不足，用成本2%%估算' % code)
+
+
+def _fetch_deliver_records(prev_date):
+    """查询交割单（只查一次，供所有持仓共用）"""
+    try:
+        start = (prev_date - timedelta(days=180)).strftime('%Y%m%d')
+        end = prev_date.strftime('%Y%m%d')
+        log.info('[交割单] 查询区间%s~%s (prev_date=%s)' % (start, end, prev_date))
+        records = get_deliver(start, end)
+        if not records:
+            log.warning('[交割单] 查询区间%s~%s 无记录' % (start, end))
+            return []
+        log.info('[交割单] 返回%d条记录' % len(records))
+        return records
+    except Exception as e:
+        log.warning('[交割单] 查询失败: %s' % e)
+        return []
+
+
+def _ensure_buy_date_and_highest(code, pos, prev_date, deliver_records=None):
+    """确保持仓有buy_date和highest_since_buy"""
+    cost = _pos_cost(pos)
+    if g.buy_date.get(code) is None:
+        g.buy_date[code] = _query_buy_date_from_deliver(code, prev_date, deliver_records)
+    if g.buy_date.get(code) is None:
+        g.buy_date[code] = prev_date - timedelta(days=10)
+        log.info('[买入日恢复] %s 设为%s（近似值 prev_date=%s）' % (code, g.buy_date[code], prev_date))
+    if code not in g.highest_since_buy:
+        g.highest_since_buy[code] = _recover_highest(code, cost, prev_date)
+
+
+def _query_buy_date_from_deliver(code, prev_date, deliver_records=None):
+    """通过交割单查询最近一次买入日期"""
+    if deliver_records is None:
+        deliver_records = _fetch_deliver_records(prev_date)
+    if not deliver_records:
+        return None
+
+    # 标的代码：交割单中 stock_code 是6位数字码
+    code_base = code.split('.')[0]
+
+    buy_dates = []
+    matched_codes = set()
+    for r in deliver_records:
+        # 标的匹配
+        r_code = str(r.get('stock_code', ''))
+        matched_codes.add(r_code)
+        if r_code != code_base:
+            continue
+
+        # 买卖方向：entrust_bs='1' 买入, '2' 卖出; business_name='证券买入'/'证券卖出'
+        entrust_bs = str(r.get('entrust_bs', ''))
+        business_name = str(r.get('business_name', ''))
+        if entrust_bs != '1' and '买入' not in business_name:
+            continue
+
+        # 成交日期：init_date / entrust_date / date_back，格式YYYYmmdd
+        date_str = str(r.get('init_date', '') or r.get('entrust_date', '') or r.get('date_back', ''))
+        if not date_str or len(date_str) < 8:
+            continue
+        try:
+            trade_date = datetime.strptime(date_str[:8], '%Y%m%d').date()
+            buy_dates.append(trade_date)
+        except Exception:
+            continue
+
+    log.info('[交割单] %s 匹配code=%s 买入记录%d条 全量code列表:%s' % (
+        code, code_base, len(buy_dates), sorted(matched_codes)))
+
+    if buy_dates:
+        most_recent = max(buy_dates)  # 最近一次买入
+        log.info('[买入日恢复] %s 交割单最近买入%s' % (code, most_recent))
+        return most_recent
+
+    log.warning('[买入日恢复] %s 交割单中未找到买入记录' % code)
+    return None
+
+
+def _recover_highest(code, cost, prev_date):
+    """恢复持仓最高价：从买入日到prev_date取收盘价最大值"""
+    buy_date = g.buy_date.get(code, None)
+    if buy_date is not None:
+        df = _get_price_data(code, prev_date, count=500)
+        if df is not None and len(df) > 0:
+            df = df[df.index >= pd.Timestamp(buy_date)]
+            if len(df) > 0:
+                hist_high = df['close'].max()
+                recovered = max(cost, hist_high)
+                log.info('[最高价恢复] %s 买入日%s prev_date=%s 区间最高收盘%.3f 成本%.3f → 恢复%.3f' % (
+                    code, buy_date, prev_date, hist_high, cost, recovered))
+                return recovered
+    # 兜底：用120天数据找最高收盘价
+    df = _get_price_data(code, prev_date, count=120)
+    if df is not None and len(df) > 0:
+        hist_high = df['close'].max()
+        recovered = max(cost, hist_high)
+        # 补一个近似买入日（无法从交割单查到时的兜底）
+        if g.buy_date.get(code) is None:
+            g.buy_date[code] = prev_date - timedelta(days=10)
+            log.info('[买入日恢复] %s 设为%s（近似值 prev_date=%s）' % (code, g.buy_date[code], prev_date))
+        log.info('[最高价恢复] %s 买入日未知 prev_date=%s 120日最高收盘%.3f 成本%.3f → 恢复%.3f' % (
+            code, prev_date, hist_high, cost, recovered))
+        return recovered
+    log.warning('[最高价恢复] %s 无历史数据，用成本价' % code)
+    return cost
+
+
+def _recover_missing_highest(context, deliver_records=None):
+    """恢复缺失的最高价（entry_atr存在但highest_since_buy缺失的边缘情况）"""
+    positions = _positions(context)
+    prev_date = _get_prev_trade_date(context)
+    for code in list(positions.keys()):
+        pos = positions[code]
+        if _pos_amount(pos) <= 0:
+            continue
+        if code in g.highest_since_buy:
+            continue
+        _ensure_buy_date_and_highest(code, pos, prev_date, deliver_records)
+
+
+def _recover_missing_buy_date(context, deliver_records=None):
+    """恢复缺失的买入日期（highest_since_buy存在但buy_date缺失的边缘情况）"""
+    positions = _positions(context)
+    prev_date = _get_prev_trade_date(context)
+    for code in list(positions.keys()):
+        pos = positions[code]
+        if _pos_amount(pos) <= 0:
+            continue
+        if g.buy_date.get(code) is not None:
+            continue
+        g.buy_date[code] = _query_buy_date_from_deliver(code, prev_date, deliver_records)
+        if g.buy_date.get(code) is None:
+            g.buy_date[code] = prev_date - timedelta(days=10)
+            log.info('[买入日恢复] %s 设为%s（近似值 prev_date=%s）' % (code, g.buy_date[code], prev_date))
 
 
 # ============================================================
