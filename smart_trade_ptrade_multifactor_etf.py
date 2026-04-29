@@ -8,7 +8,7 @@
 核心机制（与聚宽版一致）：
   - 7因子离散分档评分 + 3日平滑 + 固定权重
   - 周二+周四固定轮动
-  - 最低持仓期5天
+  - 换仓门槛8分 + 最低持仓期5天
   - ATR跟踪止损 + 止损豁免（触发止损但得分仍在目标中→不卖）
   - 每日收盘后更新最高价+ATR
   - 波动率反比仓位 + 买入按得分排序
@@ -112,6 +112,7 @@ def initialize(context):
         'stop_floor': 0.03,
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
+        'switch_threshold': 8.0,
     }
 
     # ---- 因子权重 ----
@@ -696,6 +697,7 @@ def _do_trading(context):
 
     # 5. 换仓逻辑
     threshold = g.params['score_buy_threshold']
+    switch_th = g.params['switch_threshold']
     min_hold = g.params['min_hold_days']
     max_hold = _get_tier_param('max_hold')
 
@@ -737,7 +739,7 @@ def _do_trading(context):
         if r['code'] not in target_codes:
             target_codes.add(r['code'])
 
-    # 换仓：候选分高于持仓最低分即替换
+    # 换仓门槛
     if len(target_codes) >= max_hold:
         removable = [(c, g.holding_scores.get(c, 0))
                      for c in target_codes
@@ -748,7 +750,7 @@ def _do_trading(context):
             if r['code'] in target_codes or not removable:
                 continue
             worst_code, worst_score = removable[0]
-            if r['final_score'] > worst_score:
+            if r['final_score'] > worst_score + switch_th:
                 target_codes.discard(worst_code)
                 target_codes.add(r['code'])
                 removable.pop(0)
