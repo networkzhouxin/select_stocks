@@ -17,10 +17,10 @@
   - 候选不足时持有现金（不强制兜底，让市场决定持仓数）
   - 组合回撤监控（盘后日志显示当前回撤幅度）
 
-ETF池（5A股 + 5跨市场 + 3跨资产 = 13只）：
+ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   A股: 510300沪深300, 159915创业板, 512100中证1000, 159928消费, 510880红利
   跨市场: 513100纳指, 513500标普500, 159920恒生, 513880日经, 513050中概互联
-  跨资产: 518880黄金, 511010国债, 159985豆粕
+  跨资产: 518880黄金, 159985豆粕
 
 因子权重（固定，未优化）：
   动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
@@ -70,10 +70,9 @@ def initialize(context):
         '513880.XSHG',   # 日经ETF
         '513050.XSHG',   # 中概互联ETF
         '518880.XSHG',   # 黄金ETF
-        '511010.XSHG',   # 国债ETF
         '159985.XSHE',   # 豆粕ETF
     ]
-    # 国债ETF保留在池中参与正常评分竞争，不再作为兜底
+
 
     # ---- 资金档位 ----
     g.capital_tiers = {
@@ -87,7 +86,6 @@ def initialize(context):
     g.params = {
         'lookback': 120,
         'rebalance_weekdays': [1, 3],
-        'switch_threshold': 8.0,
         'min_hold_days': 5,
         'smooth_days': 3,
         'rsi_period': 14,
@@ -108,6 +106,7 @@ def initialize(context):
         'stop_floor': 0.03,
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
+        'switch_threshold': 8.0,
     }
 
     # ---- 因子权重 ----
