@@ -20,8 +20,8 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_7_etf.py` — **V15.7 JoinQuant** (212.8% return, 10万起始, buy price fix + bond slot-filling, 10-ETF pool)
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
 - `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
-- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.4 JoinQuant** (251.5% return, 2万起始, 7-factor scoring, 13-ETF pool, separate framework from V15.x)
-- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.4 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
+- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.5 JoinQuant** (306.2% return, 2万起始, 7-factor scoring, 12-ETF pool)
+- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.5 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
 - `策略说明文档.md` — Complete strategy documentation for V15.x (Chinese)
 - `多因子ETF策略说明文档.md` — Complete strategy documentation for Multi-Factor V2.4 (Chinese)
@@ -121,13 +121,13 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 
 ## Multi-Factor Strategy V2.5 (smart_trade_joinquant_multifactor_etf.py + smart_trade_ptrade_multifactor_etf.py)
 
-Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum. PTrade version currently on V2.4 (待聚宽版稳定后同步).
+Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum. PTrade version synced to V2.5.
 
 ### Architecture
 - **Factors**: RSI(14), MACD(12,26,9), Bollinger(20,2), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights, discrete scoring buckets, 3-day smoothing.
 - **Rotation**: Tuesday + Thursday (fixed weekday calendar, no start-date dependency)
 - **Guards**: Switch threshold 8pts, min hold 5 days, ATR trailing stop (dynamic 2.0x/2.5x), stop exemption with 10% drawdown cap, volatility-inverse position sizing
-- **Bear market**: 沪深300 < MA60 and MA60 declining → A-share ETF positions halved (only affects 510300/159915/512100/159928/510880; cross-market and cross-asset ETFs unaffected). Condition strict enough (~12 triggers in 10yr).
+- **Bear market**: Daily detection at 09:30 (runs in `update_tier`, uses T-1 data). 000300.SS < MA60 and MA60 declining → A-share ETF positions halved (only affects 510300/159915/512100/159928/510880; cross-market and cross-asset ETFs unaffected). Result stored in `g.market_bearish`.
 - **Pool**: 12 ETFs (5 A-share + 5 cross-market + 2 cross-asset). Removed 511010 国债ETF (historically removing bond fallback added +18pp, and bond ETF's low-vol mean-reverting nature unsuited for trend-following framework).
 - **No bond fallback**: Holds cash when candidates < max_hold.
 
