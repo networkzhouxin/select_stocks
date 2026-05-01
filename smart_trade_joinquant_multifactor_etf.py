@@ -629,6 +629,18 @@ def do_trading(context):
         log.info('[跳过买入] 无空仓位(slots=%d)或资金不足(%.0f)' % (slots, available))
         return
 
+    # 熊市检测：沪深300 < MA60 且 MA60 下行
+    a_share_codes = {'510300.XSHG', '159915.XSHE', '512100.XSHG', '159928.XSHE', '510880.XSHG'}
+    hs300_data = get_price('000300.XSHG', end_date=prev_date, count=65,
+                           frequency='daily', fields=['close'])
+    hs300_ma = hs300_data['close'].iloc[-60:].mean()
+    hs300_close = hs300_data['close'].iloc[-1]
+    hs300_ma_prev = hs300_data['close'].iloc[-61:-1].mean()
+    market_bearish = hs300_close < hs300_ma and hs300_ma < hs300_ma_prev
+    if market_bearish:
+        log.info('[熊市] 沪深300收盘%.2f<MA60=%.2f且MA60下行，A股仓位减半' % (
+            hs300_close, hs300_ma))
+
     base_ratio = get_tier_param('base_ratio')
 
     for code in to_buy:
@@ -644,6 +656,8 @@ def do_trading(context):
         actual_vol = max(sig['volatility'], 0.05)
         alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
         alloc = min(alloc, available * 0.95)
+        if market_bearish and code in a_share_codes:
+            alloc *= 0.5
 
         shares = int(alloc / price / 100) * 100
         if shares < 100:
