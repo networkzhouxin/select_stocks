@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Chinese ETF quantitative trading strategy system. Automated buy/sell signal generation, ATR-based risk management, and momentum ranking for 3-5 widely-traded Chinese ETFs. Targets small capital (initial 20K CNY). Multi-platform: JoinQuant (聚宽) for backtesting, PTrade for live trading.
 
+## Working Process
+
+- **代码修改前必须先确认**：任何代码修改，先向用户说明方案和影响，等用户确认后再动手。不要直接改代码。
+
 ## Key Files
 
 - `smart_trade_joinquant_v10_etf.py` — **V10.0 JoinQuant, highest absolute return** (58% return over 10yr, 27.9% max drawdown, 3 ETFs)
