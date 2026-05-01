@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多因子ETF量化策略 V2.4
+多因子ETF量化策略 V2.5
 ============================
 基于7个经典技术指标（RSI/MACD/布林带/动量/成交量/KDJ/均线趋势）综合评分，
 固定因子权重，ATR跟踪止损+止损豁免，多市场多资产ETF轮动。
@@ -10,7 +10,7 @@
   - 周二+周四固定轮动（无起始日依赖）
   - 换仓门槛8分（新标的必须高出持仓最低分8分才替换）
   - 最低持仓期5天（防止买入即卖）
-  - ATR跟踪止损 + 止损豁免（触发止损但得分仍在目标中→不卖，避免无效交易）
+  - ATR跟踪止损 + 止损豁免（得分仍在目标中且回撤<10%→不卖；回撤≥10%→强制止损）
   - 每日收盘后更新最高价+ATR（次日止损更准确）
   - 波动率反比仓位（低波动多买，高波动少买）
   - 买入按得分排序（最强标的优先获得资金）
@@ -35,6 +35,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.0: 加门槛+持仓期+离散分档，+234%
   V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
+  V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
 """
 
 import numpy as np
@@ -107,6 +108,7 @@ def initialize(context):
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
+        'stop_exempt_max_dd': 0.10,  # 止损豁免最大回撤：超过则强制止损
     }
 
     # ---- 因子权重 ----
@@ -574,11 +576,22 @@ def do_trading(context):
                     r['code'], r['final_score'], worst_code, worst_score,
                     r['final_score'] - worst_score))
 
-    # 6. 执行止损（仅对不在目标中的触发标的）
+    # 6. 执行止损（不在目标中→直接止损；在目标中→回撤超限才止损）
+    force_stopped = set()
+    max_exempt_dd = g.params['stop_exempt_max_dd']
     for code in stop_triggered:
         if code in target_codes:
-            log.info('[止损豁免] %s 得分%.1f仍在目标中，保留持仓' % (
-                code, g.holding_scores.get(code, 0)))
+            highest = g.highest_since_buy.get(code, 1)
+            cur_price = current_data[code].last_price
+            dd = (highest - cur_price) / highest if highest > 0 else 0
+            if dd < max_exempt_dd:
+                log.info('[止损豁免] %s 得分%.1f 回撤%.1f%%<%.0f%% 保留持仓' % (
+                    code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
+            else:
+                log.info('[止损豁免超限] %s 得分%.1f 回撤%.1f%%>=%.0f%% 强制止损' % (
+                    code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
+                execute_stop(code, context, current_data)
+                force_stopped.add(code)
         else:
             execute_stop(code, context, current_data)
 
@@ -599,7 +612,7 @@ def do_trading(context):
             g.holding_scores.pop(code, None)
 
     # 8. 买入（按得分排序）
-    to_buy = [c for c in target_codes if c not in current_holds]
+    to_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
     if not to_buy:
         log.info('[无换仓] 持仓与目标一致')
         return
