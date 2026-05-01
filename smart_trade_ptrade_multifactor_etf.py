@@ -113,6 +113,7 @@ def initialize(context):
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
+        'stop_exempt_max_dd': 0.10,  # 止损豁免最大回撤：超过则强制止损
     }
 
     # ---- 因子权重 ----
@@ -132,6 +133,7 @@ def initialize(context):
     g.buy_date = {}
     g.holding_scores = {}
     g.portfolio_high = 0
+    g.market_bearish = False
     g.sold_today = {}
     g.__last_snapshot = {}
     g.__pending_orders = {}
@@ -172,9 +174,10 @@ def before_trading_start(context, data):
             log.warning('[订单超时] %s 前日买入未确认，清理' % code)
         g.__pending_orders = {}
 
+    today = context.blotter.current_dt.date()
+    prev_date = _get_prev_trade_date(context)
+
     if g.__is_live:
-        today = context.blotter.current_dt.date()
-        prev_date = _get_prev_trade_date(context)
         positions = _positions(context)
         hold_codes = [c for c, p in positions.items() if _pos_amount(p) > 0]
         log.info('[盘前恢复] 今日%s prev_date=%s 持仓%d只(%s)' % (
@@ -375,12 +378,35 @@ def _update_tier(context):
     else:
         new_tier = 'large'
 
+    # 每日熊市检测
+    _detect_bear_market(context)
+
     if new_tier != g.current_tier:
         old = g.current_tier or '初始化'
         g.current_tier = new_tier
         cfg = g.capital_tiers[new_tier]
         log.info('[档位] %s -> %s | 总资产:%.0f | 最大持仓:%d' % (
             old, new_tier, total, cfg['max_hold']))
+
+
+def _detect_bear_market(context):
+    """每日熊市检测：沪深300 < MA60 且 MA60 下行，结果存 g.market_bearish"""
+    prev_date = _get_prev_trade_date(context)
+    a_share_codes = {'510300.SS', '159915.SZ', '512100.SS', '159928.SZ', '510880.SS'}
+    g.a_share_codes = a_share_codes  # 供_do_trading使用
+    hs300_df = _get_price_data('000300.SS', prev_date, count=65)
+    g.market_bearish = False
+    if hs300_df is not None and len(hs300_df) >= 61:
+        hs300_close = hs300_df['close'].iloc[-1]
+        hs300_ma = hs300_df['close'].iloc[-60:].mean()
+        hs300_ma_prev = hs300_df['close'].iloc[-61:-1].mean()
+        g.market_bearish = hs300_close < hs300_ma and hs300_ma < hs300_ma_prev
+        direction = '下行' if hs300_ma < hs300_ma_prev else '上行'
+        status = '触发' if g.market_bearish else '未触发'
+        log.info('[熊市检测] 000300.SS收盘%.2f MA60=%.2f(%s) %s' % (
+            hs300_close, hs300_ma, direction, status))
+    else:
+        log.warning('[熊市检测] 数据不足，跳过')
 
 
 def _get_tier_param(name):
@@ -758,12 +784,25 @@ def _do_trading(context):
                     r['code'], r['final_score'], worst_code, worst_score,
                     r['final_score'] - worst_score))
 
-    # 6. 执行止损（止损豁免：仍在目标中的不卖）
+    # 6. 执行止损（不在目标中→直接止损；在目标中→回撤超限才止损）
+    force_stopped = set()
+    max_exempt_dd = g.params['stop_exempt_max_dd']
     sold_proceeds = 0  # 追踪卖出释放的资金（PTrade实盘cash有6秒同步延迟）
     for code in stop_triggered:
         if code in target_codes:
-            log.info('[止损豁免] %s 得分%.1f仍在目标中，保留持仓' % (
-                code, g.holding_scores.get(code, 0)))
+            highest = g.highest_since_buy.get(code, 1)
+            cur_price = _get_current_price(code)
+            dd = (highest - cur_price) / highest if highest > 0 and cur_price else 0
+            if dd < max_exempt_dd:
+                log.info('[止损豁免] %s 得分%.1f 回撤%.1f%%<%.0f%% 保留持仓' % (
+                    code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
+            else:
+                log.info('[止损豁免超限] %s 得分%.1f 回撤%.1f%%>=%.0f%% 强制止损' % (
+                    code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
+                if cur_price and code in positions:
+                    sold_proceeds += cur_price * _pos_amount(positions[code])
+                _execute_stop(code, context)
+                force_stopped.add(code)
         else:
             # 记录卖出市值
             cur_price = _get_current_price(code)
@@ -797,7 +836,7 @@ def _do_trading(context):
             g.holding_scores.pop(code, None)
 
     # 8. 买入（按得分排序）
-    to_buy = [c for c in target_codes if c not in current_holds]
+    to_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
     if not to_buy:
         log.info('[无换仓] 持仓与目标一致')
         return
@@ -836,6 +875,8 @@ def _do_trading(context):
         actual_vol = max(sig['volatility'], 0.05)
         alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
         alloc = min(alloc, available * 0.95)
+        if g.market_bearish and code in g.a_share_codes:
+            alloc *= 0.5
 
         shares = int(alloc / price / 100) * 100
         if shares < 100:

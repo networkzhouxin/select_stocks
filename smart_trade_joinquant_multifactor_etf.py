@@ -128,6 +128,7 @@ def initialize(context):
     g.buy_date = {}
     g.holding_scores = {}
     g.portfolio_high = 0          # 组合历史最高净值（用于监控回撤）
+    g.market_bearish = False
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
@@ -158,6 +159,33 @@ def update_tier(context):
         cfg = g.capital_tiers[new_tier]
         log.info('[档位] %s -> %s | 总资产:%.0f | 最大持仓:%d' % (
             old, new_tier, total, cfg['max_hold']))
+
+    # 每日熊市检测
+    _detect_bear_market(context)
+
+
+def _detect_bear_market(context):
+    """每日熊市检测：沪深300 < MA60 且 MA60 下行，结果存 g.market_bearish"""
+    today = context.current_dt.date()
+    try:
+        prev_date = get_trade_days(end_date=today, count=2)[0]
+    except Exception:
+        prev_date = today - timedelta(days=1)
+    g.a_share_codes = {'510300.XSHG', '159915.XSHE', '512100.XSHG', '159928.XSHE', '510880.XSHG'}
+    hs300_data = get_price('000300.XSHG', end_date=prev_date, count=65,
+                           frequency='daily', fields=['close'])
+    g.market_bearish = False
+    if hs300_data is not None and len(hs300_data) >= 61:
+        hs300_close = hs300_data['close'].iloc[-1]
+        hs300_ma = hs300_data['close'].iloc[-60:].mean()
+        hs300_ma_prev = hs300_data['close'].iloc[-61:-1].mean()
+        g.market_bearish = hs300_close < hs300_ma and hs300_ma < hs300_ma_prev
+        direction = '下行' if hs300_ma < hs300_ma_prev else '上行'
+        status = '触发' if g.market_bearish else '未触发'
+        log.info('[熊市检测] 000300.XSHG收盘%.2f MA60=%.2f(%s) %s' % (
+            hs300_close, hs300_ma, direction, status))
+    else:
+        log.warning('[熊市检测] 数据不足，跳过')
 
 
 def get_tier_param(name):
@@ -629,18 +657,6 @@ def do_trading(context):
         log.info('[跳过买入] 无空仓位(slots=%d)或资金不足(%.0f)' % (slots, available))
         return
 
-    # 熊市检测：沪深300 < MA60 且 MA60 下行
-    a_share_codes = {'510300.XSHG', '159915.XSHE', '512100.XSHG', '159928.XSHE', '510880.XSHG'}
-    hs300_data = get_price('000300.XSHG', end_date=prev_date, count=65,
-                           frequency='daily', fields=['close'])
-    hs300_ma = hs300_data['close'].iloc[-60:].mean()
-    hs300_close = hs300_data['close'].iloc[-1]
-    hs300_ma_prev = hs300_data['close'].iloc[-61:-1].mean()
-    market_bearish = hs300_close < hs300_ma and hs300_ma < hs300_ma_prev
-    if market_bearish:
-        log.info('[熊市] 沪深300收盘%.2f<MA60=%.2f且MA60下行，A股仓位减半' % (
-            hs300_close, hs300_ma))
-
     base_ratio = get_tier_param('base_ratio')
 
     for code in to_buy:
@@ -656,7 +672,7 @@ def do_trading(context):
         actual_vol = max(sig['volatility'], 0.05)
         alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
         alloc = min(alloc, available * 0.95)
-        if market_bearish and code in a_share_codes:
+        if g.market_bearish and code in g.a_share_codes:
             alloc *= 0.5
 
         shares = int(alloc / price / 100) * 100
