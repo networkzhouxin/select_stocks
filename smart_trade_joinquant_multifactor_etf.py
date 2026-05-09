@@ -79,8 +79,8 @@ def initialize(context):
     g.capital_tiers = {
         'micro':  {'max_hold': 3, 'base_ratio': 0.70},
         'small':  {'max_hold': 3, 'base_ratio': 0.70},
-        'medium': {'max_hold': 3, 'base_ratio': 0.60},
-        'large':  {'max_hold': 4, 'base_ratio': 0.55},
+        'medium': {'max_hold': 3, 'base_ratio': 0.65},
+        'large':  {'max_hold': 3, 'base_ratio': 0.65},
     }
 
     # ---- 策略参数（全部学术默认值）----
