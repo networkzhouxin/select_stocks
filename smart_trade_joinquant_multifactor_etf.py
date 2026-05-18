@@ -132,6 +132,7 @@ def initialize(context):
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
+    run_daily(afternoon_stop_check, time='14:45')
     run_daily(after_close, time='15:30')
 
 
@@ -439,19 +440,22 @@ def calc_multi_factor_score(code, end_date):
 # ============================================================
 #  ATR跟踪止损（动态倍数）
 # ============================================================
-def calc_stop_price(highest, atr_val):
+def calc_stop_price(highest, atr_val, atr_mult_override=None):
     p = g.params
-    vol_pct = atr_val / highest * np.sqrt(252.0 / p['atr_period'])
-    if vol_pct > p['high_vol_threshold']:
-        atr_mult = p['trailing_atr_mult_high_vol']
+    if atr_mult_override is not None:
+        atr_mult = atr_mult_override
     else:
-        atr_mult = p['trailing_atr_mult']
+        vol_pct = atr_val / highest * np.sqrt(252.0 / p['atr_period'])
+        if vol_pct > p['high_vol_threshold']:
+            atr_mult = p['trailing_atr_mult_high_vol']
+        else:
+            atr_mult = p['trailing_atr_mult']
     pct_stop = atr_mult * atr_val / highest
     pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
     return highest * (1 - pct_stop)
 
 
-def check_stop_triggered(context, current_data):
+def check_stop_triggered(context, current_data, atr_mult_override=None):
     """检查哪些持仓触发了止损线（仅检测，不执行卖出）"""
     triggered = []
     for code in list(context.portfolio.positions.keys()):
@@ -462,7 +466,7 @@ def check_stop_triggered(context, current_data):
             continue
         cur_price = current_data[code].last_price
         if code in g.highest_since_buy and code in g.entry_atr:
-            stop_price = calc_stop_price(g.highest_since_buy[code], g.entry_atr[code])
+            stop_price = calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override)
             if cur_price <= stop_price:
                 triggered.append(code)
     return triggered
@@ -481,6 +485,19 @@ def execute_stop(code, context, current_data):
     g.entry_atr.pop(code, None)
     g.buy_date.pop(code, None)
     g.holding_scores.pop(code, None)
+
+
+# ============================================================
+#  14:45 午盘止损（4.0x ATR，仅拦截极端暴跌）
+# ============================================================
+def afternoon_stop_check(context):
+    current_data = get_current_data()
+    triggered = check_stop_triggered(context, current_data, atr_mult_override=4.0)
+    if not triggered:
+        return
+    log.info('[午盘止损] 触发%d只(4.0xATR)：%s' % (len(triggered), ' '.join(triggered)))
+    for code in triggered:
+        execute_stop(code, context, current_data)
 
 
 # ============================================================
