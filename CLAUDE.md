@@ -164,6 +164,29 @@ Three optimization attempts, two succeeded:
 | V2.4 | 2010-2014 (out) | 2万 | +37% | ~6.4% | ~8.5% | — | — |
 | **V2.5** | **2015-2026** | **2万** | **+306.2%** | **13.8%** | **12.85%** | **0.809** | **—** |
 | V2.5 | 2010-2014 (out) | 2万 | +37.64% | 6.81% | 6.64% | 0.405 | — |
+| **V2.6** | **2015-2026** | **2万** | **+348.8%** | **14.82%** | **15.21%** | **0.904** | **—** |
+
+### V2.5→V2.6 Iteration (2026-05, on JoinQuant)
+
+**Adopted changes:**
+
+1. **资本档位优化** (+8pp): medium base_ratio 0.60→0.65, large max_hold 4→3 + base_ratio 0.55→0.65. Higher capital utilization, fewer but higher-quality positions in large tier. **Unified max_hold=3 works because ETF prices are low.**
+
+2. **利润分段ATR收紧** (**+28pp**, highest single improvement): ATR multiplier tightens as profit grows — normal (2.5x) when profit<5%, moderate (2.0x) at 5-15%, tight (1.5x) at >15%. Prevents large accumulated profits from evaporating in grinding declines (the 513500 scenario: +104%→-49%). Does NOT affect afternoon 4.0x override. **Lesson: risk management should adapt to profit cushion, not just volatility.**
+
+3. **14:45午盘止损 4.0x ATR** (+6.6pp, borderline): Second daily stop check using wider 4.0x ATR multiplier. Triggers ~2x/year on genuine intraday crash days. Pure risk management pass — no scoring, no exemption. Marginal benefit but zero-cost insurance. Uses 4th of 5 PTrade scheduling slots.
+
+4. **档位5%迟滞**: Upgrade requires total > threshold+5%, downgrade requires total < threshold-5%. Eliminates flickering at tier boundaries (e.g. 5万附近反复横跳). Only 1 tier change in 11yr backtest (small→medium at 5.3万).
+
+5. **20%极端DD止损**: After-close check — if drawdown from highest >20%, force stop regardless of score or ATR. Triggers ~1x/11yr (513500 49% case). 10% threshold tested but caused -16pp from selling at bottoms. **Lesson: bare DD stop at 10% is too tight for ETFs — 20% catches only the truly extreme.**
+
+**Tested and reverted:**
+
+6. **持仓门槛 55→60** (collaborates with other changes unpredictably): Raising old-holding keep threshold from 55 to 60 showed +5.6pp in one configuration but -66pp in another. Depends on interacting parameters. **Reverted — 55 is safer baseline.**
+
+7. **ROC周期实验** (14/15/25/blend — all worse than 20): Each deviation from ROC20 reduced returns. Shorter periods (14/15) increased noise trading; longer (25) improved bear-market returns but cost more in trending years. Dual-period blend (20+25) was worse than either alone. **ROC20 is optimal for this framework. Not a tunable parameter — it's load-bearing.**
+
+8. **Fast实验版** (全局加速): Shortened all indicator periods + lowered switch threshold to 5 + tightened stops to 8% DD + daily rebalance consideration. Result: **306%→75%, -231pp**. Proved that the strategy's value is in its SLOW filters — 3-day smoothing, 8pt switch threshold, 5-day min hold, 20-day momentum. **"慢就是快" confirmed experimentally.**
 
 ### vs V15.9-Hybrid (ROC+LR daily rotation)
 Direct A/B test on same period (2015-2026, 2万起始):
