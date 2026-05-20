@@ -145,14 +145,33 @@ def get_prev_trade_date(context):
 # ============================================================
 def update_tier(context):
     total = context.portfolio.total_value
-    if total < 15000:
-        new_tier = 'micro'
-    elif total < 50000:
-        new_tier = 'small'
-    elif total < 100000:
-        new_tier = 'medium'
-    else:
-        new_tier = 'large'
+    current = g.current_tier
+    # 5%迟滞阈值
+    up_to_small   = 15750   # 1.5万 + 5%
+    up_to_medium  = 52500   # 5万 + 5%
+    up_to_large   = 105000  # 10万 + 5%
+    dn_to_micro   = 14250   # 1.5万 - 5%
+    dn_to_small   = 47500   # 5万 - 5%
+    dn_to_medium  = 95000   # 10万 - 5%
+
+    if current is None:
+        # 初始化：用标准阈值
+        if total < 15000:          new_tier = 'micro'
+        elif total < 50000:        new_tier = 'small'
+        elif total < 100000:       new_tier = 'medium'
+        else:                      new_tier = 'large'
+    elif current == 'micro':
+        new_tier = 'small' if total >= up_to_small else 'micro'
+    elif current == 'small':
+        if total >= up_to_medium:      new_tier = 'medium'
+        elif total < dn_to_micro:      new_tier = 'micro'
+        else:                          new_tier = 'small'
+    elif current == 'medium':
+        if total >= up_to_large:       new_tier = 'large'
+        elif total < dn_to_small:      new_tier = 'small'
+        else:                          new_tier = 'medium'
+    else:  # large
+        new_tier = 'medium' if total < dn_to_medium else 'large'
 
     if new_tier != g.current_tier:
         old = g.current_tier or '初始化'
@@ -440,7 +459,7 @@ def calc_multi_factor_score(code, end_date):
 # ============================================================
 #  ATR跟踪止损（动态倍数）
 # ============================================================
-def calc_stop_price(highest, atr_val, atr_mult_override=None):
+def calc_stop_price(highest, atr_val, atr_mult_override=None, profit_pct=None):
     p = g.params
     if atr_mult_override is not None:
         atr_mult = atr_mult_override
@@ -450,6 +469,12 @@ def calc_stop_price(highest, atr_val, atr_mult_override=None):
             atr_mult = p['trailing_atr_mult_high_vol']
         else:
             atr_mult = p['trailing_atr_mult']
+        # 利润分段收紧：赚得越多，保护越紧
+        if profit_pct is not None and profit_pct > 0:
+            if profit_pct > 0.15:
+                atr_mult *= 0.6
+            elif profit_pct > 0.05:
+                atr_mult *= 0.8
     pct_stop = atr_mult * atr_val / highest
     pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
     return highest * (1 - pct_stop)
@@ -466,7 +491,8 @@ def check_stop_triggered(context, current_data, atr_mult_override=None):
             continue
         cur_price = current_data[code].last_price
         if code in g.highest_since_buy and code in g.entry_atr:
-            stop_price = calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override)
+            pnl = (cur_price - pos.avg_cost) / pos.avg_cost if pos.avg_cost > 0 else 0
+            stop_price = calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
             if cur_price <= stop_price:
                 triggered.append(code)
     return triggered
@@ -488,15 +514,54 @@ def execute_stop(code, context, current_data):
 
 
 # ============================================================
-#  14:45 午盘止损（4.0x ATR，仅拦截极端暴跌）
+#  独立DD止损（不依赖ATR，拦截阴跌累积）
+# ============================================================
+def check_dd_triggered(context, current_data):
+    """检查持仓是否有回撤超过10%（独立于ATR，直接比较最高价vs现价）"""
+    triggered = []
+    for code in list(context.portfolio.positions.keys()):
+        pos = context.portfolio.positions[code]
+        if pos.total_amount <= 0 or pos.avg_cost <= 0:
+            continue
+        if current_data[code].paused:
+            continue
+        cur_price = current_data[code].last_price
+        if code in g.highest_since_buy and g.highest_since_buy[code] > 0:
+            dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
+            if dd > 0.20:
+                triggered.append(code)
+    return triggered
+
+
+def execute_dd_stop(code, context, current_data):
+    """执行回撤止损卖出"""
+    cur_price = current_data[code].last_price
+    dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
+    log.info('[回撤止损] %s 最高%.3f 现%.3f 回撤%.1f%% 强制平仓' % (
+        code, g.highest_since_buy[code], cur_price, dd * 100))
+    order_target(code, 0)
+    g.highest_since_buy.pop(code, None)
+    g.entry_atr.pop(code, None)
+    g.buy_date.pop(code, None)
+    g.holding_scores.pop(code, None)
+
+
+# ============================================================
+#  14:45 午盘止损（4.0x ATR + 10% DD 双线）
 # ============================================================
 def afternoon_stop_check(context):
     current_data = get_current_data()
-    triggered = check_stop_triggered(context, current_data, atr_mult_override=4.0)
-    if not triggered:
+    # ATR止损
+    atr_triggered = check_stop_triggered(context, current_data, atr_mult_override=4.0)
+    # 独立DD止损
+    dd_triggered = check_dd_triggered(context, current_data)
+    all_triggered = set(atr_triggered) | set(dd_triggered)
+    if not all_triggered:
         return
-    log.info('[午盘止损] 触发%d只(4.0xATR)：%s' % (len(triggered), ' '.join(triggered)))
-    for code in triggered:
+    log.info('[午盘止损] 触发%d只(ATR:%d DD:%d)：%s' % (
+        len(all_triggered), len(atr_triggered), len(dd_triggered),
+        ' '.join(all_triggered)))
+    for code in all_triggered:
         execute_stop(code, context, current_data)
 
 
@@ -508,12 +573,21 @@ def do_trading(context):
     current_data = get_current_data()
     today = context.current_dt.date()
 
-    # 1. 检测止损（仅检测，不执行）
+    # 1. 检测止损（ATR + 独立DD，仅检测不执行）
     stop_triggered = check_stop_triggered(context, current_data)
+    dd_triggered = check_dd_triggered(context, current_data)
 
-    # 2. 是否轮动日
+    # 2. 独立DD止损先执行（不参与豁免，不管是否轮动日）
+    if dd_triggered:
+        for code in dd_triggered:
+            execute_dd_stop(code, context, current_data)
+        # DD已卖出的从ATR列表中剔除，避免重复处理
+        stop_triggered = [c for c in stop_triggered if c not in dd_triggered]
+
+    # 3. 是否轮动日（DD止损已处理，无需再跑完整流程）
     if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
-        log.info('[非轮动日] 止损检查通过，无触发')
+        if not dd_triggered:
+            log.info('[非轮动日] 止损检查通过，无触发')
         return
 
     # 3. 打印资金状态
