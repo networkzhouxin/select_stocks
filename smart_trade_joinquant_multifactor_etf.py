@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多因子ETF量化策略 V2.5
+多因子ETF量化策略 V2.6
 ============================
 基于7个经典技术指标（RSI/MACD/布林带/动量/成交量/KDJ/均线趋势）综合评分，
 固定因子权重，ATR跟踪止损+止损豁免，多市场多资产ETF轮动。
@@ -10,7 +10,10 @@
   - 周二+周四固定轮动（无起始日依赖）
   - 换仓门槛8分（新标的必须高出持仓最低分8分才替换）
   - 最低持仓期5天（防止买入即卖）
-  - ATR跟踪止损 + 止损豁免（得分仍在目标中且回撤<10%→不卖；回撤≥10%→强制止损）
+  - ATR跟踪止损 + 止损豁免（得分仍在target中且回撤<10%不卖；≥10%强制止损）
+  - 利润分段ATR收紧（盈利5-15%→2.0x, >15%→1.5x）
+  - 14:45午盘双线止损（4.0x ATR + 20%裸DD）
+  - 档位5%迟滞 + 移动补仓（仅轮动日）
   - 每日收盘后更新最高价+ATR（次日止损更准确）
   - 波动率反比仓位（低波动多买，高波动少买）
   - 买入按得分排序（最强标的优先获得资金）
@@ -26,9 +29,8 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
 
 回测业绩（万三+最低5元佣金）：
-  2015-2026（11年）：+251.5%，年化~12%，最大回撤~15.8%，夏普0.63
-  2010-2014（样本外）：+37%，年化6.4%，弱市+标的不全仍正收益
-  2008金融危机：仅-2.7%（同期沪深300 -65%）
+  2015-2026（11年）：~348%，年化~14.8%，最大回撤~15.4%，夏普0.91
+  2010-2014（样本外）：+39%，年化6.4%，弱市+标的不全仍正收益
 
 版本历史：
   V1.0: 每日轮动无门槛，-91.3%（手续费吞噬本金）
@@ -36,10 +38,12 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
   V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
+  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底 + 移动补仓
 """
 
 import numpy as np
 import pandas as pd
+from datetime import timedelta
 from jqdata import *
 
 
@@ -517,7 +521,7 @@ def execute_stop(code, context, current_data):
 #  独立DD止损（不依赖ATR，拦截阴跌累积）
 # ============================================================
 def check_dd_triggered(context, current_data):
-    """检查持仓是否有回撤超过10%（独立于ATR，直接比较最高价vs现价）"""
+    """检查持仓是否有回撤超过20%（独立于ATR，直接比较最高价vs现价）"""
     triggered = []
     for code in list(context.portfolio.positions.keys()):
         pos = context.portfolio.positions[code]
@@ -870,7 +874,7 @@ def after_close(context):
         portfolio_dd))
 
     for code, pos in hold.items():
-        pnl = (pos.price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
+        pnl = (cur - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
         highest = g.highest_since_buy.get(code, pos.price)
         score = g.holding_scores.get(code, 0)
         log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f' % (
