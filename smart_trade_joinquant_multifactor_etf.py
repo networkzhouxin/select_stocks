@@ -743,7 +743,10 @@ def do_trading(context):
 
     # 聚宽回测中available_cash即时更新，无需加sold_proceeds
     available = context.portfolio.available_cash
-    slots = max_hold - len(set(current_holds.keys()) & target_codes)
+    # 用实时持仓数算槽位，避免卖出未结算导致的超买(持仓4/3的bug)
+    actual_hold_count = len([c for c in context.portfolio.positions
+                             if context.portfolio.positions[c].total_amount > 0])
+    slots = max_hold - actual_hold_count
     if slots <= 0 or available < 500:
         log.info('[跳过买入] 无空仓位(slots=%d)或资金不足(%.0f)' % (slots, available))
         return

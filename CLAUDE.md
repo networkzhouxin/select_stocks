@@ -8,7 +8,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 
 ## Working Process
 
-- **代码修改前必须先确认**：任何代码修改，先向用户说明方案和影响，等用户确认后再动手。不要直接改代码。
+- **代码修改前必须先确认**：任何代码修改，先向用户说明方案和影响，等用户明确同意后才能动手。不要直接改代码。即使是在探索性讨论中提出的优化方向，也必须等用户确认"实施"后才执行。
 
 ## Key Files
 
