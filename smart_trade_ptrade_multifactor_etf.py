@@ -1,20 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-多因子ETF量化策略 V2.4 - PTrade版（回测+实盘兼容）
+多因子ETF量化策略 V2.6 - PTrade版（回测+实盘兼容）
 =============================================
-从聚宽V2.4逐行移植，所有交易逻辑、参数、因子评分100%不变。
-根据PTrade官方API文档适配，同时兼容回测和实盘两种模式。
+与聚宽V2.6逻辑100%一致，根据PTrade官方API文档适配，同时兼容回测和实盘两种模式。
 
-核心机制（与聚宽版一致）：
-  - 7因子离散分档评分 + 3日平滑 + 固定权重
-  - 周二+周四固定轮动
-  - 换仓门槛8分 + 最低持仓期5天
-  - ATR跟踪止损 + 止损豁免（触发止损但得分仍在目标中→不卖）
-  - 每日收盘后更新最高价+ATR
-  - 波动率反比仓位 + 买入按得分排序
-  - 候选不足时持有现金
+V2.6核心改进（vs V2.4）：
+  - 利润分段ATR收紧（盈利5-15%→2.0x, >15%→1.5x）
+  - 14:45午盘双线止损（4.0x ATR + 20%裸DD）
+  - 档位5%迟滞 + 移动补仓（仅轮动日）
+  - RSI >80评分修正（55→70，不对抗极致趋势）
+  - 资本档位优化（medium 0.60→0.65, large max_hold 4→3 + 0.55→0.65）
 
-实盘健壮性（参考PTrade V15.9.1）：
+实盘健壮性：
   - 所有order/order_target传limit_price
   - 止损/轮动卖出用跌停价作limit_price
   - 实盘用snapshot的trade_status检测停牌
@@ -23,16 +20,6 @@
   - 盘前清理缓存/pending_orders
   - 持仓entry_atr恢复机制
   - sold_today防重复卖出
-
-适配要点：
-  1. 代码格式：.XSHG/.XSHE → .SS/.SZ
-  2. Portfolio：portfolio_value/cash
-  3. Position：amount/cost_basis/last_sale_price
-  4. 行情：data[code].price / get_snapshot
-  5. 停牌：snapshot trade_status / get_stock_status
-  6. run_daily：run_daily(context, func, time)
-  7. 回测：日频run_daily固定15:00，用handle_data驱动
-  8. 限价精度：ETF限价单3位小数
 
 ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   A股: 510300沪深300, 159915创业板, 512100中证1000, 159928消费, 510880红利
@@ -43,7 +30,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
 
 聚宽回测业绩（万三+最低5元佣金）：
-  2015-2026（11年）：+251.5%，年化~12%，最大回撤~15.8%，夏普0.63
+  2015-2026：~348%，年化~14.8%，最大回撤~15.4%，夏普0.91
 """
 
 import numpy as np
@@ -373,14 +360,32 @@ def _get_sell_limit_price(code, cur_price):
 # ============================================================
 def _update_tier(context):
     total = _total_value(context)
-    if total < 15000:
-        new_tier = 'micro'
-    elif total < 50000:
-        new_tier = 'small'
-    elif total < 100000:
-        new_tier = 'medium'
-    else:
-        new_tier = 'large'
+    current = g.current_tier
+    # 5%迟滞阈值
+    up_to_small   = 15750
+    up_to_medium  = 52500
+    up_to_large   = 105000
+    dn_to_micro   = 14250
+    dn_to_small   = 47500
+    dn_to_medium  = 95000
+
+    if current is None:
+        if total < 15000:          new_tier = 'micro'
+        elif total < 50000:        new_tier = 'small'
+        elif total < 100000:       new_tier = 'medium'
+        else:                      new_tier = 'large'
+    elif current == 'micro':
+        new_tier = 'small' if total >= up_to_small else 'micro'
+    elif current == 'small':
+        if total >= up_to_medium:      new_tier = 'medium'
+        elif total < dn_to_micro:      new_tier = 'micro'
+        else:                          new_tier = 'small'
+    elif current == 'medium':
+        if total >= up_to_large:       new_tier = 'large'
+        elif total < dn_to_small:      new_tier = 'small'
+        else:                          new_tier = 'medium'
+    else:  # large
+        new_tier = 'medium' if total < dn_to_medium else 'large'
 
     # 每日熊市检测
     _detect_bear_market(context)
@@ -490,7 +495,7 @@ def _calc_multi_factor_score(code, end_date):
     elif rsi_val < 60: rsi_score = 65
     elif rsi_val < 70: rsi_score = 80
     elif rsi_val < 80: rsi_score = 75
-    else: rsi_score = 55
+    else: rsi_score = 70
 
     # 2. MACD
     dif, dea, macd_hist = _calc_macd(C, p['macd_fast'], p['macd_slow'], p['macd_signal'])
@@ -614,7 +619,7 @@ def _calc_multi_factor_score(code, end_date):
 # ============================================================
 #  ATR跟踪止损
 # ============================================================
-def _calc_stop_price(highest, atr_val, atr_mult_override=None):
+def _calc_stop_price(highest, atr_val, atr_mult_override=None, profit_pct=None):
     p = g.params
     if atr_mult_override is not None:
         atr_mult = atr_mult_override
@@ -624,6 +629,12 @@ def _calc_stop_price(highest, atr_val, atr_mult_override=None):
             atr_mult = p['trailing_atr_mult_high_vol']
         else:
             atr_mult = p['trailing_atr_mult']
+        # 利润分段收紧：赚得越多，保护越紧
+        if profit_pct is not None and profit_pct > 0:
+            if profit_pct > 0.15:
+                atr_mult *= 0.6
+            elif profit_pct > 0.05:
+                atr_mult *= 0.8
     pct_stop = atr_mult * atr_val / highest
     pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
     return highest * (1 - pct_stop)
@@ -645,7 +656,9 @@ def _check_stop_triggered(context, atr_mult_override=None):
         if cur_price is None:
             continue
         if code in g.highest_since_buy and code in g.entry_atr:
-            stop_price = _calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override)
+            cost = _pos_cost(pos)
+            pnl = (cur_price - cost) / cost if cost > 0 else 0
+            stop_price = _calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
             if cur_price <= stop_price:
                 triggered.append(code)
     return triggered
@@ -672,14 +685,60 @@ def _execute_stop(code, context):
 
 
 # ============================================================
-#  14:45 午盘止损（4.0x ATR，仅拦截极端暴跌）
+#  独立DD止损（不依赖ATR，拦截阴跌累积）
+# ============================================================
+def _check_dd_triggered(context):
+    """检查持仓是否有回撤超过20%（独立于ATR）"""
+    triggered = []
+    positions = _positions(context)
+    for code in list(positions.keys()):
+        pos = positions[code]
+        if _pos_amount(pos) <= 0 or _pos_cost(pos) <= 0:
+            continue
+        if g.__is_live and g.sold_today.get(code, False):
+            continue
+        if _is_paused(code):
+            continue
+        cur_price = _get_current_price(code)
+        if cur_price is None:
+            continue
+        if code in g.highest_since_buy and g.highest_since_buy[code] > 0:
+            dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
+            if dd > 0.20:
+                triggered.append(code)
+    return triggered
+
+
+def _execute_dd_stop(code, context):
+    """执行回撤止损卖出"""
+    cur_price = _get_current_price(code)
+    if cur_price is None:
+        cur_price = _pos_cost(_positions(context)[code])
+    dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
+    log.info('[回撤止损] %s 最高%.3f 现%.3f 回撤%.1f%% 强制平仓' % (
+        code, g.highest_since_buy[code], cur_price, dd * 100))
+    sell_lmt = _get_sell_limit_price(code, cur_price)
+    order_target(code, 0, limit_price=sell_lmt)
+    g.sold_today[code] = True
+    g.highest_since_buy.pop(code, None)
+    g.entry_atr.pop(code, None)
+    g.buy_date.pop(code, None)
+    g.holding_scores.pop(code, None)
+
+
+# ============================================================
+#  14:45 午盘止损（4.0x ATR + 20% DD 双线）
 # ============================================================
 def _afternoon_stop_check(context):
-    triggered = _check_stop_triggered(context, atr_mult_override=4.0)
-    if not triggered:
+    atr_triggered = _check_stop_triggered(context, atr_mult_override=4.0)
+    dd_triggered = _check_dd_triggered(context)
+    all_triggered = set(atr_triggered) | set(dd_triggered)
+    if not all_triggered:
         return
-    log.info('[午盘止损] 触发%d只(4.0xATR)：%s' % (len(triggered), ' '.join(triggered)))
-    for code in triggered:
+    log.info('[午盘止损] 触发%d只(ATR:%d DD:%d)：%s' % (
+        len(all_triggered), len(atr_triggered), len(dd_triggered),
+        ' '.join(all_triggered)))
+    for code in all_triggered:
         _execute_stop(code, context)
 
 
@@ -690,12 +749,20 @@ def _do_trading(context):
     prev_date = _get_prev_trade_date(context)
     today = context.blotter.current_dt.date()
 
-    # 1. 检测止损（仅检测，不执行）
+    # 1. 检测止损（ATR + 独立DD，仅检测不执行）
     stop_triggered = _check_stop_triggered(context)
+    dd_triggered = _check_dd_triggered(context)
 
-    # 2. 是否轮动日
+    # 2. 独立DD止损先执行（不参与豁免，不管是否轮动日）
+    if dd_triggered:
+        for code in dd_triggered:
+            _execute_dd_stop(code, context)
+        stop_triggered = [c for c in stop_triggered if c not in dd_triggered]
+
+    # 3. 是否轮动日（DD止损已处理）
     if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
-        log.info('[非轮动日] 止损检查通过，无触发')
+        if not dd_triggered:
+            log.info('[非轮动日] 止损检查通过，无触发')
         return
 
     # 3. 打印资金状态
@@ -854,16 +921,12 @@ def _do_trading(context):
             g.buy_date.pop(code, None)
             g.holding_scores.pop(code, None)
 
-    # 8. 买入（按得分排序）
-    to_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
-    if not to_buy:
-        log.info('[无换仓] 持仓与目标一致')
-        return
-
+    # 8. 买入（按得分排序）+ 移动补仓
     sig_map = {}
     for r in all_results:
         sig_map[r['code']] = r
-    to_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
+
+    to_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
 
     # 可用资金：实盘cash有6秒同步延迟需补偿，回测cash即时更新不需要
     if g.__is_live and sold_proceeds > 0:
@@ -873,54 +936,89 @@ def _do_trading(context):
     else:
         available = _available_cash(context)
     slots = max_hold - len(set(current_holds.keys()) & target_codes)
-    if slots <= 0 or available < 500:
-        log.info('[跳过买入] 无空仓位(slots=%d)或资金不足(%.0f)' % (slots, available))
-        return
-
     base_ratio = _get_tier_param('base_ratio')
 
-    for code in to_buy:
-        if slots <= 0 or available < 500:
-            break
-        if code not in sig_map:
-            continue
-
-        price = _get_current_price(code)
-        if price is None or price <= 0:
-            continue
-
-        sig = sig_map[code]
-        alloc = available / slots * base_ratio
-        actual_vol = max(sig['volatility'], 0.05)
-        alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
-        alloc = min(alloc, available * 0.95)
-        if g.market_bearish and code in g.a_share_codes:
-            alloc *= 0.5
-
-        shares = int(alloc / price / 100) * 100
-        if shares < 100:
-            if available >= price * 100 * 1.003:
-                shares = 100
-            else:
-                log.info('[资金不足] %s 需%.0f元买100股，可用%.0f' % (code, price * 100, available))
+    # 新买入
+    if to_buy and slots > 0 and available >= 500:
+        to_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
+        for code in to_buy:
+            if slots <= 0 or available < 500:
+                break
+            if code not in sig_map:
                 continue
 
-        log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
-            code, sig['final_score'], sig['roc'] * 100,
-            sig['volatility'] * 100, shares, price))
+            price = _get_current_price(code)
+            if price is None or price <= 0:
+                continue
 
-        order(code, shares, limit_price=round(price, 3))
+            sig = sig_map[code]
+            alloc = available / slots * base_ratio
+            actual_vol = max(sig['volatility'], 0.05)
+            alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
+            alloc = min(alloc, available * 0.95)
+            if g.market_bearish and code in g.a_share_codes:
+                alloc *= 0.5
 
-        if g.__is_live:
-            g.__pending_orders[code] = {'price': price, 'atr': sig['atr']}
-        else:
-            g.highest_since_buy[code] = price
-            g.entry_atr[code] = sig['atr']
+            shares = int(alloc / price / 100) * 100
+            if shares < 100:
+                if available >= price * 100 * 1.003:
+                    shares = 100
+                else:
+                    log.info('[资金不足] %s 需%.0f元买100股，可用%.0f' % (code, price * 100, available))
+                    continue
 
-        g.buy_date[code] = today
-        g.holding_scores[code] = sig['final_score']
-        available -= shares * price * 1.003
-        slots -= 1
+            log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
+                code, sig['final_score'], sig['roc'] * 100,
+                sig['volatility'] * 100, shares, price))
+
+            order(code, shares, limit_price=round(price, 3))
+
+            if g.__is_live:
+                g.__pending_orders[code] = {'price': price, 'atr': sig['atr']}
+            else:
+                g.highest_since_buy[code] = price
+                g.entry_atr[code] = sig['atr']
+
+            g.buy_date[code] = today
+            g.holding_scores[code] = sig['final_score']
+            available -= shares * price * 1.003
+            slots -= 1
+
+    # 移动补仓：轮动日给持仓补齐仓位
+    if is_rebalance:
+        for code in list(current_holds.keys()):
+            if code not in target_codes or code not in sig_map:
+                continue
+            pos = positions[code]
+            if _pos_amount(pos) <= 0:
+                continue
+            price = _get_current_price(code)
+            if price is None or price <= 0:
+                continue
+            current_value = _pos_amount(pos) * price
+            sig = sig_map[code]
+
+            target_alloc = available / max_hold * base_ratio
+            actual_vol = max(sig['volatility'], 0.05)
+            target_alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
+            if g.market_bearish and code in g.a_share_codes:
+                target_alloc *= 0.5
+
+            deficit = target_alloc - current_value
+            if deficit < max(500, target_alloc * 0.20):
+                continue
+
+            shares = int(deficit / price / 100) * 100
+            if shares < 100:
+                continue
+
+            log.info('[补仓] %s 分:%.1f 现有%.0f→目标%.0f 补%d股 @%.3f' % (
+                code, sig['final_score'], current_value, target_alloc, shares, price))
+            order(code, shares, limit_price=round(price, 3))
+            available -= shares * price * 1.003
+
+    if not to_buy and available >= 500:
+        log.info('[无换仓] 持仓与目标一致')
 
 
 # ============================================================
@@ -1009,50 +1107,59 @@ def _ensure_buy_date_and_highest(code, pos, prev_date, deliver_records=None):
 
 
 def _query_buy_date_from_deliver(code, prev_date, deliver_records=None):
-    """通过交割单查询最近一次买入日期"""
+    """通过交割单查询持仓起始买入日期（跳过补仓产生的后续买入）"""
     if deliver_records is None:
         deliver_records = _fetch_deliver_records(prev_date)
     if not deliver_records:
         return None
 
-    # 标的代码：交割单中 stock_code 是6位数字码
     code_base = code.split('.')[0]
-
     buy_dates = []
+    sell_dates = []
     matched_codes = set()
+
     for r in deliver_records:
-        # 标的匹配
         r_code = str(r.get('stock_code', ''))
         matched_codes.add(r_code)
         if r_code != code_base:
             continue
 
-        # 买卖方向：entrust_bs='1' 买入, '2' 卖出; business_name='证券买入'/'证券卖出'
         entrust_bs = str(r.get('entrust_bs', ''))
         business_name = str(r.get('business_name', ''))
-        if entrust_bs != '1' and '买入' not in business_name:
-            continue
+        is_buy = entrust_bs == '1' or '买入' in business_name
+        is_sell = entrust_bs == '2' or '卖出' in business_name
 
-        # 成交日期：init_date / entrust_date / date_back，格式YYYYmmdd
         date_str = str(r.get('init_date', '') or r.get('entrust_date', '') or r.get('date_back', ''))
         if not date_str or len(date_str) < 8:
             continue
         try:
             trade_date = datetime.strptime(date_str[:8], '%Y%m%d').date()
-            buy_dates.append(trade_date)
+            if is_buy:
+                buy_dates.append(trade_date)
+            elif is_sell:
+                sell_dates.append(trade_date)
         except Exception:
             continue
 
-    log.info('[交割单] %s 匹配code=%s 买入记录%d条 全量code列表:%s' % (
-        code, code_base, len(buy_dates), sorted(matched_codes)))
+    log.info('[交割单] %s 匹配code=%s 买入%d条 卖出%d条 全量code列表:%s' % (
+        code, code_base, len(buy_dates), len(sell_dates), sorted(matched_codes)))
 
-    if buy_dates:
-        most_recent = max(buy_dates)  # 最近一次买入
-        log.info('[买入日恢复] %s 交割单最近买入%s' % (code, most_recent))
-        return most_recent
+    if not buy_dates:
+        log.warning('[买入日恢复] %s 交割单中未找到买入记录' % code)
+        return None
 
-    log.warning('[买入日恢复] %s 交割单中未找到买入记录' % code)
-    return None
+    if sell_dates:
+        last_sell = max(sell_dates)
+        buys_after = [d for d in buy_dates if d > last_sell]
+        if buys_after:
+            earliest = min(buys_after)
+            log.info('[买入日恢复] %s 最近卖出%s 之后首次买入%s' % (code, last_sell, earliest))
+            return earliest
+
+    # 没有卖出记录，用最早买入日（而非最近，避免补仓日误判）
+    earliest = min(buy_dates)
+    log.info('[买入日恢复] %s 无卖出记录 最早买入%s' % (code, earliest))
+    return earliest
 
 
 def _recover_highest(code, cost, prev_date):
