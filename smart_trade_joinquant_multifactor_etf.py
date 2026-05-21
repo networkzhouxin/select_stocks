@@ -789,6 +789,37 @@ def do_trading(context):
         available -= shares * price * 1.003
         slots -= 1
 
+    # 9. 移动补仓：轮动日给得分升高的持仓补齐仓位
+    if is_rebalance:
+        for code in list(current_holds.keys()):
+            if code not in target_codes or code not in sig_map:
+                continue
+            pos = context.portfolio.positions[code]
+            if pos.total_amount <= 0:
+                continue
+            price = current_data[code].last_price
+            current_value = pos.total_amount * price
+            sig = sig_map[code]
+
+            target_alloc = available / max_hold * base_ratio
+            actual_vol = max(sig['volatility'], 0.05)
+            target_alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
+            if g.market_bearish and code in g.a_share_codes:
+                target_alloc *= 0.5
+
+            deficit = target_alloc - current_value
+            if deficit < max(500, target_alloc * 0.20):
+                continue
+
+            shares = int(deficit / price / 100) * 100
+            if shares < 100:
+                continue
+
+            log.info('[补仓] %s 分:%.1f 现有%.0f→目标%.0f 补%d股 @%.3f' % (
+                code, sig['final_score'], current_value, target_alloc, shares, price))
+            order(code, shares)
+            available -= shares * price * 1.003
+
 
 # ============================================================
 #  盘后：更新最高价/ATR + 记录
