@@ -296,7 +296,7 @@ def calc_multi_factor_score(code, end_date):
     elif rsi_val < 80:
         rsi_score = 75
     else:
-        rsi_score = 55
+        rsi_score = 70
 
     # ---- 2. MACD ----
     dif, dea, macd_hist = calc_macd(C, p['macd_fast'], p['macd_slow'], p['macd_signal'])
