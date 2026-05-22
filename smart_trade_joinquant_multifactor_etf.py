@@ -13,7 +13,7 @@
   - ATR跟踪止损 + 利润分段收紧（盈利5-15%→2.0x, >15%→1.5x）
   - MA10趋势止损（止损豁免前检查短期趋势是否破坏）
   - 止损豁免（在target中→MA10未破→不卖；MA10已破→执行止损）
-  - 档位5%迟滞（消除档位边界抖动）
+  - 动态资金档位（根据总资产自动调整max_hold和base_ratio）
   - 每日收盘后更新最高价+ATR（次日止损更准确）
   - 波动率反比仓位（低波动多买，高波动少买）
   - 买入按得分排序（最强标的优先获得资金）
@@ -29,7 +29,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
 
 回测业绩（万三+最低5元佣金）：
-  2015-2026（11年）：~354%，年化~14.9%，最大回撤~14.4%，夏普0.93
+  2015-2026（11年）：~372%，年化~15.4%，最大回撤~14.4%，夏普0.96
   2010-2014（样本外）：+39%，年化6.4%，弱市+标的不全仍正收益
 
 版本历史：
@@ -38,7 +38,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
   V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
-  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + MA10趋势止损 + 档位迟滞
+  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + MA10趋势止损
 """
 
 import numpy as np
@@ -112,7 +112,6 @@ def initialize(context):
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
-        'stop_exempt_max_dd': 0.10,  # 止损豁免最大回撤：超过则强制止损
     }
 
     # ---- 因子权重 ----
@@ -148,33 +147,14 @@ def get_prev_trade_date(context):
 # ============================================================
 def update_tier(context):
     total = context.portfolio.total_value
-    current = g.current_tier
-    # 5%迟滞阈值
-    up_to_small   = 15750   # 1.5万 + 5%
-    up_to_medium  = 52500   # 5万 + 5%
-    up_to_large   = 105000  # 10万 + 5%
-    dn_to_micro   = 14250   # 1.5万 - 5%
-    dn_to_small   = 47500   # 5万 - 5%
-    dn_to_medium  = 95000   # 10万 - 5%
-
-    if current is None:
-        # 初始化：用标准阈值
-        if total < 15000:          new_tier = 'micro'
-        elif total < 50000:        new_tier = 'small'
-        elif total < 100000:       new_tier = 'medium'
-        else:                      new_tier = 'large'
-    elif current == 'micro':
-        new_tier = 'small' if total >= up_to_small else 'micro'
-    elif current == 'small':
-        if total >= up_to_medium:      new_tier = 'medium'
-        elif total < dn_to_micro:      new_tier = 'micro'
-        else:                          new_tier = 'small'
-    elif current == 'medium':
-        if total >= up_to_large:       new_tier = 'large'
-        elif total < dn_to_small:      new_tier = 'small'
-        else:                          new_tier = 'medium'
-    else:  # large
-        new_tier = 'medium' if total < dn_to_medium else 'large'
+    if total < 15000:
+        new_tier = 'micro'
+    elif total < 50000:
+        new_tier = 'small'
+    elif total < 100000:
+        new_tier = 'medium'
+    else:
+        new_tier = 'large'
 
     if new_tier != g.current_tier:
         old = g.current_tier or '初始化'
