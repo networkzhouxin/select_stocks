@@ -12,7 +12,7 @@
   - 最低持仓期5天（防止买入即卖）
   - ATR跟踪止损 + 止损豁免（得分仍在target中且回撤<10%不卖；≥10%强制止损）
   - 利润分段ATR收紧（盈利5-15%→2.0x, >15%→1.5x）
-  - 14:45午盘双线止损（4.0x ATR + 20%裸DD）
+  - 14:45午盘止损 4.0x ATR + MA10趋势止损 + 10%回撤止损豁免
   - 档位5%迟滞（消除档位边界抖动）
   - 每日收盘后更新最高价+ATR（次日止损更准确）
   - 波动率反比仓位（低波动多买，高波动少买）
@@ -38,7 +38,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
   V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
-  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底 + MA10趋势止损(夏普+0.008/回撤-0.76pp)
+  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底
 """
 
 import numpy as np
@@ -136,7 +136,6 @@ def initialize(context):
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
-    run_daily(afternoon_stop_check, time='14:45')
     run_daily(after_close, time='15:30')
 
 
@@ -518,58 +517,6 @@ def execute_stop(code, context, current_data):
 
 
 # ============================================================
-#  独立DD止损（不依赖ATR，拦截阴跌累积）
-# ============================================================
-def check_dd_triggered(context, current_data):
-    """检查持仓是否有回撤超过20%（独立于ATR，直接比较最高价vs现价）"""
-    triggered = []
-    for code in list(context.portfolio.positions.keys()):
-        pos = context.portfolio.positions[code]
-        if pos.total_amount <= 0 or pos.avg_cost <= 0:
-            continue
-        if current_data[code].paused:
-            continue
-        cur_price = current_data[code].last_price
-        if code in g.highest_since_buy and g.highest_since_buy[code] > 0:
-            dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
-            if dd > 0.20:
-                triggered.append(code)
-    return triggered
-
-
-def execute_dd_stop(code, context, current_data):
-    """执行回撤止损卖出"""
-    cur_price = current_data[code].last_price
-    dd = (g.highest_since_buy[code] - cur_price) / g.highest_since_buy[code]
-    log.info('[回撤止损] %s 最高%.3f 现%.3f 回撤%.1f%% 强制平仓' % (
-        code, g.highest_since_buy[code], cur_price, dd * 100))
-    order_target(code, 0)
-    g.highest_since_buy.pop(code, None)
-    g.entry_atr.pop(code, None)
-    g.buy_date.pop(code, None)
-    g.holding_scores.pop(code, None)
-
-
-# ============================================================
-#  14:45 午盘止损（4.0x ATR + 10% DD 双线）
-# ============================================================
-def afternoon_stop_check(context):
-    current_data = get_current_data()
-    # ATR止损
-    atr_triggered = check_stop_triggered(context, current_data, atr_mult_override=4.0)
-    # 独立DD止损
-    dd_triggered = check_dd_triggered(context, current_data)
-    all_triggered = set(atr_triggered) | set(dd_triggered)
-    if not all_triggered:
-        return
-    log.info('[午盘止损] 触发%d只(ATR:%d DD:%d)：%s' % (
-        len(all_triggered), len(atr_triggered), len(dd_triggered),
-        ' '.join(all_triggered)))
-    for code in all_triggered:
-        execute_stop(code, context, current_data)
-
-
-# ============================================================
 #  核心交易逻辑
 # ============================================================
 def do_trading(context):
@@ -577,21 +524,12 @@ def do_trading(context):
     current_data = get_current_data()
     today = context.current_dt.date()
 
-    # 1. 检测止损（ATR + 独立DD，仅检测不执行）
+    # 1. 检测止损（仅检测，不执行）
     stop_triggered = check_stop_triggered(context, current_data)
-    dd_triggered = check_dd_triggered(context, current_data)
 
-    # 2. 独立DD止损先执行（不参与豁免，不管是否轮动日）
-    if dd_triggered:
-        for code in dd_triggered:
-            execute_dd_stop(code, context, current_data)
-        # DD已卖出的从ATR列表中剔除，避免重复处理
-        stop_triggered = [c for c in stop_triggered if c not in dd_triggered]
-
-    # 3. 是否轮动日（DD止损已处理，无需再跑完整流程）
+    # 2. 是否轮动日
     if today.weekday() not in g.params['rebalance_weekdays'] and not stop_triggered:
-        if not dd_triggered:
-            log.info('[非轮动日] 止损检查通过，无触发')
+        log.info('[非轮动日] 止损检查通过，无触发')
         return
 
     # 3. 打印资金状态
@@ -708,7 +646,6 @@ def do_trading(context):
             cur_price = current_data[code].last_price
             dd = (highest - cur_price) / highest if highest > 0 else 0
             if dd < max_exempt_dd:
-                # MA10趋势破坏检查：价格跌破MA10且MA10下行 → 不豁免
                 trend_broken = False
                 try:
                     ma_df = get_price(code, end_date=prev_date, count=15,
