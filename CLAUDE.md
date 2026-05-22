@@ -197,6 +197,24 @@ Direct A/B test on same period (2015-2026, 2万起始):
 - **ROC3 dynamic stop-loss**: Tested tightening ATR to 1.5x when 3-day ROC < -3%. Result: -62pp. Too many false triggers in normal pullbacks. **Don't add short-term momentum stop tightening.**
 - **止损豁免 (stop-loss exemption)**: When ATR stop triggers but scoring says ETF is still a top candidate, skip the stop. Saves double commission (sell+buy back) and keeps position in place. Result: **+35pp** (215.9%→251.5%). Resetting highest price on exemption hurt (-44pp), so keep highest/ATR unchanged on exemption. **Key mechanism: let scoring override stop-loss when signals conflict.**
 
+### V2.6后续优化实验（2026-05）
+
+9项实验中2项成功、7项失败：
+
+| 实验 | 收益变化 | 结论 |
+|------|:--:|------|
+| RSI极值修正（>80: 55→70）| +1pp ✅ | 消除趋势策略惩罚趋势的矛盾 |
+| 去移动补仓 | +2.2pp ✅ | 趋势策略不需要仓位再平衡，补仓=追高+摩擦成本 |
+| 熊市分级（严重/温和） | -31pp | 熊市危险在"久"不在"深" |
+| 换仓门槛差异化（盈利仓提高门槛） | -77pp | 评分已含所需信息，叠加盈亏是冗余冲突 |
+| 去中概互联（513050） | -31pp | 37%止损率的ETF仍有正分散价值 |
+| 去成交量因子 | -53pp | 弱因子在边缘决策中充当tiebreaker |
+| 新增波动率质量因子 | -135pp | 低波偏好与动量因子系统性对冲 |
+| ATR利润锁死（峰值决定收紧） | -11pp | 回落松绑不是bug，是给趋势呼吸空间 |
+| ATR软着陆（峰值×0.7地板） | -13pp | 同上 |
+
+**核心教训：V2.6在当前框架下已高度优化，剩余边际空间极小。** 该策略的价值在于其"慢"设计——离散分档、3日平滑、8分门槛、5日最低持仓。任何试图"聪明"一点的改动几乎都会破坏这个平衡。
+
 ## Chinese Variable Reference
 
 `买分`=buy score, `卖分`=sell score, `趋势分`=trend score, `趋势系数`=trend coefficient, `阳线`=bullish candle, `阴线`=bearish candle, `实体`=candle body, `量比`=volume ratio, `档位`=tier, `仓位`=position, `止损`=stop loss

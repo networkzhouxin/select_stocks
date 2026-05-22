@@ -13,7 +13,7 @@
   - ATR跟踪止损 + 止损豁免（得分仍在target中且回撤<10%不卖；≥10%强制止损）
   - 利润分段ATR收紧（盈利5-15%→2.0x, >15%→1.5x）
   - 14:45午盘双线止损（4.0x ATR + 20%裸DD）
-  - 档位5%迟滞 + 移动补仓（仅轮动日）
+  - 档位5%迟滞（消除档位边界抖动）
   - 每日收盘后更新最高价+ATR（次日止损更准确）
   - 波动率反比仓位（低波动多买，高波动少买）
   - 买入按得分排序（最强标的优先获得资金）
@@ -38,7 +38,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
   V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
-  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底 + 移动补仓
+  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底
 """
 
 import numpy as np
@@ -793,37 +793,6 @@ def do_trading(context):
         available -= shares * price * 1.003
         slots -= 1
 
-    # 9. 移动补仓：轮动日给得分升高的持仓补齐仓位
-    if is_rebalance:
-        for code in list(current_holds.keys()):
-            if code not in target_codes or code not in sig_map:
-                continue
-            pos = context.portfolio.positions[code]
-            if pos.total_amount <= 0:
-                continue
-            price = current_data[code].last_price
-            current_value = pos.total_amount * price
-            sig = sig_map[code]
-
-            target_alloc = available / max_hold * base_ratio
-            actual_vol = max(sig['volatility'], 0.05)
-            target_alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
-            if g.market_bearish and code in g.a_share_codes:
-                target_alloc *= 0.5
-
-            deficit = target_alloc - current_value
-            if deficit < max(500, target_alloc * 0.20):
-                continue
-
-            shares = int(deficit / price / 100) * 100
-            if shares < 100:
-                continue
-
-            log.info('[补仓] %s 分:%.1f 现有%.0f→目标%.0f 补%d股 @%.3f' % (
-                code, sig['final_score'], current_value, target_alloc, shares, price))
-            order(code, shares)
-            available -= shares * price * 1.003
-
 
 # ============================================================
 #  盘后：更新最高价/ATR + 记录
@@ -874,9 +843,10 @@ def after_close(context):
         portfolio_dd))
 
     for code, pos in hold.items():
-        pnl = (cur - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
-        highest = g.highest_since_buy.get(code, pos.price)
+        cur_price = pos.price
+        pnl = (cur_price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
+        highest = g.highest_since_buy.get(code, cur_price)
         score = g.holding_scores.get(code, 0)
         log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f' % (
-            code, pos.avg_cost, pos.price, highest, pnl, score))
+            code, pos.avg_cost, cur_price, highest, pnl, score))
     log.info('=' * 60)
