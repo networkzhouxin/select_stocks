@@ -38,7 +38,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.3: 去ADX自适应+7pp，去国债兜底+18pp，固定权重
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
   V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
-  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底
+  V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + 14:45午盘 + 档位迟滞 + 20%DD兜底 + MA10趋势止损(夏普+0.008/回撤-0.76pp)
 """
 
 import numpy as np
@@ -699,7 +699,7 @@ def do_trading(context):
                     r['code'], r['final_score'], worst_code, worst_score,
                     r['final_score'] - worst_score))
 
-    # 6. 执行止损（不在目标中→直接止损；在目标中→回撤超限才止损）
+    # 6. 执行止损（不在target→直接止损；在target→DD<10%且趋势未破→豁免）
     force_stopped = set()
     max_exempt_dd = g.params['stop_exempt_max_dd']
     for code in stop_triggered:
@@ -708,8 +708,27 @@ def do_trading(context):
             cur_price = current_data[code].last_price
             dd = (highest - cur_price) / highest if highest > 0 else 0
             if dd < max_exempt_dd:
-                log.info('[止损豁免] %s 得分%.1f 回撤%.1f%%<%.0f%% 保留持仓' % (
-                    code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
+                # MA10趋势破坏检查：价格跌破MA10且MA10下行 → 不豁免
+                trend_broken = False
+                try:
+                    ma_df = get_price(code, end_date=prev_date, count=15,
+                                     frequency='daily', fields=['close'],
+                                     skip_paused=True, fq='pre')
+                    if ma_df is not None and len(ma_df) >= 11:
+                        ma10 = ma_df['close'].iloc[-10:].mean()
+                        ma10_prev = ma_df['close'].iloc[-11:-1].mean()
+                        if cur_price < ma10 and ma10 < ma10_prev:
+                            trend_broken = True
+                except Exception:
+                    pass
+                if trend_broken:
+                    log.info('[趋势止损] %s 得分%.1f 价格%.3f<MA10=%.3f MA10下行 不豁免' % (
+                        code, g.holding_scores.get(code, 0), cur_price, ma10))
+                    execute_stop(code, context, current_data)
+                    force_stopped.add(code)
+                else:
+                    log.info('[止损豁免] %s 得分%.1f 回撤%.1f%%<%.0f%% 保留持仓' % (
+                        code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
             else:
                 log.info('[止损豁免超限] %s 得分%.1f 回撤%.1f%%>=%.0f%% 强制止损' % (
                     code, g.holding_scores.get(code, 0), dd * 100, max_exempt_dd * 100))
