@@ -164,29 +164,35 @@ Three optimization attempts, two succeeded:
 | V2.4 | 2010-2014 (out) | 2万 | +37% | ~6.4% | ~8.5% | — | — |
 | **V2.5** | **2015-2026** | **2万** | **+306.2%** | **13.8%** | **12.85%** | **0.809** | **—** |
 | V2.5 | 2010-2014 (out) | 2万 | +37.64% | 6.81% | 6.64% | 0.405 | — |
-| **V2.6** | **2015-2026** | **2万** | **+348.8%** | **14.82%** | **15.21%** | **0.904** | **—** |
+| **V2.6** | **2015-2026** | **2万** | **+372%** | **15.4%** | **14.4%** | **0.957** | **—** |
 
 ### V2.5→V2.6 Iteration (2026-05, on JoinQuant)
 
-**Adopted changes:**
+**Final adopted (4 changes):**
 
-1. **资本档位优化** (+8pp): medium base_ratio 0.60→0.65, large max_hold 4→3 + base_ratio 0.55→0.65. Higher capital utilization, fewer but higher-quality positions in large tier. **Unified max_hold=3 works because ETF prices are low.**
+1. **利润分段ATR收紧** (**+28pp**, highest single improvement): ATR multiplier tightens as profit grows — normal (2.5x) when profit<5%, moderate (2.0x) at 5-15%, tight (1.5x) at >15%. Prevents large accumulated profits from evaporating in grinding declines. **Lesson: risk management should adapt to profit cushion, not just volatility.**
 
-2. **利润分段ATR收紧** (**+28pp**, highest single improvement): ATR multiplier tightens as profit grows — normal (2.5x) when profit<5%, moderate (2.0x) at 5-15%, tight (1.5x) at >15%. Prevents large accumulated profits from evaporating in grinding declines (the 513500 scenario: +104%→-49%). Does NOT affect afternoon 4.0x override. **Lesson: risk management should adapt to profit cushion, not just volatility.**
+2. **资本档位优化** (+8pp): medium base_ratio 0.60→0.65, large max_hold 4→3 + base_ratio 0.55→0.65. Higher capital utilization, unified max_hold=3.
 
-3. **14:45午盘止损 4.0x ATR** (+6.6pp, borderline): Second daily stop check using wider 4.0x ATR multiplier. Triggers ~2x/year on genuine intraday crash days. Pure risk management pass — no scoring, no exemption. Marginal benefit but zero-cost insurance. Uses 4th of 5 PTrade scheduling slots.
+3. **RSI >80极值修正** (+1pp): 55→70. Trend-following should not penalize extreme strength.
 
-4. **档位5%迟滞**: Upgrade requires total > threshold+5%, downgrade requires total < threshold-5%. Eliminates flickering at tier boundaries (e.g. 5万附近反复横跳). Only 1 tier change in 11yr backtest (small→medium at 5.3万).
+4. **MA10趋势止损** (夏普+0.009/回撤-0.8pp): Before exempting an ATR stop, check if price < MA10 and MA10 declining. If short-term trend is broken, deny exemption and execute stop. Replaced both DD 20% and 10% stop-exemption-cap — simpler and more precise.
 
-5. **20%极端DD止损**: After-close check — if drawdown from highest >20%, force stop regardless of score or ATR. Triggers ~1x/11yr (513500 49% case). 10% threshold tested but caused -16pp from selling at bottoms. **Lesson: bare DD stop at 10% is too tight for ETFs — 20% catches only the truly extreme.**
+**Tested and removed (proved unnecessary with MA10 present):**
 
-**Tested and reverted:**
+5. **14:45午盘止损**: Removed — MA10 provides adequate same-day protection; afternoon check was redundant.
+6. **20%极端DD止损**: Removed — MA10 catches trend breakdowns earlier than a raw DD threshold.
+7. **10%止损豁免上限**: Removed — MA10 trend check is more discerning than a fixed percentage.
+8. **档位5%迟滞**: Removed — unified max_hold=3 means tier changes barely affect behavior; simple thresholds are sufficient.
+9. **移动补仓**: Removed — triggered only 3 times in 11yr backtest; negligible benefit.
 
-6. **持仓门槛 55→60** (collaborates with other changes unpredictably): Raising old-holding keep threshold from 55 to 60 showed +5.6pp in one configuration but -66pp in another. Depends on interacting parameters. **Reverted — 55 is safer baseline.**
+**Tested and reverted (load-bearing parameters — DO NOT CHANGE):**
 
-7. **ROC周期实验** (14/15/25/blend — all worse than 20): Each deviation from ROC20 reduced returns. Shorter periods (14/15) increased noise trading; longer (25) improved bear-market returns but cost more in trending years. Dual-period blend (20+25) was worse than either alone. **ROC20 is optimal for this framework. Not a tunable parameter — it's load-bearing.**
-
-8. **Fast实验版** (全局加速): Shortened all indicator periods + lowered switch threshold to 5 + tightened stops to 8% DD + daily rebalance consideration. Result: **306%→75%, -231pp**. Proved that the strategy's value is in its SLOW filters — 3-day smoothing, 8pt switch threshold, 5-day min hold, 20-day momentum. **"慢就是快" confirmed experimentally.**
+- **8分换仓门槛**: 5分翻车, 6分翻车, 0分翻车. Load-bearing, not tunable.
+- **最低持仓5天**: 0天 = -48pp. Essential anti-whipsaw protection.
+- **持仓保留门槛 55分**: 60分 = -66pp. 55 is safer baseline.
+- **ROC20**: 14/15/25/blend all worse. Load-bearing.
+- **Fast实验版**: 全局加速 = -231pp. 慢就是快.
 
 ### vs V15.9-Hybrid (ROC+LR daily rotation)
 Direct A/B test on same period (2015-2026, 2万起始):
@@ -199,22 +205,11 @@ Direct A/B test on same period (2015-2026, 2万起始):
 
 ### V2.6后续优化实验（2026-05）
 
-10项实验中3项成功、7项失败：
+15+项实验中4项成功：利润分段ATR、资本档位优化、RSI极值修正、MA10趋势止损。其余全部失败或移除（DD 20%、14:45午盘、10%豁免上限、档位迟滞、移动补仓、换仓门槛调参、最低持有调参、信号分档仓位、动态减仓、得分动量、KDJ超卖惩罚、布林squeeze等）。
 
-| 实验 | 收益变化 | 结论 |
-|------|:--:|------|
-| RSI极值修正（>80: 55→70）| +1pp ✅ | 消除趋势策略惩罚趋势的矛盾 |
-| 去移动补仓 | +2.2pp ✅ | 趋势策略不需要仓位再平衡，补仓=追高+摩擦成本 |
-| MA10趋势止损（止损豁免前检查MA10） | -0.6pp ✅ | 收益微降，但夏普+0.008、回撤-0.76pp，风险调整后提升 |
-| 熊市分级（严重/温和） | -31pp | 熊市危险在"久"不在"深" |
-| 换仓门槛差异化（盈利仓提高门槛） | -77pp | 评分已含所需信息，叠加盈亏是冗余冲突 |
-| 去中概互联（513050） | -31pp | 37%止损率的ETF仍有正分散价值 |
-| 去成交量因子 | -53pp | 弱因子在边缘决策中充当tiebreaker |
-| 新增波动率质量因子 | -135pp | 低波偏好与动量因子系统性对冲 |
-| ATR利润锁死（峰值决定收紧） | -11pp | 回落松绑不是bug，是给趋势呼吸空间 |
-| ATR软着陆（峰值×0.7地板） | -13pp | 同上 |
+**铁律：8分换仓门槛、5天最低持有、ROC20、55分保留门槛——这四个参数动任何一个都翻车。** 14:45午盘和DD 20%在MA10趋势止损存在时是冗余的。
 
-**核心教训：V2.6在当前框架下已高度优化，剩余边际空间极小。** 该策略的价值在于其"慢"设计——离散分档、3日平滑、8分门槛、5日最低持仓。任何试图"聪明"一点的改动几乎都会破坏这个平衡。
+**核心教训：该策略的价值在于其"慢"设计——离散分档、3日平滑、8分门槛、5日最低持仓。任何试图"聪明"一点的改动几乎都会破坏这个平衡。372%/0.96夏普距离这个框架的理论天花板（~375%）已非常接近。**
 
 ## Chinese Variable Reference
 
