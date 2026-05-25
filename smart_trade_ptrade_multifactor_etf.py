@@ -265,13 +265,17 @@ def _get_current_price(code):
 
 
 def _get_premium(code):
-    """获取ETF溢价率（仅限基金类标的，实盘用iopv计算）"""
+    """获取ETF溢价率（实盘用iopv计算，复用_last_snapshot缓存避免重复调用get_snapshot）"""
     if not g.__is_live:
         return 0.0
     try:
-        snap = get_snapshot(code)
-        if snap and code in snap:
-            snap = snap[code]
+        snap = g.__last_snapshot.get(code)
+        if not snap or not snap.get('iopv'):
+            snap = get_snapshot(code)
+            if snap and code in snap:
+                snap = snap[code]
+            if snap:
+                g.__last_snapshot[code] = snap
         if snap:
             iopv = snap.get('iopv', 0)
             last_px = snap.get('last_px', 0)
