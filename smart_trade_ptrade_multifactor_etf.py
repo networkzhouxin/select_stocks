@@ -101,6 +101,15 @@ def initialize(context):
         'switch_threshold': 8.0,
     }
 
+    # ---- 溢价过滤（仅实盘买入时生效）----
+    g.premium_limits = {
+        '513100': 0.08,   # 纳指ETF：核心QDII需求大
+        '513500': 0.07,   # 标普500ETF：波动低于纳指
+        '159920': 0.05,   # 恒生ETF：有港股通替代
+        '513880': 0.07,   # 日经ETF：流动性不如纳指
+        '513050': 0.10,   # 中概互联ETF：跨市场套利限制天然溢价高
+    }
+
     # ---- 因子权重 ----
     g.base_weights = {
         'rsi': 0.12,
@@ -253,6 +262,30 @@ def _get_current_price(code):
     except Exception:
         pass
     return None
+
+
+def _get_premium(code):
+    """获取ETF溢价率（仅限基金类标的，实盘用iopv计算）"""
+    if not g.__is_live:
+        return 0.0
+    try:
+        snap = get_snapshot(code)
+        if snap and code in snap:
+            snap = snap[code]
+        if snap:
+            iopv = snap.get('iopv', 0)
+            last_px = snap.get('last_px', 0)
+            if iopv and float(iopv) > 0 and last_px and float(last_px) > 0:
+                return (float(last_px) - float(iopv)) / float(iopv)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _get_premium_limit(code):
+    """获取标的高溢价过滤阈值（仅QDII ETF，境外额度稀缺易溢价）"""
+    code_base = code.split('.')[0]
+    return g.premium_limits.get(code_base, 0.0)  # 不在列表中的不检查（返回0→永不过滤）
 
 
 def _is_paused(code):
@@ -867,6 +900,14 @@ def _do_trading(context):
 
             price = _get_current_price(code)
             if price is None or price <= 0:
+                continue
+
+            # 溢价过滤：实盘QDII/黄金/豆粕高溢价时不买
+            premium = _get_premium(code)
+            limit = _get_premium_limit(code)
+            if premium > limit:
+                log.info('[溢价过滤] %s 溢价%.1f%%>%.0f%% 跳过买入' % (
+                    code, premium * 100, limit * 100))
                 continue
 
             sig = sig_map[code]
