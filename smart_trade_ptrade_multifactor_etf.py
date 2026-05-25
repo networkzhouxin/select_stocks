@@ -851,7 +851,9 @@ def _do_trading(context):
             _available_cash(context), sold_proceeds, available))
     else:
         available = _available_cash(context)
-    slots = max_hold - len(set(current_holds.keys()) & target_codes)
+    actual_hold_count = len([c for c in _positions(context)
+                             if _pos_amount(_positions(context)[c]) > 0])
+    slots = max_hold - actual_hold_count
     base_ratio = _get_tier_param('base_ratio')
 
     # 新买入
