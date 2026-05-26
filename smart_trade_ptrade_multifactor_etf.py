@@ -747,12 +747,25 @@ def _do_trading(context):
         score_close_map = {}
         for r in all_results:
             score_close_map[r['code']] = (r['final_score'], r['close'])
-        held = [(c, score_close_map.get(c, (0, 0))) for c in positions
-                if _pos_amount(positions[c]) > 0]
+        held = []
+        for c in positions:
+            if _pos_amount(positions[c]) <= 0:
+                continue
+            if _is_paused(c):
+                held.append((c, '停牌', True))
+            elif c in score_close_map:
+                held.append((c, score_close_map[c], False))
+            else:
+                held.append((c, (0, 0), False))
         if held:
-            held.sort(key=lambda x: x[1][0], reverse=True)
-            log.info('[持仓得分] %s' % ' | '.join(
-                '%s:%.1f(T-1收盘:%.3f)' % (c, sc[0], sc[1]) for c, sc in held))
+            held.sort(key=lambda x: 0 if x[2] else x[1][0], reverse=True)
+            parts = []
+            for c, sc, paused in held:
+                if paused:
+                    parts.append('%s:停牌' % c)
+                else:
+                    parts.append('%s:%.1f(T-1收盘:%.3f)' % (c, sc[0], sc[1]))
+            log.info('[持仓得分] %s' % ' | '.join(parts))
 
     # 5. 换仓逻辑
     threshold = g.params['score_buy_threshold']
