@@ -881,6 +881,7 @@ def _do_trading(context):
 
             price = _get_current_price(code)
             if price is None or price <= 0:
+                log.warning('[买入跳过] %s 获取实时价失败 price=%s' % (code, price))
                 continue
 
             sig = sig_map[code]
