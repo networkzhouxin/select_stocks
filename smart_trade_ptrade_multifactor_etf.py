@@ -865,7 +865,8 @@ def _do_trading(context):
     else:
         available = _available_cash(context)
     actual_hold_count = len([c for c in _positions(context)
-                             if _pos_amount(_positions(context)[c]) > 0])
+                             if _pos_amount(_positions(context)[c]) > 0
+                             and not g.sold_today.get(c, False)])
     slots = max_hold - actual_hold_count
     base_ratio = _get_tier_param('base_ratio')
 
