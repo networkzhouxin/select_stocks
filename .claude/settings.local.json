@@ -9,7 +9,8 @@
       "Grep",
       "WebSearch",
       "WebFetch(domain:180.169.107.9)",
-      "PowerShell(cmdkey *)"
+      "PowerShell(cmdkey *)",
+      "PowerShell(\\(Get-Content 'D:\\\\test\\\\select_stocks\\\\logs\\\\201511-2026312.txt' | Measure-Object -Line\\).Lines)"
     ]
   },
   "disabledMcpjsonServers": [

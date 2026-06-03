@@ -132,10 +132,12 @@ def initialize(context):
         g.__is_live = is_trade()
     except Exception:
         g.__is_live = False
+    g.paused_holds = set()
 
     if g.__is_live:
         run_daily(context, _update_tier_wrapper, time='09:30')
         run_daily(context, _do_trading_wrapper, time='09:35')
+        run_daily(context, _halt_recover_wrapper, time='10:35')
         run_daily(context, _after_close_wrapper, time='15:30')
 
 
@@ -152,6 +154,7 @@ def before_trading_start(context, data):
     g.__data = data
     g.sold_today = {}
     g.__last_snapshot = {}
+    g.paused_holds = set()
     log.info('[盘前] 清理缓存完毕')
 
     if g.__pending_orders:
@@ -204,7 +207,67 @@ def _after_close_wrapper(context):
     g.sold_today = {}
 
 
+def _halt_recover_wrapper(context):
+    _halt_recover(context)
+
+
 # ============================================================
+#  10:35 停牌恢复处理
+# ============================================================
+def _halt_recover(context):
+    if not g.paused_holds:
+        return
+
+    today = context.blotter.current_dt.date()
+    positions = _positions(context)
+
+    recovered = []
+    for code in list(g.paused_holds):
+        if not _is_paused(code):
+            recovered.append(code)
+            g.paused_holds.discard(code)
+
+    still_paused = [c for c in g.paused_holds]
+    if still_paused:
+        log.info('[停牌恢复] 仍在停牌: %s' % ', '.join(still_paused))
+
+    if not recovered:
+        return
+
+    log.info('[停牌恢复] 已恢复交易: %s' % ', '.join(recovered))
+
+    # 检查恢复的持仓是否需要止损
+    stop_triggered = []
+    for code in recovered:
+        if code not in positions or _pos_amount(positions[code]) <= 0:
+            continue
+        if code not in g.highest_since_buy or code not in g.entry_atr:
+            continue
+        cur_price = _get_current_price(code)
+        if cur_price is None:
+            continue
+        cost = _pos_cost(positions[code])
+        pnl = (cur_price - cost) / cost if cost > 0 else 0
+        stop_price = _calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], None, pnl)
+        if cur_price <= stop_price:
+            stop_triggered.append(code)
+
+    is_rebalance = today.weekday() in g.params['rebalance_weekdays']
+
+    # 非轮动日只查止损（紧急），得分轮动等下一个轮动日处理
+    # 轮动日直接走完整交易（停牌耽误了正常轮动，补回来）
+    if stop_triggered or is_rebalance:
+        reason_parts = []
+        if stop_triggered:
+            reason_parts.append('止损:%s' % ','.join(stop_triggered))
+        if is_rebalance:
+            reason_parts.append('轮动日')
+        log.info('[停牌恢复] 触发完整交易: %s' % ' | '.join(reason_parts))
+        _do_trading(context)
+    else:
+        log.info('[停牌恢复] 恢复标的不需操作，继续持有')
+
+
 #  Portfolio/Position兼容层
 # ============================================================
 def _total_value(context):
@@ -683,6 +746,11 @@ def _do_trading(context):
 
     # 4. 全池评分
     all_results = []
+    # 记录停牌的持仓，供10:35恢复处理
+    positions_snapshot = _positions(context)
+    for code in positions_snapshot:
+        if _pos_amount(positions_snapshot[code]) > 0 and _is_paused(code):
+            g.paused_holds.add(code)
     for code in g.etf_pool:
         if _is_paused(code):
             continue
