@@ -1219,7 +1219,7 @@ def _after_close(context):
         score = g.holding_scores.get(code, 0)
         atr_val = g.entry_atr.get(code, None)
         if atr_val is not None and highest > 0:
-            stop_price = _calc_stop_price(highest, atr_val)
+            stop_price = _calc_stop_price(highest, atr_val, profit_pct=pnl / 100 if pnl > 0 else None)
             log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f ATR:%.4f 止损价:%.3f' % (
                 code, cost, cur, highest, pnl, score, atr_val, stop_price))
         else:
