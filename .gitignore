@@ -43,3 +43,11 @@ target
 
 # AsciiDoc
 spring-cloud-alibaba-docs/**/*.html
+
+# Claude Code local state
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock
+
+# Walkforward cached data (regeneratable)
+walkforward/data/
+walkforward/__pycache__/
