@@ -19,6 +19,10 @@ ETF_POOL = ['510300', '159915', '512100', '159928', '510880',
             '513100', '513500', '159920', '513880', '513050',
             '518880', '159985']
 A_SHARE_CODES = {'510300', '159915', '512100', '159928', '510880'}
+# 模块级评分缓存，跨 Engine 实例共享，大幅加速参数扫描
+_score_cache = {}
+def clear_score_cache():
+    _score_cache.clear()
 
 DEFAULT_PARAMS = {
     'lookback': 120, 'rebalance_weekdays': [1, 3], 'min_hold_days': 5,
@@ -239,13 +243,19 @@ class Engine:
         if not is_rebalance and not stop_triggered:
             return
 
-        # 4. 全池评分（T-1数据）
+        # 4. 全池评分（T-1数据），带缓存：同一(ETF,日期,momentum)只算一次
         all_results = []
+        mp = p['momentum_period']
         for code in ETF_POOL:
-            if not self._has_bar(code, today):  # 当日停牌，与聚宽 paused 跳过对齐
+            if not self._has_bar(code, today):
                 continue
-            hist = self._hist(code, prev_date, p['lookback'])
-            r = calc_multi_factor_score(hist, p, BASE_WEIGHTS)
+            ck = (code, prev_date, mp)
+            if ck in _score_cache:
+                r = _score_cache[ck]
+            else:
+                hist = self._hist(code, prev_date, p['lookback'])
+                r = calc_multi_factor_score(hist, p, BASE_WEIGHTS)
+                _score_cache[ck] = r
             if r is not None:
                 r['code'] = code
                 all_results.append(r)
