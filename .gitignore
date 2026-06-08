@@ -48,6 +48,5 @@ spring-cloud-alibaba-docs/**/*.html
 .claude/scheduled_tasks.json
 .claude/scheduled_tasks.lock
 
-# Walkforward cached data (regeneratable)
-walkforward/data/
+# Walkforward pycache
 walkforward/__pycache__/
