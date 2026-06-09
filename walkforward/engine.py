@@ -27,15 +27,15 @@ def clear_score_cache():
 DEFAULT_PARAMS = {
     'lookback': 120, 'rebalance_weekdays': [1, 3], 'min_hold_days': 5,
     'smooth_days': 3, 'rsi_period': 14, 'macd_fast': 12, 'macd_slow': 26,
-    'macd_signal': 9, 'bb_period': 20, 'bb_std': 2.0, 'kdj_n': 9,
+    'macd_signal': 9, 'bb_period': 25, 'bb_std': 1.8, 'kdj_n': 9,
     'kdj_m1': 3, 'kdj_m2': 3, 'momentum_period': 20, 'vol_ma_period': 20,
     'atr_period': 14, 'trailing_atr_mult': 2.5, 'trailing_atr_mult_high_vol': 2.0,
-    'high_vol_threshold': 0.30, 'stop_floor': 0.03, 'stop_cap': 0.15,
+    'high_vol_threshold': 0.30, 'stop_floor': 0.05, 'stop_cap': 0.15,
     'score_buy_threshold': 60, 'switch_threshold': 8.0,
     'hold_threshold': 55,   # 聚宽派生值 score_buy_threshold-5；本地做成独立参数
 }
-BASE_WEIGHTS = {'rsi': 0.12, 'macd': 0.18, 'bollinger': 0.10, 'momentum': 0.25,
-                'volume': 0.08, 'kdj': 0.12, 'ma_trend': 0.15}
+BASE_WEIGHTS = {'rsi': 0.112, 'macd': 0.167, 'bollinger': 0.093, 'momentum': 0.232,
+                'volume': 0.074, 'kdj': 0.112, 'ma_trend': 0.21}
 
 COMMISSION = 0.0003
 MIN_COMMISSION = 5.0
@@ -81,16 +81,21 @@ def calc_stop_price(highest, atr_val, params, atr_mult_override=None, profit_pct
 
 
 class Engine:
-    def __init__(self, data, bench, params=None, init_cash=20000.0, verbose=False):
+    def __init__(self, data, bench, params=None, init_cash=20000.0, verbose=False,
+                 code_params=None, code_weights=None):
         """
         data: {code: DataFrame(index=date, cols open/close/high/low/volume)}  前复权
         bench: Series(index=date) 000300指数收盘价，用于熊市检测
+        code_params: {code: {param_overrides}}  按品种覆盖参数（如 {'513100': {'momentum_period': 15}}）
+        code_weights: {code: {factor_weights}}  按品种覆盖因子权重
         """
         self.data = data
         self.bench = bench
         self.p = dict(DEFAULT_PARAMS)
         if params:
             self.p.update(params)
+        self.code_params = code_params or {}
+        self.code_weights = code_weights or {}
         self.init_cash = init_cash
         self.verbose = verbose
 
@@ -234,7 +239,9 @@ class Engine:
             cur = self._price(code, today, 'open')
             if code in self.highest and code in self.entry_atr:
                 pnl = (cur - pos['cost']) / pos['cost'] if pos['cost'] > 0 else 0
-                sp = calc_stop_price(self.highest[code], self.entry_atr[code], p, None, pnl)
+                cp = self.code_params.get(code, {})
+                ep = dict(p); ep.update(cp)
+                sp = calc_stop_price(self.highest[code], self.entry_atr[code], ep, None, pnl)
                 if cur <= sp:
                     stop_triggered.append(code)
 
@@ -243,19 +250,30 @@ class Engine:
         if not is_rebalance and not stop_triggered:
             return
 
-        # 4. 全池评分（T-1数据），带缓存：同一(ETF,日期,momentum)只算一次
+        # 4. 全池评分（T-1数据），带缓存；支持按品种覆盖参数/权重
         all_results = []
-        mp = p['momentum_period']
         for code in ETF_POOL:
             if not self._has_bar(code, today):
                 continue
-            ck = (code, prev_date, mp)
-            if ck in _score_cache:
-                r = _score_cache[ck]
-            else:
-                hist = self._hist(code, prev_date, p['lookback'])
-                r = calc_multi_factor_score(hist, p, BASE_WEIGHTS)
-                _score_cache[ck] = r
+            cp = self.code_params.get(code, {})
+            cw = self.code_weights.get(code, None)
+            eff_p = dict(p)
+            eff_w = BASE_WEIGHTS if cw is None else cw
+            eff_p.update(cp)
+            mp = eff_p['momentum_period']
+            # 有品种级覆盖时不走缓存（参数/权重可能不同）
+            if not cp and cw is None:
+                ck = (code, prev_date, mp)
+                if ck in _score_cache:
+                    r = _score_cache[ck]
+                    if r is not None:
+                        r['code'] = code
+                        all_results.append(r)
+                    continue
+            hist = self._hist(code, prev_date, eff_p['lookback'])
+            r = calc_multi_factor_score(hist, eff_p, eff_w)
+            if not cp and cw is None:
+                _score_cache[(code, prev_date, mp)] = r
             if r is not None:
                 r['code'] = code
                 all_results.append(r)

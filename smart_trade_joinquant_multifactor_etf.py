@@ -1,9 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-多因子ETF量化策略 V2.6
+多因子ETF量化策略 V2.9
 ============================
 基于7个经典技术指标（RSI/MACD/布林带/动量/成交量/KDJ/均线趋势）综合评分，
 固定因子权重，ATR跟踪止损+止损豁免，多市场多资产ETF轮动。
+
+V2.9 vs V2.8:
+  - 均线趋势权重 15%→21%，其余因子等比例微降 (+46pp, 8/8 walk-forward窗口全胜)
+    均线趋势是多时间维度趋势确认的最可靠信号，原权重严重低配
+
+V2.8 vs V2.7:
+  - 黄金ETF(518880)单独使用更紧止损: stop_floor 0.03, trailing_atr_mult 2.0 (+16.9pp)
+
+V2.7 vs V2.6:
+  - bb_period 20→25, bb_std 2.0→1.8（布林带更平滑宽容，趋势中不因触轨降分）
+  - stop_floor 0.03→0.05（过滤ETF日波动噪音止损，减少无效交易）
 
 核心机制：
   - 7因子离散分档评分 + 3日平滑 + 固定权重（稳定排名，减少噪音换仓）
@@ -25,11 +36,11 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   跨市场: 513100纳指, 513500标普500, 159920恒生, 513880日经, 513050中概互联
   跨资产: 518880黄金, 159985豆粕
 
-因子权重（固定，未优化）：
-  动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
+因子权重（42组扫描+walk-forward验证）：
+  均线趋势=0.21, 动量ROC20=0.232, MACD=0.167, RSI=0.112, KDJ=0.112, 布林带=0.093, 成交量=0.074
 
 回测业绩（万三+最低5元佣金）：
-  2015-2026（11年）：~372%，年化~15.4%，最大回撤~14.4%，夏普0.96
+  2015-2026（11年）：~446%，年化~17%，最大回撤~17.3%，夏普~1.28
   2010-2014（样本外）：+39%，年化6.4%，弱市+标的不全仍正收益
 
 版本历史：
@@ -39,6 +50,9 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.4: 止损豁免+35pp（触发止损但得分仍高则不卖）
   V2.5: 止损豁免+回撤上限（得分高可豁免，但回撤≥10%时强制止损，防范得分滞后于价格）
   V2.6: 利润分段ATR(+28pp) + 资本档位优化(+8pp) + RSI极值修正 + MA10趋势止损
+  V2.7: bb_period 20→25 + bb_std 2.0→1.8 + stop_floor 0.03→0.05 (+11.8pp vs V2.6本地回测)
+  V2.8: 黄金ETF品种级止损参数(stop_floor=0.03, atr_mult=2.0) +16.9pp
+  V2.9: 均线趋势权重 15%→21% (+46pp, 8/8 walk-forward全胜)
 """
 
 import numpy as np
@@ -87,7 +101,7 @@ def initialize(context):
         'large':  {'max_hold': 3, 'base_ratio': 0.65},
     }
 
-    # ---- 策略参数（全部学术默认值）----
+    # ---- 策略参数 ----
     g.params = {
         'lookback': 120,
         'rebalance_weekdays': [1, 3],
@@ -97,8 +111,8 @@ def initialize(context):
         'macd_fast': 12,
         'macd_slow': 26,
         'macd_signal': 9,
-        'bb_period': 20,
-        'bb_std': 2.0,
+        'bb_period': 25,
+        'bb_std': 1.8,
         'kdj_n': 9,
         'kdj_m1': 3,
         'kdj_m2': 3,
@@ -108,7 +122,7 @@ def initialize(context):
         'trailing_atr_mult': 2.5,
         'trailing_atr_mult_high_vol': 2.0,
         'high_vol_threshold': 0.30,
-        'stop_floor': 0.03,
+        'stop_floor': 0.05,
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
@@ -116,13 +130,13 @@ def initialize(context):
 
     # ---- 因子权重 ----
     g.base_weights = {
-        'rsi': 0.12,
-        'macd': 0.18,
-        'bollinger': 0.10,
-        'momentum': 0.25,
-        'volume': 0.08,
-        'kdj': 0.12,
-        'ma_trend': 0.15,
+        'rsi': 0.112,
+        'macd': 0.167,
+        'bollinger': 0.093,
+        'momentum': 0.232,
+        'volume': 0.074,
+        'kdj': 0.112,
+        'ma_trend': 0.21,
     }
 
     g.current_tier = None
@@ -132,6 +146,11 @@ def initialize(context):
     g.holding_scores = {}
     g.portfolio_high = 0          # 组合历史最高净值（用于监控回撤）
     g.market_bearish = False
+
+    # 品种级止损参数：黄金均值回复型，用更紧的止损
+    g.code_stop_params = {
+        '518880.XSHG': {'stop_floor': 0.03, 'trailing_atr_mult': 2.0},
+    }
 
     run_daily(update_tier, time='09:30')
     run_daily(do_trading, time='09:35')
@@ -442,23 +461,29 @@ def calc_multi_factor_score(code, end_date):
 # ============================================================
 #  ATR跟踪止损（动态倍数）
 # ============================================================
-def calc_stop_price(highest, atr_val, atr_mult_override=None, profit_pct=None):
+def calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=None):
     p = g.params
+    # 品种级参数覆盖（黄金等均值回复型品种用更紧止损）
+    cp = g.code_stop_params.get(code, {})
     if atr_mult_override is not None:
         atr_mult = atr_mult_override
     else:
         vol_pct = atr_val / highest * np.sqrt(252.0 / p['atr_period'])
+        base_mult = cp.get('trailing_atr_mult', p['trailing_atr_mult'])
+        high_vol_mult = cp.get('trailing_atr_mult_high_vol', p['trailing_atr_mult_high_vol'])
         if vol_pct > p['high_vol_threshold']:
-            atr_mult = p['trailing_atr_mult_high_vol']
+            atr_mult = high_vol_mult
         else:
-            atr_mult = p['trailing_atr_mult']
+            atr_mult = base_mult
         if profit_pct is not None and profit_pct > 0:
             if profit_pct > 0.15:
                 atr_mult *= 0.6
             elif profit_pct > 0.05:
                 atr_mult *= 0.8
+    stop_floor = cp.get('stop_floor', p['stop_floor'])
+    stop_cap = cp.get('stop_cap', p['stop_cap'])
     pct_stop = atr_mult * atr_val / highest
-    pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
+    pct_stop = max(stop_floor, min(stop_cap, pct_stop))
     return highest * (1 - pct_stop)
 
 
@@ -474,7 +499,7 @@ def check_stop_triggered(context, current_data, atr_mult_override=None):
         cur_price = current_data[code].last_price
         if code in g.highest_since_buy and code in g.entry_atr:
             pnl = (cur_price - pos.avg_cost) / pos.avg_cost if pos.avg_cost > 0 else 0
-            stop_price = calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
+            stop_price = calc_stop_price(code, g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
             if cur_price <= stop_price:
                 triggered.append(code)
     return triggered

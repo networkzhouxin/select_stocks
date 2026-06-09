@@ -26,6 +26,7 @@ WINDOWS = [
     ('2015-01-01', '2022-12-31', '2023-01-01', '2023-12-31'),
     ('2015-01-01', '2023-12-31', '2024-01-01', '2024-12-31'),
     ('2015-01-01', '2024-12-31', '2025-01-01', '2025-12-31'),
+    ('2015-01-01', '2025-12-31', '2026-01-01', '2026-03-11'),
 ]
 
 # 单参数扫描：每次只变1个参数
@@ -228,20 +229,20 @@ def main():
 
     # 预计算全部评分（一次性），之后所有窗口查表即用
     print('预计算评分...')
-    precompute_all(data, bench)
+    precompute_all(data, bench, end='2026-03-11')
 
     all_results = []
     window_times = []
     for i, win in enumerate(WINDOWS):
         wl = f'Train{win[0][:4]}-{win[1][:4]} Test{win[2][:4]}'
-        print(f'\n[{i+1}/7] {wl}')
+        print(f'\n[{i+1}/8] {wl}')
         t1 = time.time()
         wl, wo = scan_window(win, base)
         elapsed = time.time() - t1
         window_times.append(elapsed)
         all_results.append((wl, wo))
         avg_time = np.mean(window_times)
-        remaining = avg_time * (7 - i - 1)
+        remaining = avg_time * (8 - i - 1)
         print(f'  耗时: {elapsed:.0f}s | 预计剩余: {remaining/60:.0f}min')
 
     analyze(all_results)
