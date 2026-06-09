@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-多因子ETF量化策略 V2.9
+多因子ETF量化策略 V2.10
 ============================
 基于7个经典技术指标（RSI/MACD/布林带/动量/成交量/KDJ/均线趋势）综合评分，
 固定因子权重，ATR跟踪止损+止损豁免，多市场多资产ETF轮动。
+
+V2.10 vs V2.9:
+  - 均线趋势权重 21%→24%，Walk-Forward验证(8窗口) 24%在7/8年OOS优于22%
+    近3个窗口训练最优均为24%，OOS曲线平坦但24%一致性最高
 
 V2.9 vs V2.8:
   - 均线趋势权重 15%→21%，其余因子等比例微降 (+46pp, 8/8 walk-forward窗口全胜)
@@ -53,6 +57,7 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   V2.7: bb_period 20→25 + bb_std 2.0→1.8 + stop_floor 0.03→0.05 (+11.8pp vs V2.6本地回测)
   V2.8: 黄金ETF品种级止损参数(stop_floor=0.03, atr_mult=2.0) +16.9pp
   V2.9: 均线趋势权重 15%→21% (+46pp, 8/8 walk-forward全胜)
+  V2.10: 均线趋势权重 21%→24%，Walk-Forward验证 24% OOS最优(7/8年胜22%)
 """
 
 import numpy as np
@@ -130,13 +135,13 @@ def initialize(context):
 
     # ---- 因子权重 ----
     g.base_weights = {
-        'rsi': 0.112,
-        'macd': 0.167,
-        'bollinger': 0.093,
-        'momentum': 0.232,
-        'volume': 0.074,
-        'kdj': 0.112,
-        'ma_trend': 0.21,
+        'rsi': 0.108,
+        'macd': 0.161,
+        'bollinger': 0.089,
+        'momentum': 0.223,
+        'volume': 0.071,
+        'kdj': 0.108,
+        'ma_trend': 0.24,
     }
 
     g.current_tier = None

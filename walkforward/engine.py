@@ -32,10 +32,15 @@ DEFAULT_PARAMS = {
     'atr_period': 14, 'trailing_atr_mult': 2.5, 'trailing_atr_mult_high_vol': 2.0,
     'high_vol_threshold': 0.30, 'stop_floor': 0.05, 'stop_cap': 0.15,
     'score_buy_threshold': 60, 'switch_threshold': 8.0,
-    'hold_threshold': 55,   # 聚宽派生值 score_buy_threshold-5；本地做成独立参数
+    'hold_threshold': 55,   # 与买入门槛差5分惯性保护（WF验证：OOS +1.4pp，微弱正贡献）
 }
-BASE_WEIGHTS = {'rsi': 0.112, 'macd': 0.167, 'bollinger': 0.093, 'momentum': 0.232,
-                'volume': 0.074, 'kdj': 0.112, 'ma_trend': 0.21}
+BASE_WEIGHTS = {'rsi': 0.108, 'macd': 0.161, 'bollinger': 0.089, 'momentum': 0.223,
+                'volume': 0.071, 'kdj': 0.108, 'ma_trend': 0.24}
+
+# 品种级止损参数（对齐聚宽 g.code_stop_params）
+DEFAULT_CODE_PARAMS = {
+    '518880': {'stop_floor': 0.03, 'trailing_atr_mult': 2.0},  # 黄金ETF：均值回复型，宽止损不适用
+}
 
 COMMISSION = 0.0003
 MIN_COMMISSION = 5.0
@@ -82,20 +87,25 @@ def calc_stop_price(highest, atr_val, params, atr_mult_override=None, profit_pct
 
 class Engine:
     def __init__(self, data, bench, params=None, init_cash=20000.0, verbose=False,
-                 code_params=None, code_weights=None):
+                 code_params=None, code_weights=None, score_map=None):
         """
         data: {code: DataFrame(index=date, cols open/close/high/low/volume)}  前复权
         bench: Series(index=date) 000300指数收盘价，用于熊市检测
         code_params: {code: {param_overrides}}  按品种覆盖参数（如 {'513100': {'momentum_period': 15}}）
         code_weights: {code: {factor_weights}}  按品种覆盖因子权重
+        score_map: {(code, date): {final_score, atr, volatility, roc, close, ...}}
+                   外部注入评分，跳过内部计算和缓存
         """
         self.data = data
         self.bench = bench
         self.p = dict(DEFAULT_PARAMS)
         if params:
             self.p.update(params)
-        self.code_params = code_params or {}
+        self.code_params = dict(DEFAULT_CODE_PARAMS)
+        if code_params:
+            self.code_params.update(code_params)
         self.code_weights = code_weights or {}
+        self.score_map = score_map
         self.init_cash = init_cash
         self.verbose = verbose
 
@@ -252,31 +262,41 @@ class Engine:
 
         # 4. 全池评分（T-1数据），带缓存；支持按品种覆盖参数/权重
         all_results = []
-        for code in ETF_POOL:
-            if not self._has_bar(code, today):
-                continue
-            cp = self.code_params.get(code, {})
-            cw = self.code_weights.get(code, None)
-            eff_p = dict(p)
-            eff_w = BASE_WEIGHTS if cw is None else cw
-            eff_p.update(cp)
-            mp = eff_p['momentum_period']
-            # 有品种级覆盖时不走缓存（参数/权重可能不同）
-            if not cp and cw is None:
-                ck = (code, prev_date, mp)
-                if ck in _score_cache:
-                    r = _score_cache[ck]
-                    if r is not None:
-                        r['code'] = code
-                        all_results.append(r)
+        if self.score_map is not None:
+            for code in ETF_POOL:
+                if not self._has_bar(code, today):
                     continue
-            hist = self._hist(code, prev_date, eff_p['lookback'])
-            r = calc_multi_factor_score(hist, eff_p, eff_w)
-            if not cp and cw is None:
-                _score_cache[(code, prev_date, mp)] = r
-            if r is not None:
-                r['code'] = code
-                all_results.append(r)
+                r = self.score_map.get((code, prev_date))
+                if r is not None:
+                    r = dict(r)
+                    r['code'] = code
+                    all_results.append(r)
+        else:
+            for code in ETF_POOL:
+                if not self._has_bar(code, today):
+                    continue
+                cp = self.code_params.get(code, {})
+                cw = self.code_weights.get(code, None)
+                eff_p = dict(p)
+                eff_w = BASE_WEIGHTS if cw is None else cw
+                eff_p.update(cp)
+                mp = eff_p['momentum_period']
+                # 有品种级覆盖时不走缓存（参数/权重可能不同）
+                if not cp and cw is None:
+                    ck = (code, prev_date, mp)
+                    if ck in _score_cache:
+                        r = _score_cache[ck]
+                        if r is not None:
+                            r['code'] = code
+                            all_results.append(r)
+                        continue
+                hist = self._hist(code, prev_date, eff_p['lookback'])
+                r = calc_multi_factor_score(hist, eff_p, eff_w)
+                if not cp and cw is None:
+                    _score_cache[(code, prev_date, mp)] = r
+                if r is not None:
+                    r['code'] = code
+                    all_results.append(r)
 
         if not all_results:
             for code in stop_triggered:

@@ -203,4 +203,8 @@ def calc_multi_factor_score(df, params, base_weights):
         'final_score': final_score,
         'roc': roc, 'close': cur,
         'atr': atr_val, 'volatility': vol, 'rsi': rsi_val,
+        'rsi_score': rsi_score, 'macd_score': macd_score,
+        'bollinger_score': bb_score, 'momentum_score': mom_score,
+        'volume_score': vol_score, 'kdj_score': kdj_score,
+        'ma_trend_score': ma_score,
     }

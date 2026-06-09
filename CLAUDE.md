@@ -280,10 +280,31 @@ Direct A/B test on same period (2015-2026, 2万起始):
 
 **总结：信号端优化已触达框架天花板。** V2.7(布林+stop_floor) + V2.8(黄金止损) + V2.9(均线权重) = 从 V2.6 的 344%→~446%，夏普 1.17→~1.30。后续优化方向应在执行端（QDII溢价检查、国债逆回购、最小交易额过滤）。
 
+### V2.10均线权重Walk-Forward微调（2026-06）
+
+**Walk-Forward验证（8窗口，28个MA权重值 8%-35%）：**
+- 各窗口训练集最优：前5窗选22%，后3窗选24%（随时间漂移，更近窗口指向更高权重）
+- OOS实际表现：24%在7/8年优于或平于22%，仅2026年输0.1pp
+- 平均OOS：24%(+16.7%) > 22%(+16.2%) > 21%(+16.1%)
+- **采纳 24%**（OOS一致性最高、近期窗口训练最优、与22%同处平坦区但方向更对）
+
+新权重：
+
+| 因子 | V2.9 | V2.10 | 变化 |
+|------|------|-------|------|
+| ma_trend | 21% | 24% | +3pp |
+| momentum | 23.2% | 22.3% | -0.9pp |
+| macd | 16.7% | 16.1% | -0.6pp |
+| rsi | 11.2% | 10.8% | -0.4pp |
+| kdj | 11.2% | 10.8% | -0.4pp |
+| bollinger | 9.3% | 8.9% | -0.4pp |
+| volume | 7.4% | 7.1% | -0.3pp |
+
+**验证结论：均线权重最优区间 20-27%。24%在OOS上一致性最优。但区间内任何选择差异<1pp，不敏感。**
+
 ## Pending Tasks
 
-- [ ] **PTrade同步到V2.9**：`smart_trade_ptrade_multifactor_etf.py` 需同步3项改动：(1)bb_period=25/bb_std=1.8/stop_floor=0.05 (2)黄金品种级止损 code_stop_params (3)均线趋势权重21%。参见 [[pending-work]]
-- [ ] **Walk-Forward MA峰值验证**：8窗口各自独立选最优MA权重，验证21%是否各窗口一致。实验被中断，脚本在 `walkforward/exp_wf_ma_peak.py`（可能需重建）。
+- [ ] **PTrade同步到V2.10**：`smart_trade_ptrade_multifactor_etf.py` 需同步所有改动：(1)bb_period=25/bb_std=1.8/stop_floor=0.05 (2)黄金品种级止损 code_stop_params (3)均线趋势权重24%
 
 ## Chinese Variable Reference
 

@@ -41,7 +41,10 @@ def precompute_all(data, bench, start='2015-01-01', end='2026-06-08'):
                     done += 1
                     continue
                 start_i = pos - params['lookback'] + 1
-                hist = df.iloc[start_i:pos + 1]
+                if start_i < 0:
+                    hist = df.iloc[:pos + 1]
+                else:
+                    hist = df.iloc[start_i:pos + 1]
                 r = calc_multi_factor_score(hist, params, base_weights)
                 _score_cache[ck] = r
                 done += 1
