@@ -280,6 +280,11 @@ Direct A/B test on same period (2015-2026, 2万起始):
 
 **总结：信号端优化已触达框架天花板。** V2.7(布林+stop_floor) + V2.8(黄金止损) + V2.9(均线权重) = 从 V2.6 的 344%→~446%，夏普 1.17→~1.30。后续优化方向应在执行端（QDII溢价检查、国债逆回购、最小交易额过滤）。
 
+## Pending Tasks
+
+- [ ] **PTrade同步到V2.9**：`smart_trade_ptrade_multifactor_etf.py` 需同步3项改动：(1)bb_period=25/bb_std=1.8/stop_floor=0.05 (2)黄金品种级止损 code_stop_params (3)均线趋势权重21%。参见 [[pending-work]]
+- [ ] **Walk-Forward MA峰值验证**：8窗口各自独立选最优MA权重，验证21%是否各窗口一致。实验被中断，脚本在 `walkforward/exp_wf_ma_peak.py`（可能需重建）。
+
 ## Chinese Variable Reference
 
 `买分`=buy score, `卖分`=sell score, `趋势分`=trend score, `趋势系数`=trend coefficient, `阳线`=bullish candle, `阴线`=bearish candle, `实体`=candle body, `量比`=volume ratio, `档位`=tier, `仓位`=position, `止损`=stop loss
