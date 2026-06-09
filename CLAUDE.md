@@ -20,7 +20,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_7_etf.py` — **V15.7 JoinQuant** (212.8% return, 10万起始, buy price fix + bond slot-filling, 10-ETF pool)
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
 - `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
-- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.7 JoinQuant** (~384% return, 2万起始, 7-factor scoring, 12-ETF pool. V2.5: 306.2%; V2.6: 372%)
+- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.10 JoinQuant** (+371.7%, 2万起始, 7-factor scoring, 12-ETF pool, 聚宽实测)
 - `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.10 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
 - `策略说明文档.md` — Complete strategy documentation for V15.x (Chinese)
@@ -66,21 +66,23 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **Persistence**: `g` is auto-pickled. Variables prefixed with `__` (e.g. `g.__is_live`) are excluded — use this for non-serializable objects. On restart, `initialize` runs first, then persisted data overwrites.
 - **Broker**: 国金证券 PTrade. API docs at `PTrade-API.html` (local copy).
 
-### Capital Tiers
+### Capital Tiers (Multi-Factor V2.10)
 
 | Tier | Total Assets | Max Holdings | Base Position |
 |------|-------------|--------------|---------------|
-| micro | <1.5万 | 1 | 85% |
-| small | 1.5-5万 | 2 | 70% |
-| medium | 5-10万 | 3 | 55% |
-| large | >10万 | 3 | 45% |
+| micro | <1.5万 | 3 | 70% |
+| small | 1.5-5万 | 3 | 70% |
+| medium | 5-10万 | 3 | 65% |
+| large | >10万 | 3 | 65% |
+
+> **V2.10**: Unified max_hold=3 for all tiers. ETF prices are low enough that even 2万 can hold 3 positions. The old tier restrictions (micro=1, small=2) created an unnecessary structural disadvantage for small capital.
 
 ## Critical Design Rules
 
 - **No future functions**: Signals always computed on `prev_date` (T-1) data. Current price used only for stop-loss execution and order placement.
 - **All parameters are academic defaults**: ATR(14), MACD(12,26,9), KDJ(9,3,3), RSI(6). Zero parameter optimization — this is intentional to avoid overfitting.
 - **No profit-taking**: V11.1 proved that partial profit-taking (+20% sell half) destroys trend-following. 盈亏比 dropped from 3.7:1 to 1.14:1. Let profits run via ATR trailing stop only.
-- **Stop loss clamped to [3%, 15%]**: `stop_floor=0.03` prevents noise shakeout, `stop_cap=0.15` prevents excessive single-trade loss.
+- **Stop loss clamped to [5%, 15%]**: `stop_floor=0.05` prevents noise shakeout (V2.7 WF验证), `stop_cap=0.15` prevents excessive single-trade loss. Gold ETF(518880) exception: `stop_floor=0.03` (V2.8).
 - **Trend hold mode**: When trend_score ≥ 4 AND profitable → skip signal-based selling, use only ATR stop. Core mechanism for capturing big trends.
 - **Cooldown**: 5-day cooldown between buy/sell signals on same ETF to avoid whipsaws.
 - **ETF correlation matters**: Don't add 510050 (overlaps 510300) or 159901 (overlaps 159915+510300). Only add truly uncorrelated ETFs like 510880 (红利) and 512100 (中证1000).
@@ -119,14 +121,14 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **V15.7-Expanded**: V15.7 pool expanded from 10→12 ETFs by adding 513880日经ETF(2019+) and 513050中概互联ETF(2017+). Pool: 4 A-share + 5 cross-market + 3 cross-asset. Result (10万起始): **267.9% total return (+55pp vs V15.7)**, **12.73% max drawdown (-0.7pp better)**, 2 loss years (-1.1%, -2.6%). 日经ETF: 45 buys, 26.7% stop rate; 中概互联: 55 buys, 25.5% stop rate — both genuinely active with healthy stop rates. Key improvement years: 2017 +22.0% (vs +15.8%), 2020 +20.5% (vs +13.4%), 2024 +15.5% (vs +7.6%). **Lesson: wider cross-market diversification compounds the benefit — Japan and China ADR provide momentum opportunities uncorrelated with existing pool. Unlike sector expansion (which hurt) or A-share removal (which hurt), adding genuinely uncorrelated cross-market ETFs is a Pareto improvement (higher return + lower drawdown). The 4+5+3 structure is the new optimum.**
 - **V15.9** (**current best**): V15.7-Expanded + unified max_hold=3 for all capital tiers. Old tiers: micro=1/small=2/medium=3/large=3; new: all=3. Rationale: ETF prices are low enough (100-1100元/手, except 国债14000元/手) that even 2万 can hold 3 positions. Result (2万起始): **256.9% total return**, 14.15% max drawdown, 2 loss years (-2.0%, -3.8%). Critical improvement: **2021 return -2.0% vs old small-tier's -7.3%** — the extra holding slot provides diversification that halves losses in bad years. First trade day verified: 20K successfully bought 3 ETFs (国债100股+消费1800股+沪深300 500股). Stayed in small tier for 9 years until crossing 5万 in 2024. **Lesson: for ETF strategies, capital-tier-based max_hold restrictions are unnecessary — ETFs are cheap enough for even micro capital to hold 3 positions. Unified max_hold=3 eliminates the structural disadvantage of small capital and makes strategy performance consistent across all capital levels. V15.9 = V15.7-Expanded pool (12 ETFs) + unified max_hold.**
 
-## Multi-Factor Strategy V2.5 (smart_trade_joinquant_multifactor_etf.py + smart_trade_ptrade_multifactor_etf.py)
+## Multi-Factor Strategy V2.10 (smart_trade_joinquant_multifactor_etf.py + smart_trade_ptrade_multifactor_etf.py)
 
 Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum. PTrade version synced to V2.10.
 
 ### Architecture
-- **Factors**: RSI(14), MACD(12,26,9), Bollinger(20,2), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights, discrete scoring buckets, 3-day smoothing.
+- **Factors**: RSI(14), MACD(12,26,9), Bollinger(25,1.8), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights (V2.10 WF验证), discrete scoring buckets, 3-day smoothing.
 - **Rotation**: Tuesday + Thursday (fixed weekday calendar, no start-date dependency)
-- **Guards**: Switch threshold 8pts, min hold 5 days, ATR trailing stop (dynamic 2.0x/2.5x), stop exemption with 10% drawdown cap, volatility-inverse position sizing
+- **Guards**: Switch threshold 8pts, min hold 5 days, ATR trailing stop (dynamic 2.0x/2.5x + 利润分段收紧), MA10 trend stop exemption, volatility-inverse position sizing
 - **Bear market**: Daily detection at 09:30 (runs in `update_tier`, uses T-1 data). 000300.SS < MA60 and MA60 declining → A-share ETF positions halved (only affects 510300/159915/512100/159928/510880; cross-market and cross-asset ETFs unaffected). Result stored in `g.market_bearish`.
 - **Pool**: 12 ETFs (5 A-share + 5 cross-market + 2 cross-asset). Removed 511010 国债ETF (historically removing bond fallback added +18pp, and bond ETF's low-vol mean-reverting nature unsuited for trend-following framework).
 - **No bond fallback**: Holds cash when candidates < max_hold.
@@ -165,6 +167,9 @@ Three optimization attempts, two succeeded:
 | **V2.5** | **2015-2026** | **2万** | **+306.2%** | **13.8%** | **12.85%** | **0.809** | **—** |
 | V2.5 | 2010-2014 (out) | 2万 | +37.64% | 6.81% | 6.64% | 0.405 | — |
 | **V2.6** | **2015-2026** | **2万** | **+372%** | **15.4%** | **14.4%** | **0.957** | **—** |
+| **V2.10** | **2015-2026** | **2万** | **+371.7%** | **15.4%** | **15.2%** | **0.950** | **1/12** |
+
+> **V2.10聚宽实测**: +371.7%, 年化15.35%, 最大回撤15.19%, 夏普0.95, Beta 0.25, 盈亏比2.15, 仅1年亏损(-6.6%, 2018)。12个时间段全覆盖测试全部正收益+正超额。
 
 ### V2.5→V2.6 Iteration (2026-05, on JoinQuant)
 
@@ -190,7 +195,7 @@ Three optimization attempts, two succeeded:
 
 - **8分换仓门槛**: 5分翻车, 6分翻车, 0分翻车. Load-bearing, not tunable.
 - **最低持仓5天**: 0天 = -48pp. Essential anti-whipsaw protection.
-- **持仓保留门槛 55分**: 60分 = -66pp. 55 is safer baseline.
+- **持仓保留门槛 55分**: 去掉惯性保护(55→60) OOS仅 -1.4pp/年（WF验证）. 全周期 -14pp（聚宽实测）. 保留是微弱正贡献，非铁律.
 - **ROC20**: 14/15/25/blend all worse. Load-bearing.
 - **Fast实验版**: 全局加速 = -231pp. 慢就是快.
 
@@ -278,7 +283,7 @@ Direct A/B test on same period (2015-2026, 2万起始):
 
 逻辑：MA10>MA20>MA60 的多头排列是 ETF 趋势跟随中唯一同时覆盖短中长三个时间维度的信号，原 15% 权重远低于其真实预测力。动量（25%）虽然最强但不稳定，均线趋势更稳健且方向一致性更高。
 
-**总结：信号端优化已触达框架天花板。** V2.7(布林+stop_floor) + V2.8(黄金止损) + V2.9(均线权重) = 从 V2.6 的 344%→~446%，夏普 1.17→~1.30。后续优化方向应在执行端（QDII溢价检查、国债逆回购、最小交易额过滤）。
+**总结：信号端优化已触达框架天花板。** V2.6→V2.10 信号端四项改动（布林带/黄金止损/均线权重/hold_threshold验证），聚宽实测收益不变（~372%），但风控更稳健、参数有WF支撑。真正能改善策略的是执行端（QDII溢价检查、国债逆回购、最小交易额过滤）。
 
 ### V2.10均线权重Walk-Forward微调（2026-06）
 
@@ -301,6 +306,29 @@ Direct A/B test on same period (2015-2026, 2万起始):
 | volume | 7.4% | 7.1% | -0.3pp |
 
 **验证结论：均线权重最优区间 20-27%。24%在OOS上一致性最优。但区间内任何选择差异<1pp，不敏感。**
+
+### V2.10参数WF补充验证（2026-06）
+
+对之前未验证的关键参数做了8窗口Walk-Forward扫描：
+
+**score_buy_threshold（买入门槛 55/58/60/62/65）：**
+- **60是最优值** — 平均OOS最高(+17.4%)、训练集也最高(+183.6%)、两边都下降（55→60上升、60→65下降），真正凹形最优
+- 65太高导致候选不足(OOS -2.7pp)，55太低放进低质量ETF
+- 结论：**60是训练和OOS同时最优，非常稳健**
+
+**hold_threshold（持仓保留门槛 50/55/58/60）：**
+- 55平均OOS最高(+17.4%)但仅比58高0.2pp
+- 训练集上55 vs 60差距41pp（大部分是噪音），OOS仅差1.4pp
+- 去掉惯性保护(55→60)聚宽实测 -13.8pp（全周期）
+- 结论：55是微弱正贡献(+1.4pp OOS)，保留但不再视为"铁律"
+
+**起点敏感性测试（3个起点）：**
+- 2015-01（牛市中部）年化15.35% → 2016-01（熔断后）15.24% → 2017-01（熊市前）15.65%
+- 年化和夏普几乎不变，起始时机的运气成分被策略消化
+
+**压力点测试（5个极端场景）：**
+- 牛市顶入市 +3.5%（大盘 -43%）、熔断低点入市 +95.6%、全年熊市 -8.2%（大盘 -25%）、疫情年 +31.7%、震荡熊市 +0.1%（大盘 -26%）
+- 全部正收益或打平，回撤全部在10-15%，无一崩盘
 
 ## Pending Tasks
 
