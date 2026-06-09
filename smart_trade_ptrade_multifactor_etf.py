@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-多因子ETF量化策略 V2.6 - PTrade版（回测+实盘兼容）
+多因子ETF量化策略 V2.10 - PTrade版（回测+实盘兼容）
 =============================================
-与聚宽V2.6逻辑100%一致，根据PTrade官方API文档适配，同时兼容回测和实盘两种模式。
+与聚宽V2.10逻辑100%一致，根据PTrade官方API文档适配，同时兼容回测和实盘两种模式。
 
-V2.6核心改进（vs V2.4）：
-  - 利润分段ATR收紧（盈利5-15%→2.0x, >15%→1.5x）
-  - MA10趋势止损（止损豁免前检查短期趋势是否破坏）
-  - RSI >80评分修正（55→70，不对抗极致趋势）
-  - 资本档位优化（medium 0.60→0.65, large max_hold 4→3 + 0.55→0.65）
+V2.10 vs V2.6变动：
+  - bb_period 20→25, bb_std 2.0→1.8（布林带更平滑宽容）
+  - stop_floor 0.03→0.05（过滤ETF日波动噪音止损）
+  - 黄金ETF(518880)品种级止损(stop_floor=0.03, atr_mult=2.0)
+  - 均线趋势权重 0.15→0.24，其余因子等比例缩减 (+46pp聚宽验证)
+  - Walk-Forward验证(8窗口)24% OOS最优
 
 实盘健壮性：
   - 所有order/order_target传limit_price
@@ -25,11 +26,11 @@ ETF池（5A股 + 5跨市场 + 2跨资产 = 12只）：
   跨市场: 513100纳指, 513500标普500, 159920恒生, 513880日经, 513050中概互联
   跨资产: 518880黄金, 159985豆粕
 
-因子权重（固定，未优化）：
-  动量ROC20=0.25, MACD=0.18, 均线趋势=0.15, RSI=0.12, KDJ=0.12, 布林带=0.10, 成交量=0.08
+因子权重（V2.10 Walk-Forward验证）：
+  均线趋势=0.24, 动量ROC20=0.223, MACD=0.161, RSI=0.108, KDJ=0.108, 布林带=0.089, 成交量=0.071
 
 聚宽回测业绩（万三+最低5元佣金）：
-  2015-2026：~372%，年化~15.4%，最大回撤~14.4%，夏普0.96
+  V2.10实测(2015-2026): +371.7%，年化15.35%，最大回撤15.19%，夏普0.95
 """
 
 import numpy as np
@@ -84,8 +85,8 @@ def initialize(context):
         'macd_fast': 12,
         'macd_slow': 26,
         'macd_signal': 9,
-        'bb_period': 20,
-        'bb_std': 2.0,
+        'bb_period': 25,
+        'bb_std': 1.8,
         'kdj_n': 9,
         'kdj_m1': 3,
         'kdj_m2': 3,
@@ -95,7 +96,7 @@ def initialize(context):
         'trailing_atr_mult': 2.5,
         'trailing_atr_mult_high_vol': 2.0,
         'high_vol_threshold': 0.30,
-        'stop_floor': 0.03,
+        'stop_floor': 0.05,
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
@@ -103,13 +104,18 @@ def initialize(context):
 
     # ---- 因子权重 ----
     g.base_weights = {
-        'rsi': 0.12,
-        'macd': 0.18,
-        'bollinger': 0.10,
-        'momentum': 0.25,
-        'volume': 0.08,
-        'kdj': 0.12,
-        'ma_trend': 0.15,
+        'rsi': 0.108,
+        'macd': 0.161,
+        'bollinger': 0.089,
+        'momentum': 0.223,
+        'volume': 0.071,
+        'kdj': 0.108,
+        'ma_trend': 0.24,
+    }
+
+    # 品种级止损参数：黄金均值回复型，用更紧的止损
+    g.code_stop_params = {
+        '518880.SS': {'stop_floor': 0.03, 'trailing_atr_mult': 2.0},
     }
 
     g.current_tier = None
@@ -248,7 +254,7 @@ def _halt_recover(context):
             continue
         cost = _pos_cost(positions[code])
         pnl = (cur_price - cost) / cost if cost > 0 else 0
-        stop_price = _calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], None, pnl)
+        stop_price = _calc_stop_price(code, g.highest_since_buy[code], g.entry_atr[code], None, pnl)
         if cur_price <= stop_price:
             stop_triggered.append(code)
 
@@ -658,24 +664,30 @@ def _calc_multi_factor_score(code, end_date):
 # ============================================================
 #  ATR跟踪止损
 # ============================================================
-def _calc_stop_price(highest, atr_val, atr_mult_override=None, profit_pct=None):
+def _calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=None):
     p = g.params
+    # 品种级参数覆盖（黄金等均值回复型品种用更紧止损）
+    cp = g.code_stop_params.get(code, {})
     if atr_mult_override is not None:
         atr_mult = atr_mult_override
     else:
         vol_pct = atr_val / highest * np.sqrt(252.0 / p['atr_period'])
+        base_mult = cp.get('trailing_atr_mult', p['trailing_atr_mult'])
+        high_vol_mult = cp.get('trailing_atr_mult_high_vol', p['trailing_atr_mult_high_vol'])
         if vol_pct > p['high_vol_threshold']:
-            atr_mult = p['trailing_atr_mult_high_vol']
+            atr_mult = high_vol_mult
         else:
-            atr_mult = p['trailing_atr_mult']
+            atr_mult = base_mult
         # 利润分段收紧：赚得越多，保护越紧
         if profit_pct is not None and profit_pct > 0:
             if profit_pct > 0.15:
                 atr_mult *= 0.6
             elif profit_pct > 0.05:
                 atr_mult *= 0.8
+    stop_floor = cp.get('stop_floor', p['stop_floor'])
+    stop_cap = cp.get('stop_cap', p['stop_cap'])
     pct_stop = atr_mult * atr_val / highest
-    pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
+    pct_stop = max(stop_floor, min(stop_cap, pct_stop))
     return highest * (1 - pct_stop)
 
 
@@ -697,7 +709,7 @@ def _check_stop_triggered(context, atr_mult_override=None):
         if code in g.highest_since_buy and code in g.entry_atr:
             cost = _pos_cost(pos)
             pnl = (cur_price - cost) / cost if cost > 0 else 0
-            stop_price = _calc_stop_price(g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
+            stop_price = _calc_stop_price(code, g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
             if cur_price <= stop_price:
                 triggered.append(code)
     return triggered
@@ -1219,7 +1231,7 @@ def _after_close(context):
         score = g.holding_scores.get(code, 0)
         atr_val = g.entry_atr.get(code, None)
         if atr_val is not None and highest > 0:
-            stop_price = _calc_stop_price(highest, atr_val, profit_pct=pnl / 100 if pnl > 0 else None)
+            stop_price = _calc_stop_price(code, highest, atr_val, profit_pct=pnl / 100 if pnl > 0 else None)
             log.info('  %s 成本:%.3f 现:%.3f 高:%.3f 盈亏:%.1f%% 分:%.1f ATR:%.4f 止损价:%.3f' % (
                 code, cost, cur, highest, pnl, score, atr_val, stop_price))
         else:

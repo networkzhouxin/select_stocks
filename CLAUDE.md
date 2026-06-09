@@ -21,7 +21,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
 - `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
 - `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.7 JoinQuant** (~384% return, 2万起始, 7-factor scoring, 12-ETF pool. V2.5: 306.2%; V2.6: 372%)
-- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.5 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
+- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.10 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
 - `策略说明文档.md` — Complete strategy documentation for V15.x (Chinese)
 - `多因子ETF策略说明文档.md` — Complete strategy documentation for Multi-Factor V2.4 (Chinese)
@@ -121,7 +121,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 
 ## Multi-Factor Strategy V2.5 (smart_trade_joinquant_multifactor_etf.py + smart_trade_ptrade_multifactor_etf.py)
 
-Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum. PTrade version synced to V2.5.
+Separate framework from V15.x momentum rotation. Uses 7 classic technical indicators for comprehensive scoring instead of pure momentum. PTrade version synced to V2.10.
 
 ### Architecture
 - **Factors**: RSI(14), MACD(12,26,9), Bollinger(20,2), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights, discrete scoring buckets, 3-day smoothing.
@@ -304,7 +304,7 @@ Direct A/B test on same period (2015-2026, 2万起始):
 
 ## Pending Tasks
 
-- [ ] **PTrade同步到V2.10**：`smart_trade_ptrade_multifactor_etf.py` 需同步所有改动：(1)bb_period=25/bb_std=1.8/stop_floor=0.05 (2)黄金品种级止损 code_stop_params (3)均线趋势权重24%
+（无待办事项）
 
 ## Chinese Variable Reference
 
