@@ -20,12 +20,12 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_7_etf.py` — **V15.7 JoinQuant** (212.8% return, 10万起始, buy price fix + bond slot-filling, 10-ETF pool)
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
 - `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
-- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.10 JoinQuant** (+371.7%, 2万起始, 7-factor scoring, 12-ETF pool, 聚宽实测)
-- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.10 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版100%一致)
+- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.10 JoinQuant** (+385.88%阶段验证 with 防追高+后备补位; V2.10 core +371.7%, 2万起始, 7-factor scoring, 12-ETF pool, 聚宽实测)
+- `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.10 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版同步; PTrade回测仅验证无报错)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
 - `策略说明文档.md` — Complete strategy documentation for V15.x (Chinese)
-- `多因子ETF策略说明文档.md` — Complete strategy documentation for Multi-Factor V2.4 (Chinese)
-- `PTrade-API.html` — Official PTrade API reference
+- `多因子ETF策略说明文档.md` — Complete strategy documentation for Multi-Factor V2.10 (Chinese)
+- `docs/帮助.html` / `docs/财务数据.html` — Latest local official PTrade API/reference docs
 - `smart_trade_v10_tdx.txt` / `smart_trade_v10_tdx_main.txt` — TDX (通达信) indicator formulas
 
 ## Architecture
@@ -64,7 +64,10 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **`order` without `limit_price`**: system uses `get_snapshot` latest price; if snapshot fails, order fails.
 - **`get_price`/`get_history` not thread-safe**: don't call from `run_daily` and `handle_data` simultaneously.
 - **Persistence**: `g` is auto-pickled. Variables prefixed with `__` (e.g. `g.__is_live`) are excluded — use this for non-serializable objects. On restart, `initialize` runs first, then persisted data overwrites.
-- **Broker**: 国金证券 PTrade. API docs at `PTrade-API.html` (local copy).
+- **Official docs**: Latest local PTrade docs are under `docs/帮助.html` and `docs/财务数据.html`.
+- **Suspended/zero-volume data**: Official docs state `get_price/get_history` do not skip suspended days; suspended daily bars are filled from previous data with `volume=0`. PTrade `_get_price_data()` filters `volume <= 0` to mimic JoinQuant `skip_paused=True`.
+- **Order status callbacks**: PTrade order status `"5"` means 部撤, `"6"` means 已撤, `"9"` means 废单. Treat `"5"` with `business_amount > 0` as partial fill waiting for trade callback, not a pure failure.
+- **Broker**: 国金证券 PTrade.
 
 ### Capital Tiers (Multi-Factor V2.10)
 
@@ -128,7 +131,9 @@ Separate framework from V15.x momentum rotation. Uses 7 classic technical indica
 ### Architecture
 - **Factors**: RSI(14), MACD(12,26,9), Bollinger(25,1.8), ROC20(momentum), Volume ratio, KDJ(9,3,3), MA trend(10/20/60). Fixed weights (V2.10 WF验证), discrete scoring buckets, 3-day smoothing.
 - **Rotation**: Tuesday + Thursday (fixed weekday calendar, no start-date dependency)
-- **Guards**: Switch threshold 8pts, min hold 5 days, ATR trailing stop (dynamic 2.0x/2.5x + 利润分段收紧), MA10 trend stop exemption, volatility-inverse position sizing
+- **Guards**: Switch threshold 8pts, min hold 5 days, ATR trailing stop (dynamic 2.0x/2.5x + 利润分段收紧), MA10 trend stop exemption, volatility-inverse position sizing, new-buy overheat filter (`price/MA20 > 1.08` and `RSI > 75`)
+- **Backup fill**: Buy queue is `primary_buy + backup_buy`; if a target-pool candidate is skipped by 防追高, later qualified candidates can fill the slot instead of leaving cash idle.
+- **Choppy market logging**: Daily 09:30 market-state log uses MA20 cross count, MA60 slope, and distance to MA60. It is observation-only and must not affect trading unless separately tested.
 - **Bear market**: Daily detection at 09:30 (runs in `update_tier`, uses T-1 data). 000300.SS < MA60 and MA60 declining → A-share ETF positions halved (only affects 510300/159915/512100/159928/510880; cross-market and cross-asset ETFs unaffected). Result stored in `g.market_bearish`.
 - **Pool**: 12 ETFs (5 A-share + 5 cross-market + 2 cross-asset). Removed 511010 国债ETF (historically removing bond fallback added +18pp, and bond ETF's low-vol mean-reverting nature unsuited for trend-following framework).
 - **No bond fallback**: Holds cash when candidates < max_hold.
@@ -168,8 +173,10 @@ Three optimization attempts, two succeeded:
 | V2.5 | 2010-2014 (out) | 2万 | +37.64% | 6.81% | 6.64% | 0.405 | — |
 | **V2.6** | **2015-2026** | **2万** | **+372%** | **15.4%** | **14.4%** | **0.957** | **—** |
 | **V2.10** | **2015-2026** | **2万** | **+371.7%** | **15.4%** | **15.2%** | **0.950** | **1/12** |
+| **V2.10 + 防追高/后备补位** | **2015-2026** | **2万** | **+385.88%** | **15.66%** | **15.19%** | **0.985** | **—** |
 
 > **V2.10聚宽实测**: +371.7%, 年化15.35%, 最大回撤15.19%, 夏普0.95, Beta 0.25, 盈亏比2.15, 仅1年亏损(-6.6%, 2018)。12个时间段全覆盖测试全部正收益+正超额。
+> **2026-06-12阶段验证**: 防追高+后备补位版本 +385.88%, 年化15.66%, 最大回撤15.19%, 夏普0.985, 盈亏比2.181。该结果尚未完整WF验证，不替代V2.10核心参数结论。
 
 ### V2.5→V2.6 Iteration (2026-05, on JoinQuant)
 
@@ -329,6 +336,22 @@ Direct A/B test on same period (2015-2026, 2万起始):
 **压力点测试（5个极端场景）：**
 - 牛市顶入市 +3.5%（大盘 -43%）、熔断低点入市 +95.6%、全年熊市 -8.2%（大盘 -25%）、疫情年 +31.7%、震荡熊市 +0.1%（大盘 -26%）
 - 全部正收益或打平，回撤全部在10-15%，无一崩盘
+
+### 2026-06-12交易端防守实验
+
+**Adopted (stage-validated, not full WF yet):**
+- **防追高过滤**: New buys only. Skip candidate when real-time price is >8% above MA20 and RSI >75. Does not force-sell or affect existing holdings.
+- **后备补位**: If a target-pool candidate is skipped by 防追高, continue checking backup candidates from the qualified pool to fill remaining slots.
+- **震荡市日志**: Detects choppy market with MA20 crossing count, MA60 slope, and distance to MA60. Log only; no trading impact.
+- **PTrade partial-cancel handling**: `status == "5"` with `business_amount > 0` is a partial fill, not a pure failure. Wait for trade callback.
+
+**JoinQuant result**: +385.88%, annualized 15.66%, max DD 15.19%, Sharpe 0.985, P/L ratio 2.181. This is better than V2.10 core but not yet a full WF-proven core-parameter change.
+
+**Tested and removed:**
+- **盈利回落保护**: +381.78%, annualized 15.57%, Sharpe 0.982, P/L ratio 2.158. Worse than 防追高 version; removed.
+- **评分衰减保护**: +370.89%, annualized 15.33%, max DD 16.69%, Sharpe 0.965. Worse return and worse drawdown; removed.
+
+**PTrade validation**: `logs/PTrade2023.txt` only covers 2023-01-03 to 2023-01-31. It had no ERROR/Exception/废单/重复卖出/订单超时/资金不足 and max holdings stayed at 3. Treat it only as a short compatibility check, not performance validation.
 
 ## Pending Tasks
 
