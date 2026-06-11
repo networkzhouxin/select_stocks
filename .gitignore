@@ -50,3 +50,4 @@ spring-cloud-alibaba-docs/**/*.html
 
 # Walkforward pycache
 walkforward/__pycache__/
+__pycache__/
