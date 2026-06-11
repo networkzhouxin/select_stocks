@@ -434,6 +434,7 @@ def _update_tier(context):
 
     # 每日熊市检测
     _detect_bear_market(context)
+    _detect_choppy_market(context)
 
     if new_tier != g.current_tier:
         old = g.current_tier or '初始化'
@@ -461,6 +462,65 @@ def _detect_bear_market(context):
             hs300_close, hs300_ma, direction, status))
     else:
         log.warning('[熊市检测] 数据不足，跳过')
+
+
+def _detect_choppy_market(context):
+    """识别震荡市，仅用于日志监控，不参与交易决策。"""
+    prev_date = _get_prev_trade_date(context)
+    df = _get_price_data('000300.SS', prev_date, count=80)
+    if df is None or len(df) < 65:
+        g.market_state = '未知'
+        g.choppy_score = 0
+        log.warning('[市场状态] 数据不足，跳过震荡监控')
+        return
+
+    close = df['close']
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+
+    recent_close = close.iloc[-40:]
+    recent_ma20 = ma20.iloc[-40:]
+    cross_count = 0
+    prev_side = None
+    for price, ma_val in zip(recent_close, recent_ma20):
+        if pd.isna(ma_val):
+            continue
+        side = 1 if price > ma_val else -1
+        if prev_side is not None and side != prev_side:
+            cross_count += 1
+        prev_side = side
+
+    ma60_now = ma60.iloc[-1]
+    ma60_prev = ma60.iloc[-21]
+    cur = close.iloc[-1]
+    if pd.isna(ma60_now) or pd.isna(ma60_prev) or ma60_prev == 0:
+        g.market_state = '未知'
+        g.choppy_score = 0
+        log.warning('[市场状态] MA60数据不足，跳过震荡监控')
+        return
+
+    ma60_slope = ma60_now / ma60_prev - 1
+    dist_ma60 = cur / ma60_now - 1 if ma60_now != 0 else 0
+
+    score = 0
+    if cross_count >= 5:
+        score += 1
+    if abs(ma60_slope) < 0.02:
+        score += 1
+    if abs(dist_ma60) < 0.05:
+        score += 1
+
+    if score >= 3:
+        state = '震荡市'
+    elif score == 2:
+        state = '轻微震荡'
+    else:
+        state = '趋势市'
+
+    g.market_state = state
+    g.choppy_score = score
+    log.info('[市场状态] %s | 穿越MA20:%d次 MA60斜率:%.1f%% 距MA60:%.1f%% 震荡分:%d/3' % (
+        state, cross_count, ma60_slope * 100, dist_ma60 * 100, score))
 
 
 def _get_tier_param(name):
@@ -658,6 +718,7 @@ def _calc_multi_factor_score(code, end_date):
         'code': code, 'final_score': final_score,
         'roc': roc, 'close': cur,
         'atr': atr_val, 'volatility': vol, 'rsi': rsi_val,
+        'ma20': ma20,
     }
 
 
@@ -689,6 +750,21 @@ def _calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=
     pct_stop = atr_mult * atr_val / highest
     pct_stop = max(stop_floor, min(stop_cap, pct_stop))
     return highest * (1 - pct_stop)
+
+
+def _is_overheated_for_buy(code, sig, price):
+    """新买入防追高过滤：只拦截短期明显过热的候选，不影响持仓。"""
+    ma20 = sig.get('ma20')
+    rsi = sig.get('rsi')
+    if ma20 is None or pd.isna(ma20) or ma20 <= 0 or rsi is None or pd.isna(rsi):
+        return False
+
+    dist_ma20 = price / ma20 - 1
+    if dist_ma20 > 0.08 and rsi > 75:
+        log.info('[防追高] %s 价格距MA20 %.1f%% RSI %.1f，暂缓新买入' % (
+            code, dist_ma20 * 100, rsi))
+        return True
+    return False
 
 
 def _check_stop_triggered(context, atr_mult_override=None):
@@ -930,12 +1006,24 @@ def _do_trading(context):
             g.buy_date.pop(code, None)
             g.holding_scores.pop(code, None)
 
-    # 8. 买入（按得分排序）
     sig_map = {}
     for r in all_results:
         sig_map[r['code']] = r
 
-    to_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
+    # 8. 买入（目标池优先；若防追高跳过，则用候选池后备标的补位）
+    primary_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
+    primary_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
+
+    backup_buy = []
+    seen = set(primary_buy)
+    for r in candidates:
+        code = r['code']
+        if code in seen or code in target_codes or code in current_holds or code in force_stopped:
+            continue
+        backup_buy.append(code)
+        seen.add(code)
+
+    to_buy = primary_buy + backup_buy
 
     # 可用资金：实盘cash有6秒同步延迟需补偿，回测cash即时更新不需要
     if g.__is_live and sold_proceeds > 0:
@@ -952,7 +1040,6 @@ def _do_trading(context):
 
     # 新买入
     if to_buy and slots > 0 and available >= 500:
-        to_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
         for code in to_buy:
             if slots <= 0 or available < 500:
                 break
@@ -965,6 +1052,9 @@ def _do_trading(context):
                 continue
 
             sig = sig_map[code]
+            if _is_overheated_for_buy(code, sig, price):
+                continue
+
             alloc = available / slots * base_ratio
             actual_vol = max(sig['volatility'], 0.05)
             alloc *= max(0.4, min(1.5, 0.15 / actual_vol))
@@ -980,6 +1070,8 @@ def _do_trading(context):
                     log.info('[资金不足] %s 需%.0f元买100股，可用%.0f' % (code, price * 100, available))
                     continue
 
+            if code in backup_buy:
+                log.info('[后备补位] %s 来自候选池后备队列，补足空余仓位' % code)
             log.info('[买入] %s 分:%.1f ROC:%.1f%% 波动%.1f%% %d股 @%.3f' % (
                 code, sig['final_score'], sig['roc'] * 100,
                 sig['volatility'] * 100, shares, price))
@@ -1243,6 +1335,15 @@ def _after_close(context):
 # ============================================================
 #  委托/成交回调（仅交易模式可用）
 # ============================================================
+def _safe_float(value, default=0.0):
+    try:
+        if value is None or value == '':
+            return default
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 def on_order_response(context, order_list):
     try:
         if not g.__is_live:
@@ -1255,12 +1356,20 @@ def on_order_response(context, order_list):
 
     for od in order_list:
         code = od.get('stock_code', '')
-        status = od.get('status', '')
+        status = str(od.get('status', ''))
         error_info = od.get('error_info', '')
+        filled_qty = _safe_float(od.get('business_amount', 0))
 
-        if str(status) in ('5', '6', '9'):
+        if status == '5' and filled_qty > 0 and code in g.__pending_orders:
+            log.warning('[买入部撤] %s 已成交%.0f股，等待成交回调确认；原因:%s' % (
+                code, filled_qty, error_info))
+            continue
+
+        if status in ('5', '6', '9'):
             if code in g.__pending_orders:
                 g.__pending_orders.pop(code, None)
+                g.buy_date.pop(code, None)
+                g.holding_scores.pop(code, None)
                 log.warning('[买入失败] %s 状态:%s 原因:%s' % (code, status, error_info))
             elif code in g.sold_today:
                 log.error('[止损告警] %s 卖出失败！%s' % (code, error_info))
@@ -1280,8 +1389,8 @@ def on_trade_response(context, trade_list):
     for trade in trade_list:
         code = trade.get('stock_code', '')
         direction = trade.get('entrust_bs', '')
-        filled_qty = trade.get('business_amount', 0)
-        filled_price = trade.get('business_price', 0)
+        filled_qty = _safe_float(trade.get('business_amount', 0))
+        filled_price = _safe_float(trade.get('business_price', 0))
 
         if not code or filled_qty <= 0:
             continue
