@@ -131,6 +131,7 @@ def initialize(context):
         'stop_cap': 0.15,
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
+        'high_rsi_shadow_threshold': 85,
     }
 
     # ---- 因子权重 ----
@@ -151,6 +152,8 @@ def initialize(context):
     g.holding_scores = {}
     g.portfolio_high = 0          # 组合历史最高净值（用于监控回撤）
     g.market_bearish = False
+    g.high_rsi_shadow_records = []  # 高RSI持仓假设卖出统计，仅观察，不参与交易
+    g.high_rsi_shadow_horizons = [3, 5, 10]
 
     # 品种级止损参数：黄金均值回复型，用更紧的止损
     g.code_stop_params = {
@@ -560,18 +563,126 @@ def calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=N
 
 
 def is_overheated_for_buy(code, sig, price):
-    """新买入防追高过滤：只拦截短期明显过热的候选，不影响持仓。"""
+    """新买入防追高过滤：RSI过热时暂缓新买入，不影响持仓。"""
     ma20 = sig.get('ma20')
     rsi = sig.get('rsi')
-    if ma20 is None or pd.isna(ma20) or ma20 <= 0 or rsi is None or pd.isna(rsi):
+    if rsi is None or pd.isna(rsi):
         return False
 
-    dist_ma20 = price / ma20 - 1
-    if dist_ma20 > 0.08 and rsi > 75:
+    dist_ma20 = price / ma20 - 1 if ma20 is not None and not pd.isna(ma20) and ma20 > 0 else 0
+    if rsi > 75:
         log.info('[防追高] %s 价格距MA20 %.1f%% RSI %.1f，暂缓新买入' % (
             code, dist_ma20 * 100, rsi))
         return True
     return False
+
+
+def should_record_high_rsi_shadow(rsi, threshold):
+    if rsi is None or pd.isna(rsi):
+        return False
+    return rsi >= threshold
+
+
+def calc_shadow_return(current_price, reference_price):
+    if reference_price is None or reference_price <= 0:
+        return 0.0
+    return round((current_price / reference_price - 1) * 100, 2)
+
+
+def _ensure_high_rsi_shadow_state():
+    if not hasattr(g, 'high_rsi_shadow_records') or g.high_rsi_shadow_records is None:
+        g.high_rsi_shadow_records = []
+    if not hasattr(g, 'high_rsi_shadow_horizons') or not g.high_rsi_shadow_horizons:
+        g.high_rsi_shadow_horizons = [3, 5, 10]
+
+
+def update_high_rsi_shadow(context, hold, current_data):
+    """Log-only: track what would happen after selling high-RSI holdings."""
+    _ensure_high_rsi_shadow_state()
+    today = context.current_dt.date()
+    horizons = set(g.high_rsi_shadow_horizons)
+    max_horizon = max(horizons)
+    remaining = []
+
+    for record in g.high_rsi_shadow_records:
+        code = record.get('code')
+        if today <= record.get('date') or record.get('last_update') == today:
+            remaining.append(record)
+            continue
+
+        try:
+            cd = current_data[code]
+            if getattr(cd, 'paused', False):
+                remaining.append(record)
+                continue
+            cur_price = cd.last_price
+        except Exception:
+            cur_price = None
+
+        if cur_price is None or cur_price <= 0:
+            remaining.append(record)
+            continue
+
+        record['days'] = int(record.get('days', 0)) + 1
+        record['last_update'] = today
+        days = record['days']
+        checked = set(record.get('checked', []))
+
+        if days in horizons and days not in checked:
+            ret = calc_shadow_return(cur_price, record.get('price', 0))
+            log.info('[高RSI影子] %s 假设%s卖出 T+%d 现价%.3f 后续%+.1f%% | 原RSI %.1f 分%.1f 盈亏%.1f%%' % (
+                code, record.get('date'), days, cur_price, ret,
+                record.get('rsi', 0), record.get('score', 0),
+                record.get('pnl', 0)))
+            checked.add(days)
+            record['checked'] = sorted(list(checked))
+
+        if days < max_horizon:
+            remaining.append(record)
+
+    g.high_rsi_shadow_records = remaining
+
+    threshold = g.params.get('high_rsi_shadow_threshold', 85)
+    existing = set((r.get('date'), r.get('code')) for r in g.high_rsi_shadow_records)
+    for code, pos in hold.items():
+        try:
+            sig = calc_multi_factor_score(code, today)
+        except Exception:
+            sig = None
+        if not sig:
+            continue
+
+        rsi = sig.get('rsi')
+        if not should_record_high_rsi_shadow(rsi, threshold):
+            continue
+        if (today, code) in existing:
+            continue
+
+        try:
+            price = current_data[code].last_price
+        except Exception:
+            price = pos.price
+        if price is None or price <= 0:
+            continue
+
+        pnl = (price - pos.avg_cost) / pos.avg_cost * 100 if pos.avg_cost > 0 else 0
+        record = {
+            'date': today,
+            'code': code,
+            'price': float(price),
+            'rsi': float(rsi),
+            'score': float(sig.get('final_score', 0)),
+            'pnl': float(pnl),
+            'days': 0,
+            'checked': [],
+        }
+        g.high_rsi_shadow_records.append(record)
+        existing.add((today, code))
+        log.info('[高RSI影子] 记录%s RSI %.1f 分%.1f 价%.3f 盈亏%.1f%%，追踪T+3/5/10假设卖出' % (
+            code, rsi, record['score'], price, pnl))
+
+    if len(g.high_rsi_shadow_records) > 120:
+        g.high_rsi_shadow_records = g.high_rsi_shadow_records[-120:]
 
 
 def build_rank_map(results):
@@ -670,6 +781,11 @@ def do_trading(context):
             execute_stop(code, context, current_data)
         return
 
+    current_holds = {}
+    for code in context.portfolio.positions:
+        if context.portfolio.positions[code].total_amount > 0:
+            current_holds[code] = True
+
     all_results.sort(key=lambda x: x['final_score'], reverse=True)
     rank_map = build_rank_map(all_results)
 
@@ -699,11 +815,6 @@ def do_trading(context):
 
     candidates = [r for r in all_results if r['final_score'] > threshold]
     log.info('[候选] %d/%d只达标(>%d分)' % (len(candidates), len(all_results), threshold))
-
-    current_holds = {}
-    for code in context.portfolio.positions:
-        if context.portfolio.positions[code].total_amount > 0:
-            current_holds[code] = True
 
     # 更新持仓得分
     score_map = {}
@@ -907,6 +1018,8 @@ def after_close(context):
                                    atr_df['close'], g.params['atr_period']).iloc[-1]
                 if not pd.isna(new_atr) and new_atr > 0:
                     g.entry_atr[code] = new_atr
+
+    update_high_rsi_shadow(context, hold, current_data)
 
     # 组合回撤监控
     total_value = context.portfolio.total_value
