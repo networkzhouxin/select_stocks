@@ -151,8 +151,6 @@ def initialize(context):
     g.holding_scores = {}
     g.portfolio_high = 0          # 组合历史最高净值（用于监控回撤）
     g.market_bearish = False
-    g.overheat_shadow_records = []  # 防追高影子统计，仅观察，不参与交易
-    g.overheat_shadow_horizons = [3, 5, 10]
 
     # 品种级止损参数：黄金均值回复型，用更紧的止损
     g.code_stop_params = {
@@ -561,89 +559,7 @@ def calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=N
     return highest * (1 - pct_stop)
 
 
-def _ensure_overheat_shadow_state():
-    """兼容旧版本g对象，确保影子统计容器存在。"""
-    if not hasattr(g, 'overheat_shadow_records') or g.overheat_shadow_records is None:
-        g.overheat_shadow_records = []
-    if not hasattr(g, 'overheat_shadow_horizons') or not g.overheat_shadow_horizons:
-        g.overheat_shadow_horizons = [3, 5, 10]
-
-
-def record_overheat_shadow(context, code, sig, price, dist_ma20):
-    """记录被防追高跳过的标的，后续只做影子收益追踪。"""
-    _ensure_overheat_shadow_state()
-    today = context.current_dt.date()
-    record = {
-        'date': today,
-        'code': code,
-        'price': float(price),
-        'score': float(sig.get('final_score', 0)),
-        'rsi': float(sig.get('rsi', 0)),
-        'dist_ma20': float(dist_ma20),
-        'days': 0,
-        'checked': [],
-    }
-    g.overheat_shadow_records.append(record)
-    if len(g.overheat_shadow_records) > 80:
-        g.overheat_shadow_records = g.overheat_shadow_records[-80:]
-    log.info('[防追高影子] 记录%s 跳过价%.3f 分%.1f，追踪T+3/5/10表现' % (
-        code, price, record['score']))
-
-
-def update_overheat_shadow(context):
-    """盘后更新防追高影子统计，记录被跳过标的后续3/5/10个交易日表现。"""
-    _ensure_overheat_shadow_state()
-    if not g.overheat_shadow_records:
-        return
-
-    today = context.current_dt.date()
-    current_data = get_current_data()
-    horizons = set(g.overheat_shadow_horizons)
-    max_horizon = max(horizons)
-    remaining = []
-
-    for record in g.overheat_shadow_records:
-        code = record.get('code')
-        if today <= record.get('date') or record.get('last_update') == today:
-            remaining.append(record)
-            continue
-
-        try:
-            cd = current_data[code]
-            if getattr(cd, 'paused', False):
-                remaining.append(record)
-                continue
-            cur_price = cd.last_price
-        except Exception:
-            cur_price = None
-
-        if cur_price is None or cur_price <= 0:
-            remaining.append(record)
-            continue
-
-        record['days'] = int(record.get('days', 0)) + 1
-        record['last_update'] = today
-        days = record['days']
-        checked = set(record.get('checked', []))
-
-        if days in horizons and days not in checked:
-            skip_price = record.get('price', 0)
-            ret = (cur_price / skip_price - 1) * 100 if skip_price > 0 else 0
-            log.info('[防追高影子] %s 跳过%s T+%d 现价%.3f 假设收益%+.1f%% | 原因:距MA20 %.1f%% RSI %.1f 分%.1f' % (
-                code, record.get('date'), days, cur_price, ret,
-                record.get('dist_ma20', 0) * 100,
-                record.get('rsi', 0),
-                record.get('score', 0)))
-            checked.add(days)
-            record['checked'] = sorted(list(checked))
-
-        if days < max_horizon:
-            remaining.append(record)
-
-    g.overheat_shadow_records = remaining
-
-
-def is_overheated_for_buy(code, sig, price, context=None):
+def is_overheated_for_buy(code, sig, price):
     """新买入防追高过滤：只拦截短期明显过热的候选，不影响持仓。"""
     ma20 = sig.get('ma20')
     rsi = sig.get('rsi')
@@ -654,8 +570,6 @@ def is_overheated_for_buy(code, sig, price, context=None):
     if dist_ma20 > 0.08 and rsi > 75:
         log.info('[防追高] %s 价格距MA20 %.1f%% RSI %.1f，暂缓新买入' % (
             code, dist_ma20 * 100, rsi))
-        if context is not None:
-            record_overheat_shadow(context, code, sig, price, dist_ma20)
         return True
     return False
 
@@ -925,7 +839,7 @@ def do_trading(context):
 
         sig = sig_map[code]
         price = current_data[code].last_price
-        if is_overheated_for_buy(code, sig, price, context):
+        if is_overheated_for_buy(code, sig, price):
             continue
 
         alloc = available / slots * base_ratio
@@ -993,8 +907,6 @@ def after_close(context):
                                    atr_df['close'], g.params['atr_period']).iloc[-1]
                 if not pd.isna(new_atr) and new_atr > 0:
                     g.entry_atr[code] = new_atr
-
-    update_overheat_shadow(context)
 
     # 组合回撤监控
     total_value = context.portfolio.total_value
