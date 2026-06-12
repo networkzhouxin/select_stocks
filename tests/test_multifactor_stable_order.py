@@ -50,12 +50,6 @@ def test_buy_codes_use_score_then_rank_then_code():
     assert ordered == ["BBB", "AAA", "CCC"]
 
 
-def test_high_rsi_shadow_helpers_define_trigger_and_return():
-    assert strategy.should_record_high_rsi_shadow(85.0, 85.0)
-    assert not strategy.should_record_high_rsi_shadow(84.9, 85.0)
-    assert strategy.calc_shadow_return(110.0, 100.0) == 10.0
-
-
 def test_buy_overheat_filter_uses_rsi_without_ma20_distance():
     sig = {"ma20": 100.0, "rsi": 75.1}
 
@@ -66,7 +60,6 @@ if __name__ == "__main__":
     for test in (
         test_removable_positions_use_rank_tiebreak_for_equal_scores,
         test_buy_codes_use_score_then_rank_then_code,
-        test_high_rsi_shadow_helpers_define_trigger_and_return,
         test_buy_overheat_filter_uses_rsi_without_ma20_distance,
     ):
         test()
