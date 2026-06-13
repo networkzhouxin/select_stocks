@@ -16,6 +16,12 @@ strategy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(strategy)
 strategy.log = types.SimpleNamespace(info=lambda *args, **kwargs: None)
 
+ptrade_spec = importlib.util.spec_from_file_location(
+    "ptrade_multifactor", ROOT / "smart_trade_ptrade_multifactor_etf.py")
+ptrade_strategy = importlib.util.module_from_spec(ptrade_spec)
+ptrade_spec.loader.exec_module(ptrade_strategy)
+ptrade_strategy.log = types.SimpleNamespace(info=lambda *args, **kwargs: None)
+
 
 def test_removable_positions_use_rank_tiebreak_for_equal_scores():
     removable = [
@@ -56,10 +62,47 @@ def test_buy_overheat_filter_uses_rsi_without_ma20_distance():
     assert strategy.is_overheated_for_buy("TEST", sig, 101.0)
 
 
+def test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance():
+    sig = {"ma20": 100.0, "rsi": 75.1}
+
+    assert ptrade_strategy._is_overheated_for_buy("TEST", sig, 101.0)
+
+
+def test_ptrade_sorting_matches_joinquant_stable_tiebreaks():
+    removable = [
+        ("159915.SZ", 70.9),
+        ("512100.SS", 70.9),
+        ("513050.SS", 80.1),
+    ]
+    rank_map = {
+        "513050.SS": 0,
+        "159920.SZ": 1,
+        "513100.SS": 2,
+        "159915.SZ": 3,
+        "512100.SS": 4,
+    }
+
+    assert ptrade_strategy._sort_removable_positions(removable, rank_map)[0] == (
+        "512100.SS", 70.9)
+
+    codes = ["BBB", "AAA", "CCC"]
+    sig_map = {
+        "AAA": {"final_score": 80.0},
+        "BBB": {"final_score": 80.0},
+        "CCC": {"final_score": 79.0},
+    }
+    rank_map = {"AAA": 1, "BBB": 0, "CCC": 2}
+
+    assert ptrade_strategy._sort_buy_codes(codes, sig_map, rank_map) == [
+        "BBB", "AAA", "CCC"]
+
+
 if __name__ == "__main__":
     for test in (
         test_removable_positions_use_rank_tiebreak_for_equal_scores,
         test_buy_codes_use_score_then_rank_then_code,
         test_buy_overheat_filter_uses_rsi_without_ma20_distance,
+        test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance,
+        test_ptrade_sorting_matches_joinquant_stable_tiebreaks,
     ):
         test()

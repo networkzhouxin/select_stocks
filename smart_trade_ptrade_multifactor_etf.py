@@ -752,19 +752,43 @@ def _calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=
     return highest * (1 - pct_stop)
 
 
-def _is_overheated_for_buy(code, sig, price):
-    """新买入防追高过滤：只拦截短期明显过热的候选，不影响持仓。"""
+def _is_overheated_for_buy(code, sig, price, context=None):
+    """新买入防追高过滤：RSI过热时暂缓新买入，不影响持仓。"""
     ma20 = sig.get('ma20')
     rsi = sig.get('rsi')
-    if ma20 is None or pd.isna(ma20) or ma20 <= 0 or rsi is None or pd.isna(rsi):
+    if rsi is None or pd.isna(rsi):
         return False
 
-    dist_ma20 = price / ma20 - 1
-    if dist_ma20 > 0.08 and rsi > 75:
+    dist_ma20 = price / ma20 - 1 if ma20 is not None and not pd.isna(ma20) and ma20 > 0 else 0
+    if rsi > 75:
         log.info('[防追高] %s 价格距MA20 %.1f%% RSI %.1f，暂缓新买入' % (
             code, dist_ma20 * 100, rsi))
         return True
     return False
+
+
+def _build_rank_map(results):
+    """Return deterministic full-pool rank after final_score sorting."""
+    return {r['code']: i for i, r in enumerate(results)}
+
+
+def _sort_removable_positions(removable, rank_map):
+    """Worst first: low score, then weaker full-pool rank, then code."""
+    default_rank = len(rank_map)
+    return sorted(
+        removable,
+        key=lambda x: (x[1], -rank_map.get(x[0], default_rank), x[0]))
+
+
+def _sort_buy_codes(codes, sig_map, rank_map):
+    """Best first: high score, then stronger full-pool rank, then code."""
+    default_rank = len(rank_map)
+    return sorted(
+        codes,
+        key=lambda c: (
+            -sig_map.get(c, {}).get('final_score', 0),
+            rank_map.get(c, default_rank),
+            c))
 
 
 def _check_stop_triggered(context, atr_mult_override=None):
@@ -854,6 +878,7 @@ def _do_trading(context):
         return
 
     all_results.sort(key=lambda x: x['final_score'], reverse=True)
+    rank_map = _build_rank_map(all_results)
 
     log.info('[TOP5]')
     for i, r in enumerate(all_results[:5]):
@@ -935,7 +960,7 @@ def _do_trading(context):
         removable = [(c, g.holding_scores.get(c, 0))
                      for c in target_codes
                      if c in current_holds and c not in protected_codes]
-        removable.sort(key=lambda x: x[1])
+        removable = _sort_removable_positions(removable, rank_map)
 
         for r in candidates:
             if r['code'] in target_codes or not removable:
@@ -1012,7 +1037,7 @@ def _do_trading(context):
 
     # 8. 买入（目标池优先；若防追高跳过，则用候选池后备标的补位）
     primary_buy = [c for c in target_codes if c not in current_holds and c not in force_stopped]
-    primary_buy.sort(key=lambda c: sig_map.get(c, {}).get('final_score', 0), reverse=True)
+    primary_buy = _sort_buy_codes(primary_buy, sig_map, rank_map)
 
     backup_buy = []
     seen = set(primary_buy)
@@ -1052,7 +1077,7 @@ def _do_trading(context):
                 continue
 
             sig = sig_map[code]
-            if _is_overheated_for_buy(code, sig, price):
+            if _is_overheated_for_buy(code, sig, price, context):
                 continue
 
             alloc = available / slots * base_ratio
