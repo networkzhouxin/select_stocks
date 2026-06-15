@@ -69,6 +69,15 @@ from jqdata import *
 # ============================================================
 #  初始化
 # ============================================================
+def get_default_capital_tiers():
+    return {
+        'micro':  {'max_hold': 3, 'base_ratio': 0.75},
+        'small':  {'max_hold': 3, 'base_ratio': 0.75},
+        'medium': {'max_hold': 3, 'base_ratio': 0.75},
+        'large':  {'max_hold': 3, 'base_ratio': 0.75},
+    }
+
+
 def initialize(context):
     set_benchmark('000300.XSHG')
     set_option('use_real_price', True)
@@ -99,12 +108,7 @@ def initialize(context):
 
 
     # ---- 资金档位 ----
-    g.capital_tiers = {
-        'micro':  {'max_hold': 3, 'base_ratio': 0.70},
-        'small':  {'max_hold': 3, 'base_ratio': 0.70},
-        'medium': {'max_hold': 3, 'base_ratio': 0.65},
-        'large':  {'max_hold': 3, 'base_ratio': 0.65},
-    }
+    g.capital_tiers = get_default_capital_tiers()
 
     # ---- 策略参数 ----
     g.params = {

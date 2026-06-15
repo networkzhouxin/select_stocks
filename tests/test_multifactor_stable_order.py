@@ -62,6 +62,26 @@ def test_buy_overheat_filter_uses_rsi_without_ma20_distance():
     assert strategy.is_overheated_for_buy("TEST", sig, 101.0)
 
 
+def test_joinquant_tiers_use_high_base_ratio_experiment():
+    tiers = strategy.get_default_capital_tiers()
+
+    assert tiers["micro"]["base_ratio"] == 0.75
+    assert tiers["small"]["base_ratio"] == 0.75
+    assert tiers["medium"]["base_ratio"] == 0.75
+    assert tiers["large"]["base_ratio"] == 0.75
+    assert all(cfg["max_hold"] == 3 for cfg in tiers.values())
+
+
+def test_ptrade_tiers_match_joinquant_high_base_ratio():
+    tiers = ptrade_strategy._get_default_capital_tiers()
+
+    assert tiers["micro"]["base_ratio"] == 0.75
+    assert tiers["small"]["base_ratio"] == 0.75
+    assert tiers["medium"]["base_ratio"] == 0.75
+    assert tiers["large"]["base_ratio"] == 0.75
+    assert all(cfg["max_hold"] == 3 for cfg in tiers.values())
+
+
 def test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance():
     sig = {"ma20": 100.0, "rsi": 75.1}
 
@@ -102,6 +122,8 @@ if __name__ == "__main__":
         test_removable_positions_use_rank_tiebreak_for_equal_scores,
         test_buy_codes_use_score_then_rank_then_code,
         test_buy_overheat_filter_uses_rsi_without_ma20_distance,
+        test_joinquant_tiers_use_high_base_ratio_experiment,
+        test_ptrade_tiers_match_joinquant_high_base_ratio,
         test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance,
         test_ptrade_sorting_matches_joinquant_stable_tiebreaks,
     ):
