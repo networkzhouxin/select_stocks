@@ -20,7 +20,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - `smart_trade_joinquant_v15_7_etf.py` — **V15.7 JoinQuant** (212.8% return, 10万起始, buy price fix + bond slot-filling, 10-ETF pool)
 - `smart_trade_joinquant_v15_7_expanded_etf.py` — **V15.7-Expanded JoinQuant** (267.9% return, 10万起始, 12-ETF pool: +日经+中概互联)
 - `smart_trade_joinquant_v15_9_etf.py` — **V15.9 JoinQuant, current best of momentum** (256.9% return, 2万起始, 12-ETF + unified max_hold=3)
-- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.10 JoinQuant** (+422.15%阶段验证 with RSI-only防追高+后备补位; V2.10 core +371.7%, 2万起始, 7-factor scoring, 12-ETF pool, 聚宽实测)
+- `smart_trade_joinquant_multifactor_etf.py` — **Multi-Factor V2.10 JoinQuant** (+450.91%阶段验证 with RSI-only防追高+后备补位+base_ratio 0.75; V2.10 core +371.7%, 2万起始, 7-factor scoring, 12-ETF pool, 聚宽实测)
 - `smart_trade_ptrade_multifactor_etf.py` — **Multi-Factor V2.10 PTrade版** (实盘/模拟部署用, 策略逻辑与聚宽版同步; PTrade回测仅验证无报错)
 - `smart_trade_ptrade_v15_7_etf.py` — **V15.7 PTrade版** (实盘/模拟部署用, 10-ETF pool)
 - `策略说明文档.md` — Complete strategy documentation for V15.x (Chinese)
@@ -73,12 +73,12 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 
 | Tier | Total Assets | Max Holdings | Base Position |
 |------|-------------|--------------|---------------|
-| micro | <1.5万 | 3 | 70% |
-| small | 1.5-5万 | 3 | 70% |
-| medium | 5-10万 | 3 | 65% |
-| large | >10万 | 3 | 65% |
+| micro | <1.5万 | 3 | 75% |
+| small | 1.5-5万 | 3 | 75% |
+| medium | 5-10万 | 3 | 75% |
+| large | >10万 | 3 | 75% |
 
-> **V2.10**: Unified max_hold=3 for all tiers. ETF prices are low enough that even 2万 can hold 3 positions. The old tier restrictions (micro=1, small=2) created an unnecessary structural disadvantage for small capital.
+> **V2.10**: Unified max_hold=3 and base_ratio=0.75 for all tiers. ETF prices are low enough that even 2万 can hold 3 positions. The old tier restrictions (micro=1, small=2) created an unnecessary structural disadvantage for small capital. 2026-06-15 JoinQuant validation showed base_ratio 0.75 improved return to +450.91% with max DD 15.92% and Sharpe 1.092.
 
 ## Critical Design Rules
 
@@ -174,11 +174,13 @@ Three optimization attempts, two succeeded:
 | V2.5 | 2010-2014 (out) | 2万 | +37.64% | 6.81% | 6.64% | 0.405 | — |
 | **V2.6** | **2015-2026** | **2万** | **+372%** | **15.4%** | **14.4%** | **0.957** | **—** |
 | **V2.10** | **2015-2026** | **2万** | **+371.7%** | **15.4%** | **15.2%** | **0.950** | **1/12** |
-| **V2.10 + RSI-only防追高/后备补位** | **2015-2026** | **2万** | **+422.15%** | **16.43%** | **15.50%** | **1.088** | **—** |
+| **V2.10 + RSI-only防追高/后备补位 + base_ratio 0.75** | **2015-2026** | **2万** | **+450.91%** | **17.01%** | **15.92%** | **1.092** | **—** |
+| V2.10 + RSI-only防追高/后备补位 + base_ratio 0.70 | 2015-2026 | 2万 | +428.18% | 16.55% | 15.50% | 1.087 | — |
+| V2.10 + RSI-only防追高/后备补位 | 2015-2026 | 2万 | +422.15% | 16.43% | 15.50% | 1.088 | — |
 | V2.10 + MA20+RSI防追高/后备补位 | 2015-2026 | 2万 | +385.88% | 15.66% | 15.19% | 0.985 | — |
 
 > **V2.10聚宽实测**: +371.7%, 年化15.35%, 最大回撤15.19%, 夏普0.95, Beta 0.25, 盈亏比2.15, 仅1年亏损(-6.6%, 2018)。12个时间段全覆盖测试全部正收益+正超额。
-> **2026-06-12阶段验证**: RSI-only防追高+后备补位版本 +422.15%, 年化16.43%, 最大回撤15.50%, 夏普1.088, 盈亏比2.292。旧版MA20+RSI防追高为 +385.88%。阶段结果尚未完整WF验证，不替代V2.10核心参数结论。
+> **2026-06-15阶段验证**: RSI-only防追高+后备补位+全档位base_ratio 0.75版本 +450.91%, 年化17.01%, 最大回撤15.92%, 夏普1.092, 盈亏比2.264。base_ratio 0.70版本为 +428.18%, 旧RSI-only版本为 +422.15%, 旧版MA20+RSI防追高为 +385.88%。阶段结果尚未完整WF验证。
 
 ### V2.5→V2.6 Iteration (2026-05, on JoinQuant)
 
@@ -349,6 +351,8 @@ Direct A/B test on same period (2015-2026, 2万起始):
 - **PTrade partial-cancel handling**: `status == "5"` with `business_amount > 0` is a partial fill, not a pure failure. Wait for trade callback.
 
 **JoinQuant result**: RSI-only防追高 +422.15%, annualized 16.43%, max DD 15.50%, Sharpe 1.088, P/L ratio 2.292. MA20+RSI旧版 was +385.88%, annualized 15.66%, max DD 15.19%, Sharpe 0.985, P/L ratio 2.181. This is better than V2.10 core but not yet a full WF-proven core-parameter change.
+
+**2026-06-15 capital utilization update**: base_ratio 0.75 for all tiers is now synced in JoinQuant and PTrade. JoinQuant validation returned +450.91%, annualized 17.01%, max DD 15.92%, Sharpe 1.092. Sell-side shadow stats were removed after confirming rotation sells, MA10 trend stops, and ordinary stops did not justify further stop-loss changes.
 
 **Tested and removed:**
 - **盈利回落保护**: +381.78%, annualized 15.57%, Sharpe 0.982, P/L ratio 2.158. Worse than 防追高 version; removed.
