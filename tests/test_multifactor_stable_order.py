@@ -5,6 +5,7 @@ import importlib.util
 import pathlib
 import sys
 import types
+from datetime import date
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -117,6 +118,25 @@ def test_ptrade_sorting_matches_joinquant_stable_tiebreaks():
         "BBB", "AAA", "CCC"]
 
 
+def test_ptrade_tracks_all_paused_pool_codes_for_1035_recheck():
+    paused_codes = {"AAA", "CCC"}
+
+    tracked = ptrade_strategy._find_paused_pool_codes(
+        ["AAA", "BBB", "CCC", "DDD"],
+        paused_codes.__contains__,
+    )
+
+    assert tracked == {"AAA", "CCC"}
+
+
+def test_ptrade_detects_same_day_buy_for_sell_guard():
+    buy_date = {"AAA": date(2026, 6, 16)}
+
+    assert ptrade_strategy._bought_today(buy_date, "AAA", date(2026, 6, 16))
+    assert not ptrade_strategy._bought_today(buy_date, "AAA", date(2026, 6, 17))
+    assert not ptrade_strategy._bought_today(buy_date, "BBB", date(2026, 6, 16))
+
+
 if __name__ == "__main__":
     for test in (
         test_removable_positions_use_rank_tiebreak_for_equal_scores,
@@ -126,5 +146,7 @@ if __name__ == "__main__":
         test_ptrade_tiers_match_joinquant_high_base_ratio,
         test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance,
         test_ptrade_sorting_matches_joinquant_stable_tiebreaks,
+        test_ptrade_tracks_all_paused_pool_codes_for_1035_recheck,
+        test_ptrade_detects_same_day_buy_for_sell_guard,
     ):
         test()

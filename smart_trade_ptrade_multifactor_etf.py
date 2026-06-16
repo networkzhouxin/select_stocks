@@ -142,7 +142,7 @@ def initialize(context):
         g.__is_live = is_trade()
     except Exception:
         g.__is_live = False
-    g.paused_holds = set()
+    g.paused_pool_codes = set()
 
     if g.__is_live:
         run_daily(context, _update_tier_wrapper, time='09:30')
@@ -164,7 +164,7 @@ def before_trading_start(context, data):
     g.__data = data
     g.sold_today = {}
     g.__last_snapshot = {}
-    g.paused_holds = set()
+    g.paused_pool_codes = set()
     log.info('[盘前] 清理缓存完毕')
 
     if g.__pending_orders:
@@ -225,31 +225,34 @@ def _halt_recover_wrapper(context):
 #  10:35 停牌恢复处理
 # ============================================================
 def _halt_recover(context):
-    if not g.paused_holds:
+    if not g.paused_pool_codes:
         return
 
     today = context.blotter.current_dt.date()
     positions = _positions(context)
 
-    recovered = []
-    for code in list(g.paused_holds):
+    recovered_codes = []
+    for code in list(g.paused_pool_codes):
         if not _is_paused(code):
-            recovered.append(code)
-            g.paused_holds.discard(code)
+            recovered_codes.append(code)
+            g.paused_pool_codes.discard(code)
 
-    still_paused = [c for c in g.paused_holds]
+    still_paused = [c for c in g.paused_pool_codes]
     if still_paused:
         log.info('[停牌恢复] 仍在停牌: %s' % ', '.join(still_paused))
 
-    if not recovered:
+    if not recovered_codes:
         return
 
-    log.info('[停牌恢复] 已恢复交易: %s' % ', '.join(recovered))
+    log.info('[停牌恢复] 已恢复交易: %s' % ', '.join(recovered_codes))
 
     # 检查恢复的持仓是否需要止损
     stop_triggered = []
-    for code in recovered:
+    for code in recovered_codes:
         if code not in positions or _pos_amount(positions[code]) <= 0:
+            continue
+        if _bought_today(g.buy_date, code, today):
+            log.info('[同日买入保护] %s 今日新买入，10:35不触发卖出' % code)
             continue
         if code not in g.highest_since_buy or code not in g.entry_atr:
             continue
@@ -272,6 +275,7 @@ def _halt_recover(context):
             reason_parts.append('止损:%s' % ','.join(stop_triggered))
         if is_rebalance:
             reason_parts.append('轮动日')
+        reason_parts.append('恢复:%s' % ','.join(recovered_codes))
         log.info('[停牌恢复] 触发完整交易: %s' % ' | '.join(reason_parts))
         _do_trading(context)
     else:
@@ -795,13 +799,32 @@ def _sort_buy_codes(codes, sig_map, rank_map):
             c))
 
 
+def _find_paused_pool_codes(etf_pool, is_paused_func):
+    """Return paused pool ETFs that should be checked again at 10:35."""
+    paused_codes = set()
+    for code in etf_pool:
+        if not is_paused_func(code):
+            continue
+        paused_codes.add(code)
+    return paused_codes
+
+
+def _bought_today(buy_date_map, code, today):
+    """True when code was bought on the current trading day."""
+    return buy_date_map.get(code) == today
+
+
 def _check_stop_triggered(context, atr_mult_override=None):
     """检查哪些持仓触发止损线（仅检测，不执行）"""
     triggered = []
     positions = _positions(context)
+    today = context.blotter.current_dt.date()
     for code in list(positions.keys()):
         pos = positions[code]
         if _pos_amount(pos) <= 0 or _pos_cost(pos) <= 0:
+            continue
+        if _bought_today(g.buy_date, code, today):
+            log.info('[同日买入保护] %s 今日新买入，跳过止损卖出检查' % code)
             continue
         if g.__is_live and g.sold_today.get(code, False):
             continue
@@ -862,11 +885,11 @@ def _do_trading(context):
 
     # 4. 全池评分
     all_results = []
-    # 记录停牌的持仓，供10:35恢复处理
-    positions_snapshot = _positions(context)
-    for code in positions_snapshot:
-        if _pos_amount(positions_snapshot[code]) > 0 and _is_paused(code):
-            g.paused_holds.add(code)
+    # 记录本次评分跳过的停牌ETF，供10:35恢复处理
+    paused_codes = _find_paused_pool_codes(g.etf_pool, _is_paused)
+    if paused_codes:
+        g.paused_pool_codes.update(paused_codes)
+        log.info('[停牌记录] %s 暂停评分，10:35检查恢复' % ', '.join(sorted(paused_codes)))
     for code in g.etf_pool:
         if _is_paused(code):
             continue
@@ -1013,6 +1036,9 @@ def _do_trading(context):
     # 7. 轮动卖出
     for code in list(current_holds.keys()):
         if code not in target_codes and code not in stop_triggered:
+            if _bought_today(g.buy_date, code, today):
+                log.info('[同日买入保护] %s 今日新买入，跳过轮动卖出' % code)
+                continue
             if _is_paused(code):
                 log.info('[跳过卖出] %s 停牌中，保留持仓' % code)
                 continue
