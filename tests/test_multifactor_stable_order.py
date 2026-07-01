@@ -94,6 +94,39 @@ def test_ptrade_tiers_match_joinquant_high_base_ratio():
     assert all(cfg["max_hold"] == 3 for cfg in tiers.values())
 
 
+def test_ptrade_profit_floor_matches_joinquant_fixed_tiers():
+    params = {
+        "profit_floor_enabled": True,
+        "profit_floor_tiers": [(0.15, 0.08), (0.10, 0.05)],
+    }
+
+    assert ptrade_strategy._calc_profit_floor_price(100.0, 109.9, params) is None
+    assert round(ptrade_strategy._calc_profit_floor_price(100.0, 110.0, params), 2) == 105.0
+    assert round(ptrade_strategy._calc_profit_floor_price(100.0, 116.0, params), 2) == 108.0
+
+
+def test_ptrade_stop_price_applies_profit_floor():
+    ptrade_strategy.g = types.SimpleNamespace(
+        params={
+            "atr_period": 14,
+            "trailing_atr_mult": 2.5,
+            "trailing_atr_mult_high_vol": 2.0,
+            "high_vol_threshold": 0.30,
+            "stop_floor": 0.05,
+            "stop_cap": 0.15,
+            "profit_floor_enabled": True,
+            "profit_floor_tiers": [(0.15, 0.08), (0.10, 0.05)],
+        },
+        code_stop_params={},
+    )
+
+    stop_price = ptrade_strategy._calc_stop_price(
+        "TEST.SS", highest=110.0, atr_val=100.0,
+        profit_pct=0.10, entry_cost=100.0)
+
+    assert round(stop_price, 2) == 105.0
+
+
 def test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance():
     sig = {"ma20": 100.0, "rsi": 75.1}
 
@@ -156,6 +189,8 @@ if __name__ == "__main__":
         test_joinquant_tiers_use_high_base_ratio_experiment,
         test_joinquant_profit_floor_uses_fixed_tiers,
         test_ptrade_tiers_match_joinquant_high_base_ratio,
+        test_ptrade_profit_floor_matches_joinquant_fixed_tiers,
+        test_ptrade_stop_price_applies_profit_floor,
         test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance,
         test_ptrade_sorting_matches_joinquant_stable_tiebreaks,
         test_ptrade_tracks_all_paused_pool_codes_for_1035_recheck,
