@@ -73,6 +73,17 @@ def test_joinquant_tiers_use_high_base_ratio_experiment():
     assert all(cfg["max_hold"] == 3 for cfg in tiers.values())
 
 
+def test_joinquant_profit_floor_uses_fixed_tiers():
+    params = {
+        "profit_floor_enabled": True,
+        "profit_floor_tiers": [(0.15, 0.08), (0.10, 0.05)],
+    }
+
+    assert strategy.calc_profit_floor_price(100.0, 109.9, params) is None
+    assert round(strategy.calc_profit_floor_price(100.0, 110.0, params), 2) == 105.0
+    assert round(strategy.calc_profit_floor_price(100.0, 116.0, params), 2) == 108.0
+
+
 def test_ptrade_tiers_match_joinquant_high_base_ratio():
     tiers = ptrade_strategy._get_default_capital_tiers()
 
@@ -143,6 +154,7 @@ if __name__ == "__main__":
         test_buy_codes_use_score_then_rank_then_code,
         test_buy_overheat_filter_uses_rsi_without_ma20_distance,
         test_joinquant_tiers_use_high_base_ratio_experiment,
+        test_joinquant_profit_floor_uses_fixed_tiers,
         test_ptrade_tiers_match_joinquant_high_base_ratio,
         test_ptrade_buy_overheat_filter_uses_rsi_without_ma20_distance,
         test_ptrade_sorting_matches_joinquant_stable_tiebreaks,

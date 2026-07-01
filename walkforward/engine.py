@@ -32,6 +32,8 @@ DEFAULT_PARAMS = {
     'atr_period': 14, 'trailing_atr_mult': 2.5, 'trailing_atr_mult_high_vol': 2.0,
     'high_vol_threshold': 0.30, 'stop_floor': 0.05, 'stop_cap': 0.15,
     'score_buy_threshold': 60, 'switch_threshold': 8.0,
+    'profit_floor_enabled': False,
+    'profit_floor_tiers': [(0.15, 0.08), (0.10, 0.05)],
     'hold_threshold': 55,   # 与买入门槛差5分惯性保护（WF验证：OOS +1.4pp，微弱正贡献）
 }
 BASE_WEIGHTS = {'rsi': 0.108, 'macd': 0.161, 'bollinger': 0.089, 'momentum': 0.223,
@@ -58,14 +60,26 @@ def get_tier(total):
 
 
 TIER_CFG = {
-    'micro':  {'max_hold': 3, 'base_ratio': 0.70},
-    'small':  {'max_hold': 3, 'base_ratio': 0.70},
-    'medium': {'max_hold': 3, 'base_ratio': 0.65},
-    'large':  {'max_hold': 3, 'base_ratio': 0.65},
+    'micro':  {'max_hold': 3, 'base_ratio': 0.75},
+    'small':  {'max_hold': 3, 'base_ratio': 0.75},
+    'medium': {'max_hold': 3, 'base_ratio': 0.75},
+    'large':  {'max_hold': 3, 'base_ratio': 0.75},
 }
 
 
-def calc_stop_price(highest, atr_val, params, atr_mult_override=None, profit_pct=None):
+def calc_profit_floor_price(entry_cost, highest, params):
+    if not params.get('profit_floor_enabled', False):
+        return None
+    if entry_cost is None or highest is None or entry_cost <= 0 or highest <= 0:
+        return None
+    peak_profit = highest / entry_cost - 1
+    for trigger_profit, locked_profit in params.get('profit_floor_tiers', []):
+        if peak_profit >= trigger_profit:
+            return entry_cost * (1 + locked_profit)
+    return None
+
+
+def calc_stop_price(highest, atr_val, params, atr_mult_override=None, profit_pct=None, entry_cost=None):
     p = params
     if atr_mult_override is not None:
         atr_mult = atr_mult_override
@@ -82,7 +96,11 @@ def calc_stop_price(highest, atr_val, params, atr_mult_override=None, profit_pct
                 atr_mult *= 0.8
     pct_stop = atr_mult * atr_val / highest
     pct_stop = max(p['stop_floor'], min(p['stop_cap'], pct_stop))
-    return highest * (1 - pct_stop)
+    atr_stop = highest * (1 - pct_stop)
+    floor_price = calc_profit_floor_price(entry_cost, highest, p)
+    if floor_price is not None:
+        return max(atr_stop, floor_price)
+    return atr_stop
 
 
 class Engine:
@@ -251,7 +269,9 @@ class Engine:
                 pnl = (cur - pos['cost']) / pos['cost'] if pos['cost'] > 0 else 0
                 cp = self.code_params.get(code, {})
                 ep = dict(p); ep.update(cp)
-                sp = calc_stop_price(self.highest[code], self.entry_atr[code], ep, None, pnl)
+                sp = calc_stop_price(
+                    self.highest[code], self.entry_atr[code], ep, None, pnl,
+                    pos['cost'])
                 if cur <= sp:
                     stop_triggered.append(code)
 

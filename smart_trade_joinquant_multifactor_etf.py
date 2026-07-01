@@ -133,6 +133,8 @@ def initialize(context):
         'high_vol_threshold': 0.30,
         'stop_floor': 0.05,
         'stop_cap': 0.15,
+        'profit_floor_enabled': True,
+        'profit_floor_tiers': [(0.15, 0.08), (0.10, 0.05)],
         'score_buy_threshold': 60,
         'switch_threshold': 8.0,
     }
@@ -537,7 +539,21 @@ def calc_multi_factor_score(code, end_date):
 # ============================================================
 #  ATR跟踪止损（动态倍数）
 # ============================================================
-def calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=None):
+def calc_profit_floor_price(entry_cost, highest, params=None):
+    p = params or g.params
+    if not p.get('profit_floor_enabled', False):
+        return None
+    if entry_cost is None or highest is None or entry_cost <= 0 or highest <= 0:
+        return None
+
+    peak_profit = highest / entry_cost - 1
+    for trigger_profit, locked_profit in p.get('profit_floor_tiers', []):
+        if peak_profit >= trigger_profit:
+            return entry_cost * (1 + locked_profit)
+    return None
+
+
+def calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=None, entry_cost=None):
     p = g.params
     # 品种级参数覆盖（黄金等均值回复型品种用更紧止损）
     cp = g.code_stop_params.get(code, {})
@@ -560,7 +576,11 @@ def calc_stop_price(code, highest, atr_val, atr_mult_override=None, profit_pct=N
     stop_cap = cp.get('stop_cap', p['stop_cap'])
     pct_stop = atr_mult * atr_val / highest
     pct_stop = max(stop_floor, min(stop_cap, pct_stop))
-    return highest * (1 - pct_stop)
+    atr_stop = highest * (1 - pct_stop)
+    floor_price = calc_profit_floor_price(entry_cost, highest, p)
+    if floor_price is not None:
+        return max(atr_stop, floor_price)
+    return atr_stop
 
 
 def is_overheated_for_buy(code, sig, price):
@@ -614,7 +634,9 @@ def check_stop_triggered(context, current_data, atr_mult_override=None):
         cur_price = current_data[code].last_price
         if code in g.highest_since_buy and code in g.entry_atr:
             pnl = (cur_price - pos.avg_cost) / pos.avg_cost if pos.avg_cost > 0 else 0
-            stop_price = calc_stop_price(code, g.highest_since_buy[code], g.entry_atr[code], atr_mult_override, pnl)
+            stop_price = calc_stop_price(
+                code, g.highest_since_buy[code], g.entry_atr[code],
+                atr_mult_override, pnl, pos.avg_cost)
             if cur_price <= stop_price:
                 triggered.append(code)
     return triggered
