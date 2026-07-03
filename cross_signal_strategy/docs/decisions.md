@@ -65,3 +65,203 @@ Evidence: User's recent concern includes whether volatility-based sizing can mis
 Affected files: `cross_signal_strategy/docs/strategy_spec.md`
 Allowed validation influence: none
 Status: adopted
+
+### Implement JoinQuant v0.1 From Frozen Spec
+
+Date: 2026-07-02
+Decision: Create `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py` as the first runnable JoinQuant version.
+Reason: The strategy needs an isolated file for training-period validation without modifying the production multi-factor strategy.
+Evidence: Implementation follows the frozen v0.1 spec: RSI/MACD/KDJ cross resonance, MA/BOLL location, light trend context, volume confirmation, equal-weight sizing, ATR stop, no profit floor.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`
+Allowed validation influence: none
+Status: adopted
+
+### Add Score Skip Diagnostics Before Tuning
+
+Date: 2026-07-02
+Decision: Add per-ETF score skip reason diagnostics when v0.1 produces no valid scores.
+Reason: The first JoinQuant training log showed no errors but also no valid scores or trades, so the next step must identify the filter/data root cause before changing any strategy thresholds.
+Evidence: `cross_signal_strategy/logs/test.log` had 295 rebalance days, 295 `no valid scores`, zero candidates, zero buys, and zero sells.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`
+Allowed validation influence: training only for debugging, not for parameter tuning
+Status: adopted
+
+### Add Full-Pool Cross-Signal Diagnostics
+
+Date: 2026-07-02
+Decision: Log full-pool `reversal_score > 0` cross-signal candidates on every rebalance day, even when they are not in the top buy-score candidates.
+Reason: The training log showed valid scoring but zero trades because top candidates had `reversal_score=0` and buy scores never reached 60. The next diagnostic must determine whether cross signals are absent from the full ETF pool or merely ranked below non-cross candidates.
+Evidence: Latest training log had 295 top-candidate sections, max buy score 41, zero buys, and top displayed candidates with `rev=0`.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`
+Allowed validation influence: training only for debugging, not for parameter tuning
+Status: adopted
+
+### Add Loose Turn-Up Diagnostics
+
+Date: 2026-07-02
+Decision: Add observation-only loose reversal diagnostics for RSI6, MACD DIF, and KDJ K/J turning upward.
+Reason: The training log showed strict RSI/MACD/KDJ upward crosses were absent across rebalance checks. Before lowering buy thresholds or changing strategy rules, the next step is to see whether indicators are at least turning upward but not crossing by the strict definition.
+Evidence: Latest training log had 295 `[cross signals] none in full pool`, zero buys, max buy score 41, and no strict reversal candidates.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`
+Allowed validation influence: training only for debugging, not for parameter tuning
+Status: adopted
+
+### Align Cross Detection With Logged Diff
+
+Date: 2026-07-02
+Decision: Rewrite strict cross detection to use the same difference semantics as the diagnostic log: previous difference <= 0 and current difference > 0 for upward crosses, and the inverse for downward crosses.
+Reason: The diff diagnostics showed many true crosses, while `reversal_score` stayed at zero and `[cross signals]` reported none. The strategy needs one consistent definition for scoring and diagnostics before any performance judgment.
+Evidence: Training log showed examples such as RSI_DIFF and KDJ_DIFF moving from negative to positive while `rev=0`.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`
+Allowed validation influence: bug fix only; rerun training before any strategy tuning
+Status: adopted
+
+### Add Versioned Startup Self Check
+
+Date: 2026-07-02
+Decision: Print a startup self-check line with version `cross-v0.1.1`, the diff-cross fix flag, and a minimal reversal-score check.
+Reason: JoinQuant logs still showed `rev=0` after the local diff-cross fix, which likely means the platform was running an older pasted strategy. A visible startup marker makes copy/version mismatch immediately detectable.
+Evidence: Local pipeline test returns `diff_cross_self_check=True` and `self_rev=12`, while the uploaded JoinQuant log had no version marker and still showed zero reversal scores.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`
+Allowed validation influence: diagnostic only; no trading rule change
+Status: adopted
+
+### Exclude Buy Candidates With Force-Sell Conflict
+
+Date: 2026-07-02
+Decision: New buy candidates must have `sell_score < sell_threshold`; an ETF with simultaneous force-sell resonance is not eligible for fresh buying.
+Reason: A single signal snapshot can contain both high buy score and force-sell score. Buying such a conflicted candidate violates the sell rule and makes the training result hard to interpret.
+Evidence: Added a failing unit test before implementation: `test_buy_candidates_exclude_force_sell_conflicts`.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only for correctness; no validation-period influence
+Status: adopted
+
+### Guard Cross Detection Against JoinQuant Global Name Pollution
+
+Date: 2026-07-03
+Decision: Cross detection must explicitly use Python built-in `any`, not the module-global `any` name.
+Reason: `from jqdata import *` can pollute module globals in the JoinQuant runtime. The training log showed the startup self-check returning `diff_cross_self_check=False expected=True`, and every rebalance day reported no strict cross signals despite logged indicator differences crossing from negative to positive.
+Evidence: 2019-2021 training log: `[cross-v0.1.2] ... diff_cross_self_check=False expected=True | self_rev=0`, followed by repeated `[cross signals] none in full pool`. Added failing unit test `test_cross_detection_ignores_jqdata_any_global_pollution` before implementation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only for correctness; no validation-period influence
+Status: adopted
+
+### Use Latest Cross Direction Within Recent Window
+
+Date: 2026-07-03
+Decision: Recent cross detection must use the latest cross direction inside the lookback window. If an upward cross is followed by a downward cross inside the same window, only the downward cross remains active, and vice versa.
+Reason: The 2019-2021 training log after the v0.1.3 fix showed many candidates with simultaneous `RSI_UP=True` and `RSI_DOWN=True`, or simultaneous `KDJ_UP=True` and `KDJ_DOWN=True`. This made buy and sell reversal scores both react to stale crosses inside the same recent window.
+Evidence: Training-log diagnostic count: 2632 cross detail rows, 611 with at least one same-indicator directional conflict. Added failing unit test `test_recent_cross_detection_uses_latest_cross_direction` before implementation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only for correctness; no validation-period influence
+Status: adopted
+
+### Expand Cross Flag Logging Detail
+
+Date: 2026-07-03
+Decision: Cross-signal detail logs should print each component flag separately: RSI12/RSI24 up and down, MACD up and down, and KDJ K/J up and down.
+Reason: The v0.1.4 training log still showed aggregate `RSI_UP=True` and `RSI_DOWN=True` in 54 cross rows. Those remaining cases may come from RSI6 crossing RSI12 and RSI24 in different directions, so aggregate logs are not precise enough to diagnose whether a scoring change is needed.
+Evidence: Added failing unit test `test_format_cross_flags_shows_rsi_and_kdj_detail` before implementation. This is observation-only logging and does not change scores, thresholds, ranking, or order execution.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only for diagnostics; no validation-period influence
+Status: adopted
+
+### Use Net RSI Group Direction For Scoring
+
+Date: 2026-07-03
+Decision: RSI scoring first resolves the RSI12/RSI24 group direction. If active RSI crosses contain both up and down directions, RSI contributes zero points to both buy and sell reversal scores. If active RSI crosses agree, the existing per-pair scoring is preserved.
+Reason: Mixed RSI group direction is contradictory evidence, not simultaneous buy and sell confirmation. This keeps MACD/KDJ scoring unchanged while preventing RSI from raising both sides during short-term oscillation.
+Evidence: The v0.1.5 2019-2021 training log showed 54 RSI group mixed rows, with `rsi12_both=0`, `rsi24_both=0`, `kdj_mixed_group=0`, and `macd_both=0`. Added failing tests `test_buy_score_ignores_mixed_rsi_group_direction` and `test_sell_score_ignores_mixed_rsi_group_direction` before implementation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only for correctness; no validation-period influence
+Status: adopted
+
+### Add Buy-Side Widening Confirmation Signals
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.0` by adding buy-side confirmation points when a fast line is already above its slow line and the positive difference is widening. Confirmation points use half of the strict-cross weight: RSI pair +6, MACD +5, KDJ K +3, and KDJ J +2. Strict crosses keep their original full weight and do not double-count confirmation points.
+Reason: The v0.1.6 training result showed correct cross detection but modest return. A strict-cross-only entry can miss ETF trends after the crossing day. Widening positive differences capture continued strengthening without lowering thresholds or using validation-period feedback.
+Evidence: Added failing tests `test_buy_score_adds_half_weight_for_widening_positive_confirmations` and `test_buy_score_does_not_double_count_confirmations_after_strict_cross` before implementation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only for structural research; no validation-period influence
+Status: reverted by `cross-v0.2.1`
+
+### Revert Widening Confirmation And Use Daily Event Evaluation
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.1` by reverting the failed widening-confirmation buy-score booster and evaluating signals on every trading weekday instead of only Tuesday and Thursday.
+Reason: The cross-signal strategy is event-driven: crosses can occur on any trading day. Fixed weekday rotation belongs to ranking/rotation strategies and can delay valid cross-signal exits or entries. The widening-confirmation booster failed in training and should not remain in the baseline.
+Evidence: `cross-v0.2.0` 2019-2021 training result fell to +19.99% versus `cross-v0.1.6` +32.39%, with higher drawdown. Added failing tests before implementation: `test_buy_score_does_not_add_widening_positive_confirmations_without_cross`, `test_default_params_evaluate_signals_every_trading_weekday`, and the version self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/failed_experiments.md`
+Allowed validation influence: training only; no validation-period influence
+Status: adopted
+
+### Require Low-Position Eligibility For New Buys
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.2` by requiring new buy candidates to have a reasonable price-position setup: BOLL lower-to-middle region, a recent cross back above BOLL middle, or price near MA20. Candidates clearly far above MA20 are not eligible for new entry even if their cross score reaches the buy threshold.
+Reason: `cross-v0.2.1` confirmed daily event evaluation works mechanically, but naked daily response amplified noise. Training-period trades rose from `cross-v0.1.6` 145 buys / 145 sells to 222 buys / 214 sells, while return fell from +32.39% to +23.18%. The strategy goal is low-position reversal buying, not chasing every daily cross.
+Evidence: Added failing tests before implementation: `test_buy_candidates_require_low_position_for_new_entries`, `test_buy_candidates_accept_ma20_repair_position_for_new_entries`, and the `cross-v0.2.2` self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; no validation-period influence
+Status: adopted
+
+### Confirm Signal Sells With Price Structure
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.3` by requiring signal-based sells to have both `sell_score >= sell_threshold` and price-structure confirmation. Confirmation can come from price below MA20, price below BOLL middle, close below a falling MA10, downside continuation, or a high-position RSI turn-down. ATR stops remain unconditional.
+Reason: The `cross-v0.2.2` training log showed all 212 sells were `sell_score` sells, while buy count barely fell versus `cross-v0.2.1`. This suggests daily down-cross signals are still acting as short-term noise exits. Mature versions in this repository use noise-control ideas such as hold protection and structure checks; the suitable idea to borrow here is not the old rotation framework, but requiring a real price-structure break before a normal signal sell.
+Evidence: Added failing tests before implementation: `test_signal_sell_requires_structure_confirmation`, `test_signal_sell_confirmed_by_ma20_break`, `test_atr_stop_sells_without_signal_confirmation`, and the `cross-v0.2.3` self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; no validation-period influence
+Status: adopted
+
+### Convert Risk-Tighten Warning Into Tighter ATR Stop
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.4` by making `risk-tighten` set a per-position tightened stop state instead of only logging. Normal ATR stop remains `2.5x` with a 5% floor; risk-tightened positions use `1.5x` ATR with a 3% floor. Signal sells still require structure confirmation, and ATR stops remain the only unconditional exit.
+Reason: The `cross-v0.2.3` training log showed 362 `risk-tighten` warnings. This is useful information that should improve protection after down-cross risk appears, but turning warnings directly into sells would reintroduce the noise problem v0.2.3 fixed. Tightening the stop borrows the suitable risk-management idea from mature strategy versions while preserving the cross-signal framework.
+Evidence: Added failing tests before implementation: `test_risk_tightened_stop_price_is_higher_than_normal_stop`, `test_check_atr_stops_uses_risk_tightened_state`, `test_risk_tightened_state_is_created_when_missing`, and the `cross-v0.2.4` self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; no validation-period influence
+Status: archived by `cross-v0.2.5`; keep as a future combination factor, not a mainline rule
+
+### Archive Risk-Tighten ATR And Restore Mainline Stop
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.5` by functionally restoring the `cross-v0.2.3` mainline: `risk-tighten` remains an observation-only warning, and ATR stops use the normal `2.5x` multiplier with the 5% floor. The failed `cross-v0.2.4` risk-tighten ATR idea is retained in research notes as a future combination factor.
+Reason: The user correctly noted that a single factor can fail alone but work in combination. The right handling is to keep the production/research mainline clean while preserving the factor for later controlled combination tests, especially with ADX/DMI trend-vs-chop detection.
+Evidence: `cross-v0.2.4` 2019-2021 training fell to +39.44% from `cross-v0.2.3` +44.15%, while max drawdown improved only from 6.43% to 6.24%. Added failing tests before rollback: `test_risk_warning_does_not_change_mainline_stop_price`, `test_check_atr_stops_ignores_archived_risk_tightened_state`, and the `cross-v0.2.5` self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/failed_experiments.md`
+Allowed validation influence: training only; no validation-period influence
+Status: adopted
+
+### Add ADX/DMI Strong-Trend Sell Protection
+
+Date: 2026-07-03
+Decision: Upgrade to `cross-v0.2.6` by adding standard DMI/ADX(14). ADX/DMI is used only to protect strong upward trends from non-severe signal sells: if ADX >= 25, +DI > -DI, and MA20 slope is non-negative, a sell signal caused only by softer structure such as BOLL-middle weakness is blocked. Severe structure breaks such as close below MA20, close below falling MA10, or downside continuation still sell normally.
+Reason: The strategy's core problem is noisy daily down-crosses during otherwise healthy trends. ADX/DMI is a standard trend-strength tool and fits this specific role better than blindly tightening ATR. This keeps the cross-signal framework while borrowing a mature trend/noise distinction.
+Evidence: Added failing tests before implementation: `test_dmi_adx_identifies_directional_uptrend`, `test_strong_adx_uptrend_blocks_nonsevere_signal_sell`, `test_strong_adx_uptrend_does_not_block_severe_structure_sell`, the DMI log assertion, and the `cross-v0.2.6` self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; no validation-period influence
+Status: adopted
+
+### Use ADX/DMI Regime For Buy Eligibility
+
+Date: 2026-07-04
+Decision: Upgrade to `cross-v0.2.7` by applying ADX/DMI to new-buy eligibility without changing buy scores. In strong ADX uptrends, candidates above MA20 but not far above MA20 are eligible even if they are not in the original low-position bucket. In strong ADX downtrends, MA20-only repair entries are rejected; candidates must be in BOLL lower-to-middle position or have crossed back above the BOLL middle.
+Reason: `cross-v0.2.6` improved training-period return by using ADX/DMI on sells. The next structurally consistent step is to let ADX/DMI distinguish trend-continuation entries from weak-trend repairs on the buy side, while avoiding a broad score boost that could become parameter fitting.
+Evidence: Added failing tests before implementation: `test_buy_candidates_accept_nonextended_strong_adx_uptrend_entry`, `test_buy_candidates_reject_ma20_only_entry_in_strong_adx_downtrend`, and the `cross-v0.2.7` self-check expectation.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; no validation-period influence
+Status: archived; no material improvement versus `cross-v0.2.6`
+
+### Add Low-Position Weak-Buy Supplement
+
+Date: 2026-07-04
+Decision: Upgrade to `cross-v0.2.8` by allowing weak buy candidates with `buy_score >= 55` only when they have low-position reversal quality. The supplement requires BOLL lower-to-middle position or a cross back above BOLL middle, plus `reversal_score >= 35`, no overheat block, no sell-score conflict, and no far-above-MA20 condition. MA20-only repair entries still require the normal `buy_threshold` and do not qualify for weak-buy supplementation.
+Reason: The `cross-v0.2.6` training log showed 249 no-buy days and high cash near the end of 2021, suggesting the next improvement should target missed low-position entries rather than further sell protection. The rule is deliberately narrow so it does not become a broad threshold cut or trend-chasing rule.
+Evidence: Added failing tests before implementation: `test_weak_buy_candidate_accepts_low_position_reversal_quality` and `test_weak_buy_candidate_rejects_high_position_low_reversal_and_sell_conflict`, then implemented the minimal weak-buy gate and updated the startup self-check to `cross-v0.2.8`.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; no validation-period influence
+Status: archived; training result worse than `cross-v0.2.6`
