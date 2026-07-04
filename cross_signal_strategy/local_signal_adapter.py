@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 import pandas as pd
@@ -22,13 +22,22 @@ class LocalSignalAdapter:
 
     loader: object
     params: dict | None = None
+    _daily_cache: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.params is None:
             object.__setattr__(self, "params", strategy.get_default_params())
 
     def _daily_frame_for_year(self, code: str, current_date: str) -> pd.DataFrame:
-        return self.loader.load_daily_frame(code, current_date)
+        code_text = str(code).split(".")[0]
+        current = pd.Timestamp(current_date)
+        frames = []
+        for year in range(2019, int(current.year) + 1):
+            key = (code_text, year)
+            if key not in self._daily_cache:
+                self._daily_cache[key] = self.loader.load_daily_frame(code_text, f"{year}-12-31")
+            frames.append(self._daily_cache[key])
+        return pd.concat(frames, ignore_index=True)
 
     def previous_signal_date(self, code: str, current_date: str) -> str | None:
         frame = self._daily_frame_for_year(code, current_date)
