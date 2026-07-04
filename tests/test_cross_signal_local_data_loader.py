@@ -27,6 +27,15 @@ def test_loader_rejects_paths_inside_training_root_for_writes():
         assert_not_training_write_path(TRAIN_ROOT / "minute_1m" / "2019" / "510300.csv")
 
 
+def test_loader_rejects_paths_inside_warmup_root_for_writes():
+    from cross_signal_strategy.local_data_loader import assert_not_training_write_path
+
+    warmup_root = pathlib.Path(r"G:\financial\history_data\cross_signal_warmup_2018")
+
+    with pytest.raises(ValueError, match="read-only"):
+        assert_not_training_write_path(warmup_root / "daily" / "2018" / "510300.csv")
+
+
 def test_loader_returns_0935_minute_bar_from_training_data():
     from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
 

@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 TRAIN_ROOT = pathlib.Path(r"G:\financial\history_data\cross_signal_train_2019_2021")
+WARMUP_ROOT = pathlib.Path(r"G:\financial\history_data\cross_signal_warmup_2018")
 
 
 def test_signal_frame_uses_previous_trading_day_only():
@@ -25,6 +26,32 @@ def test_signal_frame_uses_previous_trading_day_only():
     assert signal_date == "2019-01-02"
     assert frame["date"].max() == "2019-01-02"
     assert "2019-01-03" not in set(frame["date"])
+
+
+def test_signal_frame_uses_2018_warmup_without_leaking_current_day():
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
+
+    frame, signal_date = adapter.load_signal_frame("510300", "2019-01-03")
+
+    assert signal_date == "2019-01-02"
+    assert frame["date"].min().startswith("2018-")
+    assert frame["date"].max() == "2019-01-02"
+    assert "2019-01-03" not in set(frame["date"])
+
+
+def test_missing_warmup_file_does_not_block_listed_2019_data():
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
+
+    frame, signal_date = adapter.load_signal_frame("159985", "2019-12-10")
+
+    assert signal_date == "2019-12-09"
+    assert frame["date"].min().startswith("2019-")
 
 
 def test_signal_score_reports_short_data_without_using_future_rows():

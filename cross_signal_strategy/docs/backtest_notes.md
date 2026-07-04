@@ -74,3 +74,40 @@ Abnormal logs/errors: none during the local replay smoke run
 
 Can this result be used to change rules? no
 Reason: This is a local infrastructure/mechanics check, not an aligned authoritative backtest. Differences versus JoinQuant must be diagnosed as execution/data/mechanics issues before using local results for strategy decisions.
+
+### Local Replay With 2018 Daily Warm-Up
+
+Version: local replay foundation with 2018 daily warm-up
+Code file: `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training infrastructure/mechanics check
+Initial capital: 20000
+
+Strategy return: +34.67%
+Annualized return: not calculated
+Excess return: not calculated
+Benchmark return: not calculated
+Alpha: not calculated
+Beta: not calculated
+Sharpe: not calculated
+Sortino: not calculated
+Win rate: not calculated
+Daily win rate: not calculated
+Profit/loss ratio: not calculated
+Max drawdown: 10.14%
+Max drawdown period: not calculated
+Trade count: 236 filled orders; 119 buys, 117 sells
+Average holding days: not calculated
+
+Main observations:
+- Local replay completed all 730 training trading days.
+- 2018 daily warm-up is used only as an indicator lookback buffer. Performance statistics still start on 2019-01-02.
+- Return improved from the no-warm-up local baseline (+15.40%) to +34.67%, confirming that early-2019 lookback truncation was a material local-mechanics gap.
+- Result remains below the JoinQuant training-period reference (+50.07%), so more mechanics alignment is required before using local replay for strategy decisions.
+
+Bad entries observed: not reviewed
+Sell timing observations: not reviewed
+Abnormal logs/errors: none during the local replay run
+
+Can this result be used to change rules? no
+Reason: This is still a local mechanics-alignment checkpoint. It confirms the need for warm-up data but does not justify parameter, indicator, or rule changes.

@@ -8,6 +8,7 @@ from typing import List
 
 import pandas as pd
 
+from cross_signal_strategy.local_data_loader import APPROVED_WARMUP_ROOT
 from cross_signal_strategy.local_backtester import LocalBacktestEngine
 from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
 from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
@@ -41,9 +42,9 @@ def get_training_trade_dates(loader, reference_code: str = "510300") -> List[str
     return dates
 
 
-def run_training_replay(loader, initial_cash: float = 20000.0) -> TrainingReplaySummary:
+def run_training_replay(loader, initial_cash: float = 20000.0, warmup_root=APPROVED_WARMUP_ROOT) -> TrainingReplaySummary:
     trade_dates = get_training_trade_dates(loader)
-    adapter = LocalSignalAdapter(loader)
+    adapter = LocalSignalAdapter(loader, warmup_root=warmup_root)
     planner = LocalCrossSignalOrderPlanner(adapter)
     engine = LocalBacktestEngine(loader=loader, initial_cash=initial_cash)
     results = engine.run(trade_dates, planner.plan_orders)

@@ -11,6 +11,7 @@ import pandas as pd
 
 
 APPROVED_TRAINING_ROOT = Path(r"G:\financial\history_data\cross_signal_train_2019_2021")
+APPROVED_WARMUP_ROOT = Path(r"G:\financial\history_data\cross_signal_warmup_2018")
 TRAIN_START = pd.Timestamp("2019-01-01")
 TRAIN_END = pd.Timestamp("2021-12-31")
 
@@ -33,11 +34,24 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 def assert_not_training_write_path(path: PathLike) -> None:
     """Reject write/delete targets inside the read-only training data folder."""
     resolved = _resolve(path)
-    training_root = _resolve(APPROVED_TRAINING_ROOT)
-    if resolved == training_root or _is_relative_to(resolved, training_root):
+    protected_roots = [_resolve(APPROVED_TRAINING_ROOT), _resolve(APPROVED_WARMUP_ROOT)]
+    for root in protected_roots:
+        if resolved == root or _is_relative_to(resolved, root):
+            raise ValueError(
+                "Training and warm-up data roots are read-only; write/delete derived files outside "
+                f"{APPROVED_TRAINING_ROOT} and {APPROVED_WARMUP_ROOT}"
+            )
+
+
+def assert_warmup_dates(frame: pd.DataFrame, date_column: str = "date") -> None:
+    if date_column not in frame.columns:
+        raise ValueError(f"Missing date column: {date_column}")
+    dates = pd.to_datetime(frame[date_column], errors="coerce")
+    if dates.isna().any():
+        raise ValueError(f"Invalid date values in column: {date_column}")
+    if (dates >= TRAIN_START).any():
         raise ValueError(
-            "Training data root is read-only; write/delete derived files outside "
-            f"{APPROVED_TRAINING_ROOT}"
+            "Warm-up data must be before training window start 2019-01-01"
         )
 
 

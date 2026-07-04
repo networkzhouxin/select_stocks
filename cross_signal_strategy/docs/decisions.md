@@ -279,9 +279,19 @@ Status: adopted
 ### Enforce No Future Functions And No Overfitting
 
 Date: 2026-07-04
-Decision: Cross-signal research must strictly prevent look-ahead bias and overfitting. Daily signals may use only T-1 and earlier data; T-day 09:35 minute data may be used only for execution pricing or explicitly documented intraday execution filters. Validation, full-period, or final-summary results must not be used to tune parameters, choose indicators, change thresholds, or select rules.
+Decision: Cross-signal research must strictly prevent look-ahead bias and overfitting. Daily signals may use only T-1 and earlier data; T-day 09:35 minute data may be used only for execution pricing or explicitly documented intraday execution filters. Independent pre-2019 warm-up daily bars may be used only as an indicator lookback buffer for 2019-2021 training signals. Validation, full-period, or final-summary results must not be used to tune parameters, choose indicators, change thresholds, or select rules.
 Reason: The strategy goal is a robust low-position cross-signal framework, not a historical fit. Local minute data makes it easier to accidentally mix decision-time and execution-time information, so the rule must be explicit before building the local backtester.
 Evidence: User explicitly requested hard rules to prevent future functions and overfitting before continuing local backtest implementation.
+Affected files: `AGENTS.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none
+Status: adopted
+
+### Allow Independent Pre-Training Warm-Up Daily Bars
+
+Date: 2026-07-04
+Decision: Add `G:\financial\history_data\cross_signal_warmup_2018` as an independent read-only daily-bar warm-up source. It may only be used to compute rolling indicators for early 2019 signals. It must not be used for performance statistics, parameter tuning, rule selection, validation, or execution prices.
+Reason: A professional daily strategy needs historical lookback before the first evaluated trading day. JoinQuant `get_price(..., count=120, end_date=T-1)` naturally pulls pre-2019 bars for early-2019 signals. Without warm-up, local replay creates artificial `short_data` gaps and diverges mechanically from JoinQuant.
+Evidence: User asked whether January 2019 backtests should query part of 2018 history; analysis concluded this is correct as a warm-up buffer, not as training/evaluation data.
 Affected files: `AGENTS.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none
 Status: adopted

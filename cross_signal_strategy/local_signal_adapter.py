@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import types
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Tuple
 
 import pandas as pd
@@ -14,6 +15,7 @@ import pandas as pd
 sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 
 from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf as strategy
+from cross_signal_strategy.local_data_loader import APPROVED_WARMUP_ROOT, assert_warmup_dates
 
 
 @dataclass(frozen=True)
@@ -22,22 +24,47 @@ class LocalSignalAdapter:
 
     loader: object
     params: dict | None = None
+    warmup_root: Path | str | None = None
     _daily_cache: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.params is None:
             object.__setattr__(self, "params", strategy.get_default_params())
+        if self.warmup_root is not None:
+            root = Path(self.warmup_root).expanduser().resolve()
+            approved = Path(APPROVED_WARMUP_ROOT).expanduser().resolve()
+            if root != approved:
+                raise ValueError(f"Use approved warm-up data root only: {APPROVED_WARMUP_ROOT}")
+            object.__setattr__(self, "warmup_root", root)
 
     def _daily_frame_for_year(self, code: str, current_date: str) -> pd.DataFrame:
         code_text = str(code).split(".")[0]
         current = pd.Timestamp(current_date)
         frames = []
+        warmup = self._load_warmup_frame(code_text)
+        if warmup is not None:
+            frames.append(warmup)
         for year in range(2019, int(current.year) + 1):
             key = (code_text, year)
             if key not in self._daily_cache:
                 self._daily_cache[key] = self.loader.load_daily_frame(code_text, f"{year}-12-31")
             frames.append(self._daily_cache[key])
         return pd.concat(frames, ignore_index=True)
+
+    def _load_warmup_frame(self, code: str) -> pd.DataFrame | None:
+        if self.warmup_root is None:
+            return None
+        key = (str(code).split(".")[0], "warmup")
+        if key in self._daily_cache:
+            return self._daily_cache[key]
+        path = Path(self.warmup_root) / "daily" / "2018" / f"{key[0]}.csv"
+        if not path.exists():
+            self._daily_cache[key] = None
+            return None
+        frame = pd.read_csv(path, dtype={"code": str})
+        assert_warmup_dates(frame)
+        self._daily_cache[key] = frame
+        return frame
 
     def previous_signal_date(self, code: str, current_date: str) -> str | None:
         frame = self._daily_frame_for_year(code, current_date)
