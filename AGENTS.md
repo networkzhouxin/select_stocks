@@ -9,6 +9,9 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 ## Working Process
 
 - **代码修改前必须先确认**：任何代码修改，先向用户说明方案和影响，等用户明确同意后才能动手。不要直接改代码。即使是在探索性讨论中提出的优化方向，也必须等用户确认"实施"后才执行。
+- **不确定就停止并询问**：当数据来源、目录含义、回测口径、策略规则、用户意图或事实依据不清楚时，必须实事求是说明不确定，并停下来问用户。不要胡编乱造、不要把推测当事实、不要为了继续推进而擅自补全关键信息。
+- **坚决防止未来函数和过拟合**：任何策略、本地回测、数据 loader 或实验脚本都必须只使用决策时点之前已经可获得的数据。日线信号默认只能使用 T-1 及以前数据；T 日 09:35 只能用于执行价格或明确声明的盘中执行过滤，不能反向参与 T-1 信号计算。不得使用验证期、全周期或最终汇总结果调参、选指标、改阈值或筛选规则；验证期只用于冻结规则后的检验。
+- **里程碑总结并提交**：当完成一个清晰里程碑（例如数据隔离、loader、broker、日循环、信号接入、训练期完整回放）且相关测试/校验通过后，应先总结当前版本的范围、验证结果、风险和下一步，再提交，形成可回滚的安全点。经过综合分析确认适合提交时，可以不再单独征求用户同意而自主提交，但必须向用户清楚总结提交内容、验证结果和剩余风险。不要把多个里程碑长期混在一个未提交工作区里。
 
 ## Key Files
 
@@ -83,6 +86,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 ## Critical Design Rules
 
 - **No future functions**: Signals always computed on `prev_date` (T-1) data. Current price used only for stop-loss execution and order placement.
+- **Cross-signal local training data isolation**: For `cross_signal_strategy` local research, training/parameter/structure work is limited to `G:\financial\history_data\cross_signal_train_2019_2021`. Do not read `G:\financial\history_data\按年份合并` or any other non-training-period market data during training/tuning unless the user explicitly authorizes a validation or final-summary step. Treat `G:\financial\history_data\cross_signal_train_2019_2021` as read-only: do not modify, overwrite, clean in place, delete, or generate derived files inside it. Never run delete/remove commands against this folder or any file below it. Any local loader must assert both the approved data root and dates within `2019-01-01` to `2021-12-31`; derived/cache data must be written outside the training data folder.
 - **All parameters are academic defaults**: ATR(14), MACD(12,26,9), KDJ(9,3,3), RSI(6). Zero parameter optimization — this is intentional to avoid overfitting.
 - **No profit-taking**: V11.1 proved that partial profit-taking (+20% sell half) destroys trend-following. 盈亏比 dropped from 3.7:1 to 1.14:1. Let profits run via ATR trailing stop only.
 - **Stop loss clamped to [5%, 15%]**: `stop_floor=0.05` prevents noise shakeout (V2.7 WF验证), `stop_cap=0.15` prevents excessive single-trade loss. Gold ETF(518880) exception: `stop_floor=0.03` (V2.8).

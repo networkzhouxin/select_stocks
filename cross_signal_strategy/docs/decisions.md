@@ -265,3 +265,33 @@ Evidence: Added failing tests before implementation: `test_weak_buy_candidate_ac
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training only; no validation-period influence
 Status: archived; training result worse than `cross-v0.2.6`
+
+### Isolate Local Training Data Root
+
+Date: 2026-07-04
+Decision: Local `cross_signal_strategy` training, debugging, and structural tuning must use only `G:\financial\history_data\cross_signal_train_2019_2021`, and that folder is read-only. Scripts must not modify, overwrite, clean in place, delete, or generate derived files inside it. Delete/remove commands must never target this folder or any file below it.
+Reason: The source directory `G:\financial\history_data\按年份合并` contains many years of minute and daily market data. Keeping training work pointed at a separate 2019-2021-only copy reduces accidental validation-period leakage and keeps the research protocol enforceable.
+Evidence: Created `G:\financial\history_data\cross_signal_train_2019_2021` with only 12 target ETFs for 2019, 2020, and 2021. Integrity check found 12 one-minute files and 12 daily files for each year, no missing `09:35` rows, no non-positive minute prices, and no basic OHLC errors.
+Affected files: `AGENTS.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none
+Status: adopted
+
+### Enforce No Future Functions And No Overfitting
+
+Date: 2026-07-04
+Decision: Cross-signal research must strictly prevent look-ahead bias and overfitting. Daily signals may use only T-1 and earlier data; T-day 09:35 minute data may be used only for execution pricing or explicitly documented intraday execution filters. Validation, full-period, or final-summary results must not be used to tune parameters, choose indicators, change thresholds, or select rules.
+Reason: The strategy goal is a robust low-position cross-signal framework, not a historical fit. Local minute data makes it easier to accidentally mix decision-time and execution-time information, so the rule must be explicit before building the local backtester.
+Evidence: User explicitly requested hard rules to prevent future functions and overfitting before continuing local backtest implementation.
+Affected files: `AGENTS.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none
+Status: adopted
+
+### Summarize And Commit Milestones
+
+Date: 2026-07-04
+Decision: After a clear implementation or research milestone passes its relevant tests/checks, summarize the current version's scope, verification result, risks, and next step, then create a commit as a rollback point. If analysis shows the milestone is safe to commit, the agent may commit without separate user confirmation, but must report the commit summary, verification, and remaining risks.
+Reason: The cross-signal project is iterative and can involve many small experiments. Milestone commits prevent unrelated changes from accumulating and make it easy to return to a known-good state if later experiments fail. Allowing autonomous milestone commits avoids unnecessary interruptions once the safety criteria are met.
+Evidence: User requested a rule that after comprehensive analysis reaches a milestone, the agent can commit without asking again, as long as it summarizes the result.
+Affected files: `AGENTS.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none
+Status: adopted

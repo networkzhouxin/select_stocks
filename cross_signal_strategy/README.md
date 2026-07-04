@@ -26,6 +26,15 @@ Use this sequence and do not skip ahead during development:
 ## Research Rules
 
 - Use JoinQuant as the authority for performance validation.
+- If data meaning, backtest mechanics, strategy intent, or evidence is unclear, state the uncertainty and ask the user before proceeding. Do not invent missing facts or treat assumptions as evidence.
+- Strictly prevent look-ahead bias: daily signals may use only T-1 and earlier data; T-day 09:35 minute data is for execution price or explicitly documented intraday execution filters only, never for T-1 signal calculation.
+- Strictly avoid overfitting: do not use validation periods, full-period summaries, or final-period results to tune parameters, choose indicators, change thresholds, or select rules. Validation is allowed only after rules are frozen.
+- For local training, only read `G:\financial\history_data\cross_signal_train_2019_2021`.
+- Do not read `G:\financial\history_data\按年份合并` or other non-training-period market data while designing, tuning, or debugging training-period behavior unless the user explicitly authorizes a validation/final-summary step.
+- Treat `G:\financial\history_data\cross_signal_train_2019_2021` as read-only: do not modify, overwrite, clean in place, delete, or generate derived files inside it.
+- Never run delete/remove commands against `G:\financial\history_data\cross_signal_train_2019_2021` or any file below it.
+- Any local data loader must assert the approved training root and reject dates outside `2019-01-01` to `2021-12-31`; derived/cache data must be written outside the training data folder.
+- After a clear milestone passes its tests/checks, summarize scope, verification, risks, and next step, then create a commit as a rollback point. If analysis shows the milestone is safe to commit, the agent may commit without separate user confirmation, but must report the commit summary, verification, and remaining risks.
 - Start with market-standard indicator parameters.
 - Do not tune from the full 2015-latest result.
 - Record failed experiments, not only successful ones.
