@@ -452,3 +452,36 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: This is alignment evidence against a broad window change. It does not justify changing the strategy window or thresholds.
+
+### Cross Flag Boundary Narrow Diagnostic
+
+Version: KDJ/RSI/MACD recent-cross boundary diagnosis
+Code file: `cross_signal_strategy/local_data_quality.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: determine whether a narrower window/precision fix can explain the remaining 2020-09-22 `512100` buy divergence
+Initial capital: not applicable
+
+Focus-case trace:
+- For `512100` on 2020-09-22, the local signal date is 2020-09-21.
+- Local K-D and J-D crossed above on 2020-09-16.
+- Relative to the 2020-09-21 signal row, that is `offset=4`.
+- Local `cross_window=3` therefore excludes the KDJ cross; local `cross_window=4` includes it.
+- Local RSI6-RSI12 and RSI6-RSI24 crossed above at `offset=2`, so RSI flags already match JoinQuant under `cross_window=3`.
+- MACD had no recent up-cross in the inspected 6-day trace.
+
+JoinQuant log evidence:
+- JoinQuant logs `512100` KDJ_UP as true on 2020-09-18, 2020-09-21, and 2020-09-22.
+- On 2020-09-22, JoinQuant logs `KDJ_DIFF[K-D/J-D]=13.6/40.8(prev 9.8/29.4)`, so the current row itself is not the cross; the cross happened earlier.
+
+Selective-window test:
+- All flags with window 3: 32 mismatched rows, 40 flag mismatches.
+- All flags with window 4: 478 mismatched rows, 931 flag mismatches.
+- KDJ-only window 4 with all other flags window 3: 254 mismatched rows, 490 flag mismatches.
+
+Interpretation:
+- The 2020-09-22 `512100` divergence is a real boundary mismatch, but changing KDJ to a 4-day window is not a valid JoinQuant-alignment fix because it makes the full training log much less aligned.
+- The evidence points away from a broad parameter/window change and toward a small set of platform/version/boundary quirks. Potential remaining causes include exact historical code version drift, data-row inclusion edge cases, or platform precision/rounding around a prior cross date.
+- No strategy rule should be changed from this evidence alone.
+
+Can this result be used to change strategy rules? no
+Reason: The narrower KDJ-only change fails the global alignment check. This diagnostic supports leaving `cross_window=3` unchanged for now.

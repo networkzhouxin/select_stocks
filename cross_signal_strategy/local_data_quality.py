@@ -6,6 +6,9 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterable, List, Mapping, Sequence
 
+import numpy as np
+import pandas as pd
+
 
 RICH_INDICATOR_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) 09:35:00 .*? -\s+([0-9]{6})\.(?:XSHG|XSHE) "
@@ -139,6 +142,53 @@ def summarize_cross_flag_alignment(
             if row_mismatched:
                 bucket["mismatched_rows"] += 1
     return summary
+
+
+def recent_cross_trace(fast, slow, max_window: int = 5) -> dict:
+    fast_values = _as_float_array(fast)
+    slow_values = _as_float_array(slow)
+    if len(fast_values) < max_window + 1 or len(slow_values) < max_window + 1:
+        return {"latest_direction": None, "latest_offset": None, "events": []}
+
+    diff = fast_values - slow_values
+    events = []
+    latest_direction = None
+    latest_offset = None
+    for offset in range(int(max_window), 0, -1):
+        prev_idx = -offset - 1
+        cur_idx = -offset
+        prev_diff = diff[prev_idx]
+        cur_diff = diff[cur_idx]
+        if pd.isna(prev_diff) or pd.isna(cur_diff):
+            continue
+        direction = None
+        if prev_diff <= 0 and cur_diff > 0:
+            direction = "above"
+        elif prev_diff >= 0 and cur_diff < 0:
+            direction = "below"
+        if direction is None:
+            continue
+        latest_direction = direction
+        latest_offset = offset
+        events.append(
+            {
+                "offset": offset,
+                "direction": direction,
+                "prev_diff": float(prev_diff),
+                "cur_diff": float(cur_diff),
+            }
+        )
+    return {
+        "latest_direction": latest_direction,
+        "latest_offset": latest_offset,
+        "events": events,
+    }
+
+
+def _as_float_array(values):
+    if hasattr(values, "values"):
+        values = values.values
+    return np.asarray(values, dtype=float)
 
 
 def find_close_mismatches(rows: Iterable[Mapping[str, object]], adapter, tolerance: float = 0.002) -> List[dict]:

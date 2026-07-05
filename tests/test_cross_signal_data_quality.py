@@ -101,6 +101,32 @@ def test_summarize_cross_flag_alignment_counts_window_matches():
     assert summary[4]["flag_mismatches"] == 0
 
 
+def test_recent_cross_trace_reports_offsets_and_direction():
+    from cross_signal_strategy.local_data_quality import recent_cross_trace
+
+    fast = [0.0, -2.0, 1.0, 2.0, 3.0]
+    slow = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    trace = recent_cross_trace(fast, slow, max_window=4)
+
+    assert trace["latest_direction"] == "above"
+    assert trace["latest_offset"] == 3
+    assert trace["events"] == [
+        {
+            "offset": 4,
+            "direction": "below",
+            "prev_diff": 0.0,
+            "cur_diff": -2.0,
+        },
+        {
+            "offset": 3,
+            "direction": "above",
+            "prev_diff": -2.0,
+            "cur_diff": 1.0,
+        }
+    ]
+
+
 def test_find_close_mismatches_uses_adapter_scores():
     from cross_signal_strategy.local_data_quality import find_close_mismatches
 
