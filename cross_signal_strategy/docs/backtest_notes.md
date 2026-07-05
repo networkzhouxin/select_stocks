@@ -184,3 +184,41 @@ Abnormal logs/errors: none during the local replay run
 
 Can this result be used to change rules? no
 Reason: This is a local execution-mechanics alignment checkpoint. It does not justify strategy parameter, indicator, or rule changes.
+
+### Local Replay With New-Listing Indicator-Ready Scoring
+
+Version: local replay foundation with 2018 daily warm-up, ATR stop state, 09:35 position marks, and local scoring that allows new listings once required indicators are valid
+Code file: `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: JoinQuant mechanics/log alignment check
+Initial capital: 20000
+
+Strategy return: +42.75%
+Annualized return: not calculated
+Excess return: not calculated
+Benchmark return: not calculated
+Alpha: not calculated
+Beta: not calculated
+Sharpe: not calculated
+Sortino: not calculated
+Win rate: not calculated
+Daily win rate: not calculated
+Profit/loss ratio: not calculated
+Max drawdown: 9.68%
+Max drawdown period: not calculated
+Trade count: 256 filled orders; 129 buys, 127 sells
+Average holding days: not calculated
+
+Main observations:
+- JoinQuant training log has 262 filled orders; local replay previously had 254.
+- First order-path divergence was 2019-10-18: JoinQuant bought `513880`, while local replay skipped it as `short_data:77<110`.
+- Local adapter now allows new listings when the required indicator fields are valid, using the longest structural indicator window as the local minimum history gate.
+- Local replay now also buys `513880` on 2019-10-18, reducing the order-path gap from 8 orders to 6 orders.
+- Next observed divergence is 2019-11-13/2019-11-18 on `159928`: local adds a 10-point `close_below_falling_ma10` risk score and sells earlier, while JoinQuant only logs risk-tightening on 2019-11-13 and sells on 2019-11-18.
+
+Bad entries observed: not reviewed
+Sell timing observations: 2019-11-13 local sell timing differs from JoinQuant for `159928`; likely MA10/risk-score data or calculation alignment issue.
+Abnormal logs/errors: none during the local replay run
+
+Can this result be used to change rules? no
+Reason: This is a local mechanics/log-alignment checkpoint. It fixes local replay parity for new-listed ETFs but does not justify strategy parameter, indicator, or rule changes.

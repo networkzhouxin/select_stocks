@@ -86,7 +86,7 @@ class LocalSignalAdapter:
 
     def score(self, code: str, current_date: str, return_reason: bool = False):
         p = self.params or strategy.get_default_params()
-        min_len = p["lookback"] - 10
+        min_len = self._local_min_len(p)
         required = ["rsi6", "rsi12", "rsi24", "dif", "dea", "k", "d", "j", "ma20", "atr", "adx"]
 
         frame, signal_date = self.load_signal_frame(code, current_date)
@@ -112,3 +112,13 @@ class LocalSignalAdapter:
         result["signal_date"] = signal_date
         result["max_data_date"] = str(frame["date"].max())
         return (result, None) if return_reason else result
+
+    def _local_min_len(self, params: dict) -> int:
+        return max(
+            60,
+            int(params["rsi_slow"]),
+            int(params["macd_slow"]) + int(params["macd_signal"]),
+            int(params["boll_period"]),
+            int(params["atr_period"]),
+            int(params["adx_period"]) * 2,
+        )

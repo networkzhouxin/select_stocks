@@ -83,3 +83,18 @@ def test_signal_score_matches_strategy_snapshot_scoring_after_lookback():
     assert isinstance(score["sell_score"], (int, float))
     assert score["close"] == pytest.approx(3.859)
     assert score["atr"] > 0
+
+
+def test_signal_score_allows_new_listing_when_required_indicators_are_valid():
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
+
+    score, reason = adapter.score("513880", "2019-10-18", return_reason=True)
+
+    assert reason is None
+    assert score["code"] == "513880"
+    assert score["signal_date"] == "2019-10-17"
+    assert score["buy_score"] == 80
+    assert score["sell_score"] == 6
