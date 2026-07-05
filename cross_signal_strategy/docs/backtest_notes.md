@@ -317,3 +317,27 @@ Abnormal logs/errors: none
 
 Can this result be used to change rules? no
 Reason: This is diagnostic evidence only. A global cross-window change would be a strategy-rule change and needs broader evidence than one remaining order-path divergence.
+
+### JoinQuant Versus Local Close Data Audit
+
+Version: data-quality diagnostic only
+Code file: `cross_signal_strategy/local_data_quality.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: determine whether remaining local/JoinQuant divergences are caused by bad local data
+Initial capital: not applicable
+
+Main observations:
+- Parsed 3650 rich indicator rows from the JoinQuant training log.
+- Only 2 rows had `abs(JoinQuant close - local close) > 0.002`.
+- Outliers:
+  - 2020-01-17 `510880`: JoinQuant close 2.803 vs local signal close 2.947, diff 0.144.
+  - 2021-01-18 `510300`: JoinQuant close 5.454 vs local signal close 5.526, diff 0.072.
+- The 2020-09-22 `512100` KDJ-window divergence is not caused by close-data mismatch: both JoinQuant and local close are 0.963, and local KDJ/MACD values match the JoinQuant log within rounding.
+- The two close outliers occur around execution days where local minute `prev_close` differs sharply from the previous local daily close, which is consistent with ex-dividend/adjustment handling rather than random data corruption.
+
+Bad entries observed: none identified as raw-data corruption
+Sell timing observations: not reviewed
+Abnormal logs/errors: none
+
+Can this result be used to change rules? no
+Reason: This is a data-quality and platform-data-parity audit. It supports further work on local adjustment/复权 alignment, not strategy parameter or signal tuning.
