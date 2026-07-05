@@ -253,8 +253,8 @@ def test_below_falling_ma10_accepts_rising_close_under_meaningfully_falling_ma10
     assert snapshot["close_below_falling_ma10"]
 
 
-def test_below_falling_ma10_ignores_nearly_flat_ma10():
-    close = strategy.pd.Series([100.0] * 49 + [95.0, 95.0] + [100.0] * 7 + [90.0, 95.0])
+def test_below_falling_ma10_matches_joinquant_exact_less_than_comparison():
+    close = strategy.pd.Series([100.0] * 59 + [99.999999995])
     high = close + 1.0
     low = close - 1.0
     frame = strategy.pd.DataFrame({
@@ -267,8 +267,9 @@ def test_below_falling_ma10_ignores_nearly_flat_ma10():
     snapshot = strategy.build_signal_snapshot(frame, strategy.get_default_params())
 
     assert snapshot["close"] < snapshot["ma10"]
-    assert abs(snapshot["ma10"] - close.rolling(10).mean().iloc[-2]) < 1e-12
-    assert not snapshot["close_below_falling_ma10"]
+    ma10_prev = close.rolling(10).mean().iloc[-2]
+    assert 0 < ma10_prev - snapshot["ma10"] < 1e-9
+    assert snapshot["close_below_falling_ma10"]
 
 
 def test_below_falling_ma10_accepts_flat_weak_close():

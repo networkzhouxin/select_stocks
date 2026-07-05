@@ -536,9 +536,9 @@ Finding:
 - On that date, `513050` closed at 2.080 after 2.078, but remained below a clearly falling MA10 (`2.0959 -> 2.0945`). JoinQuant sold with `sell_score 45`; local scored 35 because the small rebound blocked `close_below_falling_ma10`.
 
 Implementation:
-- `close_below_falling_ma10` now requires `close < MA10` and `MA10` meaningfully lower than the previous MA10 (`ma10[-1] < ma10[-2] - 1e-9`).
+- `close_below_falling_ma10` now matches the JoinQuant platform code exactly: `close < MA10` and current `MA10 < previous MA10`.
 - It no longer requires the latest close to be below or equal to the prior close.
-- The 2019-11-13 `159928` case remains aligned because its MA10 was effectively flat, so it is not counted as falling.
+- No local-only floating tolerance is applied.
 
 Verification:
 - `uvx --with pandas pytest tests/test_cross_signal_strategy.py -q -k "below_falling_ma10"` -> 3 passed.
@@ -547,6 +547,7 @@ Verification:
 - Filled-order path: JoinQuant 262 events, local 260 events. The unfiltered first mismatch remains 2020-09-22 BUY `512100` versus local 2020-09-29 BUY `513880`.
 - After filtering only the known 2020-09-22 BUY `512100` and 2020-09-23 SELL `512100` boundary pair, the remaining JoinQuant 260 filled events match the local 260 filled events exactly.
 - Local replay final value after this alignment check: 29207.02, total return +46.04%, 260 filled orders.
+- Full source diff between local `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py` and the uploaded JoinQuant platform code returned zero diff lines after removing the local-only `1e-9` tolerance.
 
 Interpretation:
 - This is an alignment correction, not a validation-period optimization.
