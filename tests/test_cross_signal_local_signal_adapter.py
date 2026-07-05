@@ -131,7 +131,7 @@ def test_signal_score_suppresses_sub_float_falling_ma10_artifact():
 
     assert reason is None
     assert score["signal_date"] == "2019-11-12"
-    assert score["close_below_falling_ma10"] is False
+    assert not score["close_below_falling_ma10"]
     assert score["sell_score"] == 24
 
 

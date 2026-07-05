@@ -588,3 +588,37 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: It only corrects local replay precision. It does not change JoinQuant source strategy logic, parameters, thresholds, or validation behavior.
+
+### 512100 KDJ Boundary Diagnosis
+
+Version: 2020-09-22 `512100` KDJ boundary investigation
+Code file: diagnostic only
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: determine whether the last JoinQuant/local path divergence can be fixed by a general local replay correction
+Initial capital: not applicable
+
+Finding:
+- The remaining unfiltered path divergence is still 2020-09-22 BUY `512100` and 2020-09-23 SELL `512100`.
+- Local and JoinQuant indicator values on 2020-09-21/2020-09-22 match normal displayed precision, so this is not a broad OHLC or formula mismatch.
+- The boundary is the KDJ cross date. Local K-D/J-D crossed above on signal date 2020-09-16, which is offset 4 relative to the 2020-09-21 signal row used for 2020-09-22 trading, so `cross_window=3` excludes it.
+- JoinQuant logs imply the prior KDJ diff on 2020-09-16 was effectively `-0.0/-0.0`, so its cross is treated as occurring on 2020-09-17, which is offset 3 and remains inside the 3-day window.
+- Local detailed KDJ around the boundary:
+  - 2020-09-15 K-D/J-D: `-1.0179 / -3.0538`
+  - 2020-09-16 K-D/J-D: `+0.0349 / +0.1046`
+  - 2020-09-17 K-D/J-D: `+1.7909 / +5.3727`
+- JoinQuant 2020-09-18 log shows current KDJ_DIFF `1.8/5.3(prev -0.0/-0.0)`, consistent with a tiny sign difference around the 2020-09-16 boundary.
+
+Rejected fixes:
+- Truncating local indicator input to `lookback=120` did not fix the `512100` divergence and introduced a later path mismatch after filtering the focus pair. Rich-row mismatch count worsened to 33 rows.
+- A KDJ deadband threshold also worsened global flag alignment. Example sweep:
+  - `eps=0`: 37 mismatched rows, 53 flag mismatches, focus remains `buy=54 rev=24`.
+  - `eps=0.05`: 50 mismatched rows, 73 flag mismatches, focus only partially fixes to `buy=60 rev=30`.
+  - `eps=0.2`: 69 mismatched rows, 114 flag mismatches, focus reaches `buy=65 rev=35` but damages many more rows.
+- Therefore neither a broad `lookback=120` adapter change nor a general KDJ deadband should be adopted.
+
+Interpretation:
+- This appears to be a narrow JoinQuant/local data precision boundary around one KDJ zero-cross, not a structural strategy or replay bug.
+- The safest current stance is to keep the local replay adapter as-is and treat the 2020-09-22/2020-09-23 `512100` pair as a documented residual platform/data precision discrepancy.
+
+Can this result be used to change strategy rules? no
+Reason: All broad fixes tested so far worsen full training-log alignment. The evidence supports documenting the boundary case, not changing strategy logic or parameters.
