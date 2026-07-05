@@ -413,3 +413,42 @@ Verification:
 
 Can this result be used to change strategy rules? no
 Reason: This milestone adds repeatable diagnosis and filters out unfilled JoinQuant intent logs. It does not change scoring, thresholds, ranking, or execution behavior.
+
+### Cross Flag Window Alignment Diagnostic
+
+Version: JoinQuant/local cross-flag alignment diagnostic
+Code file: `cross_signal_strategy/local_data_quality.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: determine whether the remaining 2020-09-22 `512100` buy divergence is caused by a broad cross-window mismatch
+Initial capital: not applicable
+
+Main observations:
+- Parsed 2589 JoinQuant cross-flag rows from attachment `97b63eb6-be21-46a8-9e26-1acabe2cca7e`.
+- With local `cross_window=3`, 2580 rows could be scored; only 32 rows had any cross-flag mismatch, with 40 flag mismatches total.
+- With local `cross_window=4`, mismatch count worsened sharply to 478 rows and 931 flag mismatches.
+- With local `cross_window=5`, mismatch count worsened further to 750 rows and 1559 flag mismatches.
+- Therefore, the existing global `cross_window=3` is much closer to JoinQuant overall than `4` or `5`.
+
+Flag mismatch breakdown for `cross_window=3`:
+- `rsi6_cross_rsi24_up`: 22
+- `macd_cross_up`: 4
+- `rsi6_cross_rsi12_up`: 3
+- `rsi6_cross_rsi24_down`: 3
+- `rsi6_cross_rsi12_down`: 2
+- `kdj_k_cross_up`: 2
+- `kdj_j_cross_up`: 2
+- `macd_cross_down`: 2
+- KDJ down-cross flags had 0 mismatches.
+
+Focus case:
+- JoinQuant 2020-09-22 `512100`: `buy=65 rev=35`, `KDJ_K_UP=True`, `KDJ_J_UP=True`.
+- Local `cross_window=3`: `buy=54 rev=24`, `KDJ_K_UP=False`, `KDJ_J_UP=False`.
+- Local `cross_window=4` or `5`: matches the focus-case KDJ flags and score (`buy=65 rev=35`).
+
+Interpretation:
+- The focus case is a local KDJ recent-cross boundary mismatch, not a复权/data issue.
+- A global `cross_window` change from 3 to 4 would fix this one case but break many more rows. It should not be adopted as a broad rule.
+- The next step should be a narrower investigation of why JoinQuant logs only a small number of boundary differences while the code default remains `cross_window=3`: possible causes include exact diff-equality handling, duplicated/filled data rows, indicator warm-up length, or platform rounding/precision around zero-cross boundaries.
+
+Can this result be used to change strategy rules? no
+Reason: This is alignment evidence against a broad window change. It does not justify changing the strategy window or thresholds.
