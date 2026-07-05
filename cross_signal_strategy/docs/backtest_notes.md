@@ -222,3 +222,39 @@ Abnormal logs/errors: none during the local replay run
 
 Can this result be used to change rules? no
 Reason: This is a local mechanics/log-alignment checkpoint. It fixes local replay parity for new-listed ETFs but does not justify strategy parameter, indicator, or rule changes.
+
+### Local Replay With Falling-MA10 Sell Confirmation Fix
+
+Version: local replay foundation with new-listing scoring and falling-MA10 sell confirmation requiring price decline
+Code file: `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: JoinQuant training-log alignment and sell-structure correctness check
+Initial capital: 20000
+
+Strategy return: +47.50%
+Annualized return: not calculated
+Excess return: not calculated
+Benchmark return: not calculated
+Alpha: not calculated
+Beta: not calculated
+Sharpe: not calculated
+Sortino: not calculated
+Win rate: not calculated
+Daily win rate: not calculated
+Profit/loss ratio: not calculated
+Max drawdown: 9.57%
+Max drawdown period: not calculated
+Trade count: 248 filled orders; 125 buys, 123 sells
+Average holding days: not calculated
+
+Main observations:
+- The 2019-11-13 `159928` divergence is fixed at the signal level: local score is now `sell=24 force=False`, matching JoinQuant's risk-tighten-only behavior.
+- The later 2019-11-18 `159928` sell remains active: local score is `sell=32 force=True`, matching JoinQuant's sell date.
+- Return moved from +42.75% to +47.50%, closer to the JoinQuant reference +50.07%, but the trade count differs from JoinQuant's 262 orders and still needs order-path review.
+
+Bad entries observed: not reviewed
+Sell timing observations: 2019-11-13/2019-11-18 `159928` sell timing aligned at the signal level after the falling-MA10 confirmation fix.
+Abnormal logs/errors: none during the local replay run
+
+Can this result be used to change rules? no
+Reason: This is a correctness/log-alignment checkpoint for a sell-confirmation condition, not an optimization pass. No validation-period results were inspected or used.

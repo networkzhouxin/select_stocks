@@ -305,3 +305,13 @@ Evidence: User requested a rule that after comprehensive analysis reaches a mile
 Affected files: `AGENTS.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none
 Status: adopted
+
+### Require Price Decline For Falling-MA10 Sell Confirmation
+
+Date: 2026-07-05
+Decision: Refine `close_below_falling_ma10` so it requires the latest close to be below the previous close, below MA10, and MA10 below its previous value. A price that rebounds but remains under a gently falling MA10 is a risk-tighten warning, not a force-sell structure break.
+Reason: The JoinQuant 2019-2021 training log showed `159928` on 2019-11-13 as `sell_score 24` and risk-tighten only, while local replay scored it as 34 and sold early because it counted `close_below_falling_ma10` even though the latest close rose from 3.044 to 3.057. The later 2019-11-18 sell still triggers when price actually declines and breaks weaker structure.
+Evidence: Added failing test `test_below_falling_ma10_requires_price_to_decline` before implementation. Local signal check now matches the log pattern: 2019-11-13 `sell=24 force=False`; 2019-11-18 `sell=32 force=True`.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training log alignment only; no validation-period influence
+Status: adopted
