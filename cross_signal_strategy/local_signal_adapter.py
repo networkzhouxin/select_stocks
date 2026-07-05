@@ -102,6 +102,7 @@ class LocalSignalAdapter:
             return (None, reason) if return_reason else None
 
         snapshot = strategy.build_signal_snapshot(frame, p)
+        self._suppress_float_artifact_flags(snapshot, frame)
         reason = strategy.score_skip_reason(frame, snapshot, required, min_len)
         if reason is not None:
             return (None, reason) if return_reason else None
@@ -124,3 +125,14 @@ class LocalSignalAdapter:
             int(params["atr_period"]),
             int(params["adx_period"]) * 2,
         )
+
+    def _suppress_float_artifact_flags(self, snapshot: dict, frame: pd.DataFrame) -> None:
+        if not snapshot.get("close_below_falling_ma10"):
+            return
+        close = pd.to_numeric(frame["close"], errors="coerce")
+        ma10 = close.rolling(10).mean()
+        if len(ma10) < 2:
+            return
+        delta = ma10.iloc[-2] - ma10.iloc[-1]
+        if 0 < delta < 1e-12:
+            snapshot["close_below_falling_ma10"] = False

@@ -555,3 +555,36 @@ Interpretation:
 
 Can this result be used to change strategy rules? yes, narrowly
 Reason: It corrects local replay to match the JoinQuant training log's falling-MA10 sell-structure口径 and removes a broad systematic local scoring mismatch. It does not justify parameter tuning or validation-period changes.
+### Local Sub-Float Falling-MA10 Adapter Alignment
+
+Version: local replay precision alignment for falling-MA10 structure
+Code file: `cross_signal_strategy/local_signal_adapter.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: keep local replay aligned to JoinQuant platform behavior while leaving the JoinQuant strategy source byte-identical to the uploaded platform code
+Initial capital: 20000
+
+Finding:
+- After removing the local-only `1e-9` tolerance from the JoinQuant strategy file, local replay again diverged at 2019-11-13.
+- JoinQuant log: 2019-11-13 `159928` is `[risk-tighten] sell_score 24`, then buys `513100`.
+- Local replay before this adapter fix: 2019-11-13 `159928` scored `sell_score 34` and sold.
+- The cause was a local Pandas floating artifact: local `MA10_prev - MA10_latest = 0.000000000000000444`, which made exact `<` treat MA10 as falling even though the platform log did not.
+
+Implementation:
+- `smart_trade_joinquant_cross_signal_etf.py` remains exactly aligned to the uploaded JoinQuant platform code.
+- `LocalSignalAdapter` suppresses `close_below_falling_ma10` only when the local MA10 decrease is a sub-float artifact: `0 < ma10[-2] - ma10[-1] < 1e-12`.
+- This is a local replay adapter correction, not a strategy rule change.
+
+Verification:
+- Added failing test `test_signal_score_suppresses_sub_float_falling_ma10_artifact` before implementation.
+- `uvx --with pandas pytest tests/test_cross_signal_local_signal_adapter.py -q` -> 10 passed.
+- `uvx --with pandas pytest tests/test_cross_signal_strategy.py tests/test_cross_signal_local_signal_adapter.py tests/test_cross_signal_local_order_planner.py tests/test_cross_signal_local_backtester.py tests/test_cross_signal_data_quality.py tests/test_cross_signal_order_path_diagnostics.py -q` -> 75 passed.
+- Full local replay against the latest JoinQuant log: JoinQuant 262 filled events, local 260; first unfiltered mismatch is again 2020-09-22 BUY `512100` vs local 2020-09-29 BUY `513880`.
+- After filtering only the known 2020-09-22 BUY `512100` and 2020-09-23 SELL `512100` boundary pair, the remaining JoinQuant 260 events match the local 260 events exactly.
+- Local replay final value: 29207.02, total return +46.04%, 260 filled orders.
+
+Interpretation:
+- The remaining open issue is concentrated in the already diagnosed 2020-09-22 `512100` KDJ boundary case.
+- This adapter fix prevents local floating-point noise from creating a fake earlier path divergence.
+
+Can this result be used to change strategy rules? no
+Reason: It only corrects local replay precision. It does not change JoinQuant source strategy logic, parameters, thresholds, or validation behavior.

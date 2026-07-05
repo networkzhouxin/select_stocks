@@ -326,6 +326,16 @@ Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py
 Allowed validation influence: training log alignment only; no validation-period influence
 Status: adopted
 
+### Suppress Local Sub-Float Falling-MA10 Artifact
+
+Date: 2026-07-06
+Decision: Keep `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py` byte-aligned with the uploaded JoinQuant platform source, but let `LocalSignalAdapter` suppress `close_below_falling_ma10` only when the local MA10 decrease is a sub-float artifact (`0 < ma10[-2] - ma10[-1] < 1e-12`).
+Reason: After exact source alignment, local replay treated 2019-11-13 `159928` as `close_below_falling_ma10=True` because local Pandas computed `MA10_prev - MA10_latest = 4.44e-16`. The JoinQuant log for the same platform source shows only `risk-tighten sell_score 24`, not a sell, so this is a local replay precision artifact rather than a strategy rule.
+Evidence: Added failing test `test_signal_score_suppresses_sub_float_falling_ma10_artifact` before implementation. After the adapter fix, 2019-11-13 `159928` scores `sell_score=24` and does not sell locally. Full local replay against the 2019-2021 JoinQuant log returns to the expected state: JoinQuant 262 filled events, local 260; first unfiltered divergence is 2020-09-22 BUY `512100`; after filtering the known 2020-09-22/2020-09-23 `512100` boundary pair, the remaining 260 events match exactly.
+Affected files: `cross_signal_strategy/local_signal_adapter.py`, `tests/test_cross_signal_local_signal_adapter.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
+Allowed validation influence: training log alignment only; no validation-period influence
+Status: adopted
+
 ### Local Adjustment Factor Alignment
 
 Date: 2026-07-05

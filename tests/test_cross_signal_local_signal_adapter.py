@@ -116,6 +116,25 @@ def test_signal_score_allows_listing_before_ma60_when_core_indicators_are_valid(
     assert score["sell_score"] == 0
 
 
+def test_signal_score_suppresses_sub_float_falling_ma10_artifact():
+    from cross_signal_strategy.local_adjustment import default_training_adjustment_factors
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(
+        CrossSignalTrainingDataLoader(TRAIN_ROOT),
+        warmup_root=WARMUP_ROOT,
+        adjustment_factors=default_training_adjustment_factors(),
+    )
+
+    score, reason = adapter.score("159928", "2019-11-13", return_reason=True)
+
+    assert reason is None
+    assert score["signal_date"] == "2019-11-12"
+    assert score["close_below_falling_ma10"] is False
+    assert score["sell_score"] == 24
+
+
 def test_signal_frame_applies_current_day_adjustment_without_future_events():
     import pandas as pd
 
