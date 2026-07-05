@@ -382,3 +382,34 @@ Verification:
 
 Can this result be used to change strategy rules? no
 Reason: This is a data parity fix. It reduces local/JoinQuant replay differences without looking at validation-period performance or changing trading logic.
+
+### Filled Order Path Diagnostic
+
+Version: local/JoinQuant filled-order path diagnostic
+Code file: `cross_signal_strategy/order_path_diagnostics.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: identify remaining platform/local replay divergence using filled order events only
+Initial capital: 20000
+
+Main observations:
+- A first-pass comparison against strategy intent logs (`[buy]`/`[sell]`) falsely reported 2019-12-12 `513880` as the first divergence.
+- The JoinQuant log shows that 2019-12-12 `513880` sell was not filled: volume was 0, the market order was canceled, and the position remained in the 15:30 close log.
+- The diagnostic now parses actual JoinQuant fill lines (`order StockOrder ... trade price ... amount ...`) separately from strategy intent logs.
+- Against attachment `97b63eb6-be21-46a8-9e26-1acabe2cca7e`, JoinQuant filled events are 262 total: 132 buys and 130 sells.
+- Local filled events after adjustment-factor alignment are 258 total: 130 buys and 128 sells.
+- The first real filled-order path divergence is order index 127:
+  - JoinQuant: 2020-09-22 BUY `512100`, amount 7700, price 0.954.
+  - Local: next event is 2020-09-29 BUY `513880`, amount 6700, price 1.08108.
+- The surrounding path is aligned through 2020-09-22 SELL `513880`; the missing `512100` buy remains the first actionable divergence.
+
+Interpretation:
+- This confirms that the remaining earliest divergence is the previously documented 2020-09-22 `512100` buy.
+- The cause is still likely signal-window scoring, not data corruption: JoinQuant logs `512100` as `buy=65 rev=35`, while local previously scored it lower because the KDJ cross fell just outside the local 3-bar recent-cross window.
+- This is diagnostic evidence only. Changing the cross-window would be a strategy-rule change and still needs a separate test-first rule decision.
+
+Verification:
+- `uvx --with pandas pytest tests/test_cross_signal_order_path_diagnostics.py -q` -> 6 passed.
+- Full local replay comparison script completed and produced the filled-event counts and first divergence above.
+
+Can this result be used to change strategy rules? no
+Reason: This milestone adds repeatable diagnosis and filters out unfilled JoinQuant intent logs. It does not change scoring, thresholds, ranking, or execution behavior.
