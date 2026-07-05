@@ -8,7 +8,10 @@ from typing import List
 
 import pandas as pd
 
-from cross_signal_strategy.local_adjustment import default_training_adjustment_factors
+from cross_signal_strategy.local_adjustment import (
+    default_training_adjustment_factors,
+    default_training_daily_corrections,
+)
 from cross_signal_strategy.local_data_loader import APPROVED_WARMUP_ROOT
 from cross_signal_strategy.local_backtester import LocalBacktestEngine
 from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
@@ -43,13 +46,18 @@ def get_training_trade_dates(loader, reference_code: str = "510300") -> List[str
     return dates
 
 
-def run_training_replay(loader, initial_cash: float = 20000.0, warmup_root=APPROVED_WARMUP_ROOT) -> TrainingReplaySummary:
-    trade_dates = get_training_trade_dates(loader)
-    adapter = LocalSignalAdapter(
+def build_training_signal_adapter(loader, warmup_root=APPROVED_WARMUP_ROOT) -> LocalSignalAdapter:
+    return LocalSignalAdapter(
         loader,
         warmup_root=warmup_root,
         adjustment_factors=default_training_adjustment_factors(),
+        daily_corrections=default_training_daily_corrections(),
     )
+
+
+def run_training_replay(loader, initial_cash: float = 20000.0, warmup_root=APPROVED_WARMUP_ROOT) -> TrainingReplaySummary:
+    trade_dates = get_training_trade_dates(loader)
+    adapter = build_training_signal_adapter(loader, warmup_root=warmup_root)
     planner = LocalCrossSignalOrderPlanner(adapter)
     engine = LocalBacktestEngine(loader=loader, initial_cash=initial_cash)
     results = engine.run(trade_dates, planner.plan_orders)

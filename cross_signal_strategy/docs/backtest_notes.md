@@ -622,3 +622,46 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: All broad fixes tested so far worsen full training-log alignment. The evidence supports documenting the boundary case, not changing strategy logic or parameters.
+
+### 512100 Local Daily Close Correction
+
+Version: confirmed local daily-bar correction for `512100` on 2020-09-02
+Code files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: align local training replay data to JoinQuant and verified minute/software evidence without modifying read-only source CSVs
+Initial capital: 20000
+
+Finding:
+- The final 2020-09-22/2020-09-23 `512100` divergence was caused by a bad local daily close, not by a strategy-rule issue.
+- JoinQuant diagnostic log showed `512100` 2020-09-02 close `1.001`.
+- Local 1-minute data for 2020-09-02 also aggregates to close `1.001` at 15:00.
+- The isolated local daily CSV has 2020-09-02 close `1.000`.
+- User independently checked trading software and confirmed the close was `1.001`.
+- This 0.001 close difference propagated through KDJ, making local `K-D/J-D` on 2020-09-16 slightly positive while JoinQuant remained slightly negative. That shifted the KDJ up-cross one day earlier locally and excluded it from the 3-day cross window on 2020-09-22.
+
+Implementation:
+- Added `LocalDailyCorrections` and `default_training_daily_corrections()` with the confirmed correction: `512100`, `2020-09-02`, `close=1.001`.
+- `LocalSignalAdapter` applies daily corrections to the visible T-1 signal frame before adjustment factors.
+- `run_training_replay` now builds its adapter through `build_training_signal_adapter()`, which applies both confirmed daily corrections and training adjustment factors.
+- The read-only source training data folder remains unchanged.
+- The JoinQuant strategy source remains unchanged.
+
+Verification:
+- Added failing tests before implementation:
+  - `test_signal_frame_applies_confirmed_daily_bar_correction_without_mutating_raw_data`
+  - `test_training_signal_adapter_applies_confirmed_daily_corrections`
+- Targeted tests passed after implementation.
+- Full cross-signal test suite: `uvx --with pandas pytest tests/test_cross_signal_strategy.py tests/test_cross_signal_local_signal_adapter.py tests/test_cross_signal_local_order_planner.py tests/test_cross_signal_local_backtester.py tests/test_cross_signal_data_quality.py tests/test_cross_signal_order_path_diagnostics.py tests/test_cross_signal_local_data_loader.py tests/test_cross_signal_local_training_run.py -q` -> 85 passed.
+- Full local replay versus the latest JoinQuant log:
+  - JoinQuant filled events: 262
+  - Local filled events: 262
+  - First order-path divergence: none
+  - Local replay final value: 29074.94, total return +45.37%
+- The `512100` pair now appears in local order path on the same dates as JoinQuant: BUY 2020-09-22 and SELL 2020-09-23.
+
+Interpretation:
+- This is a local data-quality correction, not a strategy rule change, not parameter tuning, and not validation-period influence.
+- The correct fix is an external read-time correction layer because project rules prohibit modifying or deleting the source training data.
+
+Can this result be used to change strategy rules? no
+Reason: The evidence identifies a local data defect and fixes replay alignment only. It does not support changing indicators, thresholds, windows, or execution rules.

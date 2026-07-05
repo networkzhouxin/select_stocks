@@ -366,3 +366,13 @@ Evidence: Added failing test `test_signal_score_allows_listing_before_ma60_when_
 Affected files: `cross_signal_strategy/local_signal_adapter.py`, `tests/test_cross_signal_local_signal_adapter.py`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training log alignment only; no validation-period influence
 Status: adopted
+
+### Correct Confirmed Local Daily Bar Defect
+
+Date: 2026-07-06
+Decision: Apply confirmed local daily-bar defects through an external read-time correction layer, without modifying the read-only training source data. The first adopted correction is `512100` on 2020-09-02: close `1.000` in the local daily CSV is overridden to `1.001` for local signal replay.
+Reason: JoinQuant diagnostic logs, local 1-minute aggregation, and the user's trading software all showed `512100` 2020-09-02 close `1.001`; only the local daily CSV showed `1.000`. This bad close shifted KDJ's zero-cross boundary and caused the last JoinQuant/local path divergence on 2020-09-22/2020-09-23.
+Evidence: Added failing tests before implementation. After the correction layer, `512100` on 2020-09-22 scores `buy=65 rev=35` with both KDJ up-cross flags true, matching JoinQuant. Full local replay against the latest JoinQuant log has 262 local filled events versus 262 JoinQuant filled events and no order-path divergence. Full cross-signal test suite passed with 85 tests.
+Affected files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`, `tests/test_cross_signal_local_signal_adapter.py`, `tests/test_cross_signal_local_training_run.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training log and confirmed source-data correction only; no validation-period influence
+Status: adopted

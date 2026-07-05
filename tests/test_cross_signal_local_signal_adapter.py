@@ -135,6 +135,28 @@ def test_signal_score_suppresses_sub_float_falling_ma10_artifact():
     assert score["sell_score"] == 24
 
 
+def test_signal_frame_applies_confirmed_daily_bar_correction_without_mutating_raw_data():
+    from cross_signal_strategy.local_adjustment import default_training_daily_corrections
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    raw = loader.load_daily_frame("512100", "2020-12-31")
+    raw_close = raw.loc[raw["date"] == "2020-09-02", "close"].iloc[0]
+    adapter = LocalSignalAdapter(
+        loader,
+        warmup_root=WARMUP_ROOT,
+        daily_corrections=default_training_daily_corrections(),
+    )
+
+    frame, signal_date = adapter.load_signal_frame("512100", "2020-09-22")
+    corrected_close = frame.loc[frame["date"] == "2020-09-02", "close"].iloc[0]
+
+    assert raw_close == pytest.approx(1.000)
+    assert signal_date == "2020-09-21"
+    assert corrected_close == pytest.approx(1.001)
+
+
 def test_signal_frame_applies_current_day_adjustment_without_future_events():
     import pandas as pd
 

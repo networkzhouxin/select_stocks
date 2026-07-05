@@ -25,6 +25,23 @@ def test_training_trade_dates_are_read_from_training_daily_data_only():
     assert dates == sorted(dates)
 
 
+def test_training_signal_adapter_applies_confirmed_daily_corrections():
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_training_run import build_training_signal_adapter
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    adapter = build_training_signal_adapter(loader)
+
+    score, reason = adapter.score("512100", "2020-09-22", return_reason=True)
+
+    assert reason is None
+    assert score["signal_date"] == "2020-09-21"
+    assert score["kdj_k_cross_up"]
+    assert score["kdj_j_cross_up"]
+    assert score["buy_score"] == 65
+    assert score["reversal_score"] == 35
+
+
 def test_full_training_replay_completes_without_date_or_position_violations():
     from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local_training_run import run_training_replay
