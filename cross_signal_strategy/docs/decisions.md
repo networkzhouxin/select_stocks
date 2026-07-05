@@ -314,6 +314,16 @@ Reason: The JoinQuant 2019-2021 training log showed `159928` on 2019-11-13 as `s
 Evidence: Added failing tests `test_below_falling_ma10_requires_price_to_decline` and `test_below_falling_ma10_accepts_flat_weak_close` before implementation. Local signal check now matches the log pattern: 2019-11-13 `159928` is `sell=24 force=False`; 2019-11-18 `159928` is `sell=32 force=True`; 2019-09-30 `513500` is `sell=44 force=True`.
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training log alignment only; no validation-period influence
+Status: superseded by "Use Meaningful Falling-MA10 Confirmation"
+
+### Use Meaningful Falling-MA10 Confirmation
+
+Date: 2026-07-05
+Decision: `close_below_falling_ma10` should require the latest close to be below MA10 and MA10 to be meaningfully lower than its prior value (`ma10[-1] < ma10[-2] - 1e-9`). It should not require the latest close to be below or equal to the prior close.
+Reason: Full JoinQuant/local score alignment showed that the price-decline requirement was too strict for `cross-v0.2.6`. In the JoinQuant training log, 2020-10-27 `513050` sold with `sell_score 45`; local scored only 35 because the close rose slightly from 2.078 to 2.080 while still below a clearly falling MA10. The earlier 2019-11-13 `159928` case is better explained by a nearly flat MA10 floating-point artifact, not by a general price-decline requirement.
+Evidence: Added failing tests `test_below_falling_ma10_accepts_rising_close_under_meaningfully_falling_ma10` and `test_below_falling_ma10_ignores_nearly_flat_ma10` before implementation. After the fix, JoinQuant/local rich-row sell-score mismatches fell from 294 to 12 rows; 2020-10-27 `513050` and 2019-11-13 `159928` both match. In filled-order path comparison, JoinQuant has 262 events and local has 260; after filtering the previously diagnosed 2020-09-22/2020-09-23 `512100` KDJ boundary pair, the remaining 260 local filled events match the 260 filtered JoinQuant events exactly.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
+Allowed validation influence: training log alignment only; no validation-period influence
 Status: adopted
 
 ### Local Adjustment Factor Alignment

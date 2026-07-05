@@ -234,7 +234,7 @@ def test_strong_adx_uptrend_does_not_block_severe_structure_sell():
     assert strategy.should_force_sell(score, atr_stop_triggered=False)
 
 
-def test_below_falling_ma10_requires_price_to_decline():
+def test_below_falling_ma10_accepts_rising_close_under_meaningfully_falling_ma10():
     close = strategy.pd.Series([100.0] * 50 + [120.0] + [100.0] * 8 + [90.0, 95.0])
     high = close + 1.0
     low = close - 1.0
@@ -250,6 +250,24 @@ def test_below_falling_ma10_requires_price_to_decline():
     assert snapshot["close"] < snapshot["ma10"]
     assert snapshot["ma10"] < close.rolling(10).mean().iloc[-2]
     assert snapshot["close"] > close.iloc[-2]
+    assert snapshot["close_below_falling_ma10"]
+
+
+def test_below_falling_ma10_ignores_nearly_flat_ma10():
+    close = strategy.pd.Series([100.0] * 49 + [95.0, 95.0] + [100.0] * 7 + [90.0, 95.0])
+    high = close + 1.0
+    low = close - 1.0
+    frame = strategy.pd.DataFrame({
+        "close": close,
+        "high": high,
+        "low": low,
+        "volume": [1000.0] * len(close),
+    })
+
+    snapshot = strategy.build_signal_snapshot(frame, strategy.get_default_params())
+
+    assert snapshot["close"] < snapshot["ma10"]
+    assert abs(snapshot["ma10"] - close.rolling(10).mean().iloc[-2]) < 1e-12
     assert not snapshot["close_below_falling_ma10"]
 
 

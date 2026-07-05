@@ -520,3 +520,37 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: It rules out several tempting broad changes. It does not provide a safe strategy-rule change.
+
+### Falling-MA10 Sell-Structure Alignment
+
+Version: local/JoinQuant falling-MA10 sell-score alignment
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: align local replay to the JoinQuant `cross-v0.2.6` training log without using validation-period results
+Initial capital: 20000
+
+Finding:
+- The local price-decline requirement inside `close_below_falling_ma10` was too strict for the JoinQuant log.
+- Before the fix, JoinQuant/local rich-row sell-score comparison had 294 mismatched rows; 282 were exactly `+10` where JoinQuant counted falling-MA10 risk and local did not.
+- The next filled-order divergence after filtering the known 2020-09-22/2020-09-23 `512100` KDJ boundary pair was 2020-10-27 SELL `513050`.
+- On that date, `513050` closed at 2.080 after 2.078, but remained below a clearly falling MA10 (`2.0959 -> 2.0945`). JoinQuant sold with `sell_score 45`; local scored 35 because the small rebound blocked `close_below_falling_ma10`.
+
+Implementation:
+- `close_below_falling_ma10` now requires `close < MA10` and `MA10` meaningfully lower than the previous MA10 (`ma10[-1] < ma10[-2] - 1e-9`).
+- It no longer requires the latest close to be below or equal to the prior close.
+- The 2019-11-13 `159928` case remains aligned because its MA10 was effectively flat, so it is not counted as falling.
+
+Verification:
+- `uvx --with pandas pytest tests/test_cross_signal_strategy.py -q -k "below_falling_ma10"` -> 3 passed.
+- `uvx --with pandas pytest tests/test_cross_signal_strategy.py tests/test_cross_signal_local_signal_adapter.py tests/test_cross_signal_local_order_planner.py tests/test_cross_signal_local_backtester.py tests/test_cross_signal_data_quality.py tests/test_cross_signal_order_path_diagnostics.py -q` -> 74 passed.
+- Rich-row sell-score mismatches fell from 294 to 12.
+- Filled-order path: JoinQuant 262 events, local 260 events. The unfiltered first mismatch remains 2020-09-22 BUY `512100` versus local 2020-09-29 BUY `513880`.
+- After filtering only the known 2020-09-22 BUY `512100` and 2020-09-23 SELL `512100` boundary pair, the remaining JoinQuant 260 filled events match the local 260 filled events exactly.
+- Local replay final value after this alignment check: 29207.02, total return +46.04%, 260 filled orders.
+
+Interpretation:
+- This is an alignment correction, not a validation-period optimization.
+- The remaining material divergence is concentrated in the previously diagnosed 2020-09-22 `512100` KDJ boundary pair.
+
+Can this result be used to change strategy rules? yes, narrowly
+Reason: It corrects local replay to match the JoinQuant training log's falling-MA10 sell-structure口径 and removes a broad systematic local scoring mismatch. It does not justify parameter tuning or validation-period changes.
