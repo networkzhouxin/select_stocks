@@ -295,3 +295,25 @@ Abnormal logs/errors: none during the local replay run
 
 Can this result be used to change rules? no
 Reason: This is a local mechanics/log-alignment checkpoint. Remaining KDJ window divergence must be investigated separately before any rule change.
+
+### KDJ Window Divergence Diagnostic
+
+Version: no strategy change; diagnostic only
+Code file: none
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: data-vs-algorithm diagnosis for remaining JoinQuant/local divergence
+Initial capital: not applicable
+
+Main observations:
+- The 2020-09-22 `512100` divergence is not likely caused by bad OHLC data. Local RSI, MACD, KDJ values are nearly identical to the JoinQuant log.
+- JoinQuant logged `512100` as `buy=65 rev=35` with `KDJ_K_UP=True` and `KDJ_J_UP=True`.
+- Local replay scores the same date as `buy=54 rev=24` because KDJ up-cross occurred just outside the local 3-bar recent-cross window.
+- If the local KDJ check uses a 4-bar recent-cross window, the 2020-09-22 KDJ flags match JoinQuant.
+- Batch comparison found only 4 scored samples where a `+11` reversal-score gap is explained by KDJ window=4. This does not justify changing the global `cross_window` by itself because it would affect RSI, MACD, KDJ, buy and sell logic together.
+
+Bad entries observed: not reviewed
+Sell timing observations: not reviewed
+Abnormal logs/errors: none
+
+Can this result be used to change rules? no
+Reason: This is diagnostic evidence only. A global cross-window change would be a strategy-rule change and needs broader evidence than one remaining order-path divergence.
