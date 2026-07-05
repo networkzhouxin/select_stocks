@@ -16,6 +16,15 @@ RICH_INDICATOR_RE = re.compile(
     r"close=([0-9.]+)"
 )
 
+INDICATOR_VALUE_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) 09:35:00 .*? -\s+([0-9]{6})\.(?:XSHG|XSHE) "
+    r"buy=-?\d+ rev=-?\d+ loc=-?\d+ trend=-?\d+ vol=-?\d+ sell=-?\d+ "
+    r"close=([-0-9.]+) RSI\[6/12/24\]=([-0-9.]+)/([-0-9.]+)/([-0-9.]+) "
+    r"MACD\[DIF/DEA/HIST\]=([-0-9.]+)/([-0-9.]+)/([-0-9.]+) "
+    r"KDJ\[K/D/J\]=([-0-9.]+)/([-0-9.]+)/([-0-9.]+).*?"
+    r"KDJ_DIFF\[K-D/J-D\]=([-0-9.]+)/([-0-9.]+)\(prev ([-0-9.]+)/([-0-9.]+)\)"
+)
+
 CROSS_FLAG_NAMES = [
     "rsi6_cross_rsi12_up",
     "rsi6_cross_rsi24_up",
@@ -68,6 +77,58 @@ def parse_joinquant_rich_indicator_rows(text: str) -> List[dict]:
             "sell": int(sell),
             "close": float(close),
         })
+    return rows
+
+
+def parse_joinquant_indicator_value_rows(text: str) -> List[dict]:
+    rows = []
+    seen = set()
+    for line in str(text).splitlines():
+        match = INDICATOR_VALUE_RE.search(line)
+        if not match:
+            continue
+        (
+            date,
+            code,
+            close,
+            rsi6,
+            rsi12,
+            rsi24,
+            dif,
+            dea,
+            hist,
+            k,
+            d,
+            j,
+            kd_diff,
+            jd_diff,
+            prev_kd_diff,
+            prev_jd_diff,
+        ) = match.groups()
+        key = (date, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "date": date,
+                "code": code,
+                "close": float(close),
+                "rsi6": float(rsi6),
+                "rsi12": float(rsi12),
+                "rsi24": float(rsi24),
+                "dif": float(dif),
+                "dea": float(dea),
+                "hist": float(hist),
+                "k": float(k),
+                "d": float(d),
+                "j": float(j),
+                "kd_diff": float(kd_diff),
+                "jd_diff": float(jd_diff),
+                "prev_kd_diff": float(prev_kd_diff),
+                "prev_jd_diff": float(prev_jd_diff),
+            }
+        )
     return rows
 
 

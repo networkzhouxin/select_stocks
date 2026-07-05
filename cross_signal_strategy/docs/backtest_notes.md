@@ -485,3 +485,38 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: The narrower KDJ-only change fails the global alignment check. This diagnostic supports leaving `cross_window=3` unchanged for now.
+
+### Cross Flag Version And State Diagnostic
+
+Version: cross-flag version/state diagnosis
+Code file: `cross_signal_strategy/local_data_quality.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: check whether the 2020-09-22 `512100` divergence is caused by indicator value mismatch, an alternate cross-state interpretation, or version drift
+Initial capital: not applicable
+
+Focus-case indicator parity:
+- For `512100` on 2020-09-21 and 2020-09-22, local RSI/MACD/KDJ values match JoinQuant logs within normal rounding.
+- Example 2020-09-22:
+  - JoinQuant close `0.963`; local close `0.963`.
+  - JoinQuant K/D/J `60.1/46.5/87.3`; local `60.0783/46.4763/87.2824`.
+  - JoinQuant KDJ_DIFF `13.6/40.8(prev 9.8/29.4)`; local `13.6020/40.8061(prev 9.8172/29.4517)`.
+- Because the previous KDJ diff is already positive on 2020-09-22, the current row itself is not an up-cross under the current code. The JoinQuant flag therefore reflects a recent/persistent cross decision rather than an indicator value discrepancy.
+
+Alternate cross-state checks:
+- KDJ-only "any positive in recent window" fixes the 2020-09-22 focus flag but worsens full-log alignment to 2053 mismatched rows and 4151 flag mismatches.
+- KDJ-only "latest positive state" fixes the focus flag but worsens full-log alignment to 807 mismatched rows and 1633 flag mismatches.
+- Applying these state-style interpretations to all indicators is much worse.
+- Therefore the focus-case behavior is not explained by a simple global "state instead of cross" implementation.
+
+Path after filtering focus pair:
+- If the JoinQuant 2020-09-22 BUY `512100` and 2020-09-23 SELL `512100` are removed from the comparison, the next filled-order divergence is:
+  - JoinQuant: 2020-10-27 SELL `513050`, amount 3500, price 2.081.
+  - Local: no 2020-10-27 `513050` sell; next event is 2020-10-29 BUY `159928`.
+
+Interpretation:
+- The first divergence remains the 2020-09-22 `512100` KDJ boundary case.
+- The mismatch is not caused by local OHLC/indicator values and not fixed safely by broader cross-state rules.
+- Remaining divergences should be investigated one by one as platform/version/mechanics alignment issues before changing any strategy rule.
+
+Can this result be used to change strategy rules? no
+Reason: It rules out several tempting broad changes. It does not provide a safe strategy-rule change.

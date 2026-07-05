@@ -34,6 +34,40 @@ def test_parse_joinquant_rich_indicator_rows_extracts_close():
     ]
 
 
+def test_parse_joinquant_indicator_values_extracts_diffs_and_kdj():
+    from cross_signal_strategy.local_data_quality import parse_joinquant_indicator_value_rows
+
+    text = (
+        "2020-09-22 09:35:00 - INFO  -   512100.XSHG buy=65 rev=35 loc=17 "
+        "trend=9 vol=4 sell=0 close=0.963 RSI[6/12/24]=56.4/50.6/52.6 "
+        "MACD[DIF/DEA/HIST]=-0.0041/-0.0021/-0.0041 KDJ[K/D/J]=60.1/46.5/87.3 "
+        "KDJ_DIFF[K-D/J-D]=13.6/40.8(prev 9.8/29.4)"
+    )
+
+    rows = parse_joinquant_indicator_value_rows(text)
+
+    assert rows == [
+        {
+            "date": "2020-09-22",
+            "code": "512100",
+            "close": 0.963,
+            "rsi6": 56.4,
+            "rsi12": 50.6,
+            "rsi24": 52.6,
+            "dif": -0.0041,
+            "dea": -0.0021,
+            "hist": -0.0041,
+            "k": 60.1,
+            "d": 46.5,
+            "j": 87.3,
+            "kd_diff": 13.6,
+            "jd_diff": 40.8,
+            "prev_kd_diff": 9.8,
+            "prev_jd_diff": 29.4,
+        }
+    ]
+
+
 def test_parse_joinquant_cross_flag_rows_extracts_flags():
     from cross_signal_strategy.local_data_quality import parse_joinquant_cross_flag_rows
 
