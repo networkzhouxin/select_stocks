@@ -341,3 +341,44 @@ Abnormal logs/errors: none
 
 Can this result be used to change rules? no
 Reason: This is a data-quality and platform-data-parity audit. It supports further work on local adjustment/复权 alignment, not strategy parameter or signal tuning.
+
+### Local ETF Adjustment Factor Audit
+
+Version: local replay adjustment-factor alignment
+Code files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: fix local/JoinQuant data口径 parity only; no strategy rule or parameter tuning
+Initial capital: 20000
+
+Files inspected:
+- `G:\financial\history_data\按年份合并\etf_adjust_factor\ETF复权因子.csv`
+- `G:\financial\history_data\按年份合并\数据合并工具最新版本下载.txt`
+- `G:\financial\history_data\按年份合并\分钟级\全部复权因子\涨跌幅\全部复权因子.zip`
+- `G:\financial\history_data\按年份合并\分钟级\全部份额\全部份额.zip`
+- `G:\financial\history_data\按年份合并\分钟级\etf.csv`
+
+Main observations:
+- `ETF复权因子.csv` directly explains the two close outliers from the JoinQuant/local audit.
+- `510880` has an ex-date on 2020-01-17 with `ex_factor=1.0513740030198886`; local 2020-01-16 close `2.947 / 1.0513740030198886 = 2.8029987`, matching JoinQuant close `2.803`.
+- `510300` has an ex-date on 2021-01-18 with `ex_factor=1.0132002506617996`; local 2021-01-15 close `5.526 / 1.0132002506617996 = 5.4540058`, matching JoinQuant close `5.454`.
+- The minute-level `全部复权因子.zip` independently confirms factor jumps on those dates: `510880` factor `1.318 -> 1.386` on 2020-01-17; `510300` factor `1.131 -> 1.146` on 2021-01-18.
+- `全部份额.zip` shows same-day NAV/close drops consistent with ex-dividend handling, useful as a sanity check but not the primary OHLC adjustment source.
+- `etf.csv` is ETF metadata, useful for identity/listing/type checks, not for fixing price口径.
+- `数据合并工具最新版本下载.txt` only contains a Baidu Netdisk tool link and is not directly useful for this anomaly.
+
+Implementation:
+- Added a small 2019-2021 target-ETF adjustment-factor table inside `local_adjustment.py` instead of reading the full `按年份合并` source during replay.
+- `LocalSignalAdapter` can apply known adjustment events on or before the decision date. It divides historical OHLC rows before the ex-date by the product of known later ex-factors and does not adjust volume.
+- `run_training_replay` enables these training-period adjustment factors by default.
+- Future events are not applied before their ex-date.
+
+Verification:
+- `uvx --with pandas pytest tests/test_cross_signal_local_signal_adapter.py::test_signal_frame_applies_current_day_adjustment_without_future_events tests/test_cross_signal_local_signal_adapter.py::test_local_signal_adapter_can_align_ex_dividend_signal_close -q` -> 2 passed.
+- `uvx --with pandas pytest tests/test_cross_signal_local_signal_adapter.py tests/test_cross_signal_data_quality.py tests/test_cross_signal_local_data_loader.py -q` -> 17 passed.
+- `uvx --with pandas pytest tests/test_cross_signal_local_order_planner.py tests/test_cross_signal_local_backtester.py -q` -> 13 passed.
+- `uvx --with pandas pytest tests/test_cross_signal_local_training_run.py -q` -> 2 passed in 394.07s.
+- Adjusted anomaly check: `510880` on 2020-01-17 scores close `2.8029987`; `510300` on 2021-01-18 scores close `5.4540058`.
+- Local training replay after adjustment: start `2019-01-02`, end `2021-12-31`, total return `47.54%`, max drawdown `7.72%`, buys `130`, sells `128`, final holdings `159985` and `518880`.
+
+Can this result be used to change strategy rules? no
+Reason: This is a data parity fix. It reduces local/JoinQuant replay differences without looking at validation-period performance or changing trading logic.

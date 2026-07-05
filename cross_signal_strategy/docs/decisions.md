@@ -316,6 +316,17 @@ Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py
 Allowed validation influence: training log alignment only; no validation-period influence
 Status: adopted
 
+### Local Adjustment Factor Alignment
+
+Date: 2026-07-05
+Decision: Apply 2019-2021 target-ETF adjustment factors inside the local cross-signal training replay so T-1 signal OHLC matches JoinQuant's adjusted historical price口径 on ex-dividend/split dates.
+Reason: The remaining JoinQuant/local close outliers were not bad raw data. They occurred exactly on ETF ex-dates: `510880` on 2020-01-17 and `510300` on 2021-01-18. Dividing the previous signal close by the same-day `ex_factor` matches JoinQuant's logged close to rounding precision.
+Evidence: `510880` local 2020-01-16 close `2.947 / 1.0513740030198886 = 2.8029987`, matching JoinQuant `2.803`; `510300` local 2021-01-15 close `5.526 / 1.0132002506617996 = 5.4540058`, matching JoinQuant `5.454`. Tests added before implementation and passed with `uvx --with pandas pytest`; full local training replay test passed.
+Protocol guard: The replay uses a small 2019-2021 target-ETF factor table and does not read the full `G:\financial\history_data\按年份合并` market-data directory during normal training replay. Only events on or before the current decision date are applied; future factor events are not applied early.
+Affected files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`, `tests/test_cross_signal_local_signal_adapter.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training log alignment only; no validation-period influence
+Status: adopted
+
 ### Use ETF Tick Precision For Local ATR Stop Comparison
 
 Date: 2026-07-05

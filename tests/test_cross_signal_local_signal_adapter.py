@@ -114,3 +114,54 @@ def test_signal_score_allows_listing_before_ma60_when_core_indicators_are_valid(
     assert score["buy_score"] == 70
     assert score["trend_score"] == 0
     assert score["sell_score"] == 0
+
+
+def test_signal_frame_applies_current_day_adjustment_without_future_events():
+    import pandas as pd
+
+    from cross_signal_strategy.local_adjustment import LocalAdjustmentFactors
+
+    frame = pd.DataFrame(
+        {
+            "date": ["2020-01-15", "2020-01-16", "2020-01-17"],
+            "open": [2.90, 2.95, 2.80],
+            "high": [2.92, 2.96, 2.82],
+            "low": [2.88, 2.94, 2.78],
+            "close": [2.91, 2.947, 2.784],
+            "volume": [1000.0, 1200.0, 1300.0],
+        }
+    )
+    factors = LocalAdjustmentFactors.from_records(
+        [
+            {"code": "510880", "ex_date": "2020-01-17", "ex_factor": 1.0513740030198886},
+            {"code": "510880", "ex_date": "2021-01-18", "ex_factor": 1.0543561221399267},
+        ]
+    )
+
+    adjusted = factors.adjust_daily_frame(frame, "510880", "2020-01-17")
+
+    assert adjusted.loc[0, "close"] == pytest.approx(2.91 / 1.0513740030198886)
+    assert adjusted.loc[1, "close"] == pytest.approx(2.947 / 1.0513740030198886)
+    assert adjusted.loc[2, "close"] == pytest.approx(2.784)
+    assert adjusted.loc[1, "volume"] == pytest.approx(1200.0)
+
+
+def test_local_signal_adapter_can_align_ex_dividend_signal_close():
+    from cross_signal_strategy.local_adjustment import LocalAdjustmentFactors
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    factors = LocalAdjustmentFactors.from_records(
+        [{"code": "510880", "ex_date": "2020-01-17", "ex_factor": 1.0513740030198886}]
+    )
+    adapter = LocalSignalAdapter(
+        CrossSignalTrainingDataLoader(TRAIN_ROOT),
+        warmup_root=WARMUP_ROOT,
+        adjustment_factors=factors,
+    )
+
+    score, reason = adapter.score("510880", "2020-01-17", return_reason=True)
+
+    assert reason is None
+    assert score["signal_date"] == "2020-01-16"
+    assert score["close"] == pytest.approx(2.803, abs=0.001)

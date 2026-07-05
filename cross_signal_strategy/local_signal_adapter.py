@@ -25,6 +25,7 @@ class LocalSignalAdapter:
     loader: object
     params: dict | None = None
     warmup_root: Path | str | None = None
+    adjustment_factors: object | None = None
     _daily_cache: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -82,6 +83,8 @@ class LocalSignalAdapter:
             return frame.iloc[0:0].copy(), None
         dates = pd.to_datetime(frame["date"], errors="coerce")
         visible = frame.loc[dates <= pd.Timestamp(signal_date)].copy()
+        if self.adjustment_factors is not None:
+            visible = self.adjustment_factors.adjust_daily_frame(visible, code, current_date)
         return visible, signal_date
 
     def score(self, code: str, current_date: str, return_reason: bool = False):
