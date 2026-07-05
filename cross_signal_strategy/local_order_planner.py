@@ -97,7 +97,7 @@ class LocalCrossSignalOrderPlanner:
             if highest is None or atr_val is None or price <= 0:
                 continue
             stop_price = strategy.calc_stop_price(highest, atr_val, pos.avg_cost, self.params)
-            if price <= stop_price:
+            if round(price, 3) <= round(stop_price, 3):
                 stopped.add(code)
         return stopped
 

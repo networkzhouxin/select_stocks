@@ -309,9 +309,29 @@ Status: adopted
 ### Require Price Decline For Falling-MA10 Sell Confirmation
 
 Date: 2026-07-05
-Decision: Refine `close_below_falling_ma10` so it requires the latest close to be below the previous close, below MA10, and MA10 below its previous value. A price that rebounds but remains under a gently falling MA10 is a risk-tighten warning, not a force-sell structure break.
+Decision: Refine `close_below_falling_ma10` so it requires the latest close to be at or below the previous close, below MA10, and MA10 below its previous value. A price that rebounds but remains under a gently falling MA10 is a risk-tighten warning, not a force-sell structure break; a flat weak close under a falling MA10 remains a valid structure break.
 Reason: The JoinQuant 2019-2021 training log showed `159928` on 2019-11-13 as `sell_score 24` and risk-tighten only, while local replay scored it as 34 and sold early because it counted `close_below_falling_ma10` even though the latest close rose from 3.044 to 3.057. The later 2019-11-18 sell still triggers when price actually declines and breaks weaker structure.
-Evidence: Added failing test `test_below_falling_ma10_requires_price_to_decline` before implementation. Local signal check now matches the log pattern: 2019-11-13 `sell=24 force=False`; 2019-11-18 `sell=32 force=True`.
+Evidence: Added failing tests `test_below_falling_ma10_requires_price_to_decline` and `test_below_falling_ma10_accepts_flat_weak_close` before implementation. Local signal check now matches the log pattern: 2019-11-13 `159928` is `sell=24 force=False`; 2019-11-18 `159928` is `sell=32 force=True`; 2019-09-30 `513500` is `sell=44 force=True`.
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training log alignment only; no validation-period influence
+Status: adopted
+
+### Use ETF Tick Precision For Local ATR Stop Comparison
+
+Date: 2026-07-05
+Decision: In local replay, compare ATR stop trigger prices at 0.001 ETF quote precision. Execution price and signal scoring remain unchanged.
+Reason: JoinQuant logs ATR stop comparisons at ETF quote precision. On 2020-03-02, local computed `518880` stop as 3.53875 and used a 09:35 price of 3.539, missing the stop by a sub-tick float difference, while JoinQuant triggered the stop as `3.538<=3.539`.
+Evidence: Added failing test `test_planner_atr_stop_uses_etf_tick_precision_for_trigger` before implementation. After the fix, local replay sells `518880` on 2020-03-02, matching JoinQuant order timing.
+Affected files: `cross_signal_strategy/local_order_planner.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training log alignment only; no validation-period influence
+Status: adopted
+
+### Allow Core-Indicator-Ready New Listings Before MA60
+
+Date: 2026-07-05
+Decision: Local replay no longer requires 60 daily bars before scoring a newly listed ETF. It requires enough history for the core required indicators (RSI24, MACD, BOLL20, ATR14, ADX14) and allows MA60 to be NaN, which naturally gives no MA60 trend contribution.
+Reason: JoinQuant scored and bought `159985` on 2020-03-03 with 56 available bars and `MA60=nan`, producing `buy=70 trend=0`. Local replay incorrectly skipped it as `short_data:56<60`.
+Evidence: Added failing test `test_signal_score_allows_listing_before_ma60_when_core_indicators_are_valid` before implementation. Local replay now scores `159985` on 2020-03-03 as `buy=70 trend=0 sell=0`.
+Affected files: `cross_signal_strategy/local_signal_adapter.py`, `tests/test_cross_signal_local_signal_adapter.py`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training log alignment only; no validation-period influence
 Status: adopted

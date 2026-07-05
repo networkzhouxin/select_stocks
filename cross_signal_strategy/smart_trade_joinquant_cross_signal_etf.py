@@ -608,7 +608,7 @@ def build_signal_snapshot(df, params):
         "volume_above_vol20_and_up": V.iloc[-1] > vol20.iloc[-1] and latest > prev,
         "vol5_gt_vol20": vol5.iloc[-1] > vol20.iloc[-1],
         "far_above_ma20_and_rsi6_down": latest / ma20.iloc[-1] - 1 > 0.10 and rsi6_down if ma20.iloc[-1] > 0 else False,
-        "close_below_falling_ma10": latest < prev and latest < ma10.iloc[-1] and ma10.iloc[-1] < ma10.iloc[-2],
+        "close_below_falling_ma10": latest <= prev and latest < ma10.iloc[-1] and ma10.iloc[-1] < ma10.iloc[-2],
         "fell_back_inside_boll": C.iloc[-2] > boll_upper.iloc[-2] and latest <= boll_upper.iloc[-1],
     }
     return snapshot

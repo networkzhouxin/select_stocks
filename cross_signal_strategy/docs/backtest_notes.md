@@ -258,3 +258,40 @@ Abnormal logs/errors: none during the local replay run
 
 Can this result be used to change rules? no
 Reason: This is a correctness/log-alignment checkpoint for a sell-confirmation condition, not an optimization pass. No validation-period results were inspected or used.
+
+### Local Replay With Tick-Precision ATR And Core-Indicator New Listings
+
+Version: local replay with falling-MA10 flat-close handling, 0.001 ATR stop comparison, and core-indicator-ready new-listing scoring
+Code file: `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: JoinQuant training-log alignment check
+Initial capital: 20000
+
+Strategy return: +44.12%
+Annualized return: not calculated
+Excess return: not calculated
+Benchmark return: not calculated
+Alpha: not calculated
+Beta: not calculated
+Sharpe: not calculated
+Sortino: not calculated
+Win rate: not calculated
+Daily win rate: not calculated
+Profit/loss ratio: not calculated
+Max drawdown: 9.70%
+Max drawdown period: not calculated
+Trade count: 254 filled orders; 128 buys, 126 sells
+Average holding days: not calculated
+
+Main observations:
+- 2019-09-30 `513500` now matches JoinQuant at the signal level: `sell=44 force=True`.
+- 2020-03-02 `518880` now matches JoinQuant's ATR stop timing by comparing stop triggers at ETF 0.001 quote precision.
+- 2020-03-03 `159985` now scores as `buy=70 trend=0 sell=0`, matching JoinQuant's ability to score new listings before MA60 is available.
+- Current first remaining order-path divergence is 2020-09-22: JoinQuant buys `512100` with `buy=65 rev=35`; local scores it `buy=54 rev=24` because KDJ up-cross falls just outside the local 3-bar recent-cross window. This is not yet changed because it may reflect a broader cross-window definition issue.
+
+Bad entries observed: not reviewed
+Sell timing observations: 2020-03-02 `518880` ATR sell aligned; 2020-09-22 `512100` buy divergence remains open.
+Abnormal logs/errors: none during the local replay run
+
+Can this result be used to change rules? no
+Reason: This is a local mechanics/log-alignment checkpoint. Remaining KDJ window divergence must be investigated separately before any rule change.

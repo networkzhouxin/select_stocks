@@ -115,7 +115,6 @@ class LocalSignalAdapter:
 
     def _local_min_len(self, params: dict) -> int:
         return max(
-            60,
             int(params["rsi_slow"]),
             int(params["macd_slow"]) + int(params["macd_signal"]),
             int(params["boll_period"]),

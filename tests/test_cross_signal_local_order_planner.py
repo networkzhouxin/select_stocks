@@ -193,6 +193,29 @@ def test_planner_atr_stop_sells_before_signal_logic_and_blocks_same_day_rebuy():
     assert "510300" not in [o["code"] for o in orders[1:]]
 
 
+def test_planner_atr_stop_uses_etf_tick_precision_for_trigger():
+    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({
+        "518880": candidate("518880", buy_score=31, sell_score=24),
+    })
+    planner = LocalCrossSignalOrderPlanner(adapter, etf_pool=["518880"])
+    planner.highest_since_buy["518880"] = 3.725
+    planner.entry_atr["518880"] = 0.046
+    broker = LocalBroker(initial_cash=14000.0)
+    broker.positions["518880"] = Position("518880", 1700, 3.52352)
+
+    orders = planner.plan_orders(
+        "2020-03-02",
+        "2020-02-28",
+        broker,
+        current_prices={"518880": 3.539},
+    )
+
+    assert orders[0] == {"code": "518880", "target_value": 0.0, "reason": "atr_stop"}
+
+
 def test_planner_uses_0935_position_marks_for_new_buy_target_value():
     from cross_signal_strategy.local_backtester import LocalBroker, Position
     from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner

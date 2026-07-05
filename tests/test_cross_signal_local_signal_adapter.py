@@ -98,3 +98,19 @@ def test_signal_score_allows_new_listing_when_required_indicators_are_valid():
     assert score["signal_date"] == "2019-10-17"
     assert score["buy_score"] == 80
     assert score["sell_score"] == 6
+
+
+def test_signal_score_allows_listing_before_ma60_when_core_indicators_are_valid():
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
+
+    score, reason = adapter.score("159985", "2020-03-03", return_reason=True)
+
+    assert reason is None
+    assert score["code"] == "159985"
+    assert score["signal_date"] == "2020-03-02"
+    assert score["buy_score"] == 70
+    assert score["trend_score"] == 0
+    assert score["sell_score"] == 0

@@ -253,6 +253,25 @@ def test_below_falling_ma10_requires_price_to_decline():
     assert not snapshot["close_below_falling_ma10"]
 
 
+def test_below_falling_ma10_accepts_flat_weak_close():
+    close = strategy.pd.Series([100.0] * 50 + [120.0] + [100.0] * 8 + [95.0, 95.0])
+    high = close + 1.0
+    low = close - 1.0
+    frame = strategy.pd.DataFrame({
+        "close": close,
+        "high": high,
+        "low": low,
+        "volume": [1000.0] * len(close),
+    })
+
+    snapshot = strategy.build_signal_snapshot(frame, strategy.get_default_params())
+
+    assert snapshot["close"] == close.iloc[-2]
+    assert snapshot["close"] < snapshot["ma10"]
+    assert snapshot["ma10"] < close.rolling(10).mean().iloc[-2]
+    assert snapshot["close_below_falling_ma10"]
+
+
 def test_atr_stop_sells_without_signal_confirmation():
     assert strategy.should_force_sell({"sell_score": 0}, atr_stop_triggered=True)
 
