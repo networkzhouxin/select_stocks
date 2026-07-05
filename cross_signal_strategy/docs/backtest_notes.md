@@ -111,3 +111,40 @@ Abnormal logs/errors: none during the local replay run
 
 Can this result be used to change rules? no
 Reason: This is still a local mechanics-alignment checkpoint. It confirms the need for warm-up data but does not justify parameter, indicator, or rule changes.
+
+### Local Replay With Warm-Up And ATR Stop State
+
+Version: local replay foundation with 2018 daily warm-up and ATR stop state
+Code file: `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training infrastructure/mechanics check
+Initial capital: 20000
+
+Strategy return: +41.42%
+Annualized return: not calculated
+Excess return: not calculated
+Benchmark return: not calculated
+Alpha: not calculated
+Beta: not calculated
+Sharpe: not calculated
+Sortino: not calculated
+Win rate: not calculated
+Daily win rate: not calculated
+Profit/loss ratio: not calculated
+Max drawdown: 9.56%
+Max drawdown period: not calculated
+Trade count: 254 filled orders; 128 buys, 126 sells
+Average holding days: not calculated
+
+Main observations:
+- Local replay now records `entry_atr`, `highest_since_buy`, buy dates, and runs ATR stop checks before signal sells/buys.
+- Return improved from the warm-up-only local baseline (+34.67%) to +41.42%.
+- Result is closer to, but still below, the JoinQuant training-period reference (+50.07%).
+- Remaining likely mechanics gaps include target-value total portfolio valuation at 09:35, exact JoinQuant `order_target_value` sizing/fill behavior, and data/fq alignment.
+
+Bad entries observed: not reviewed
+Sell timing observations: not reviewed
+Abnormal logs/errors: none during the local replay run
+
+Can this result be used to change rules? no
+Reason: This is still a local mechanics-alignment checkpoint, not an authoritative strategy result.

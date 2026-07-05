@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Callable, Dict, Iterable, List, Mapping, Sequence
 
 
@@ -172,12 +173,15 @@ class LocalBacktestEngine:
         previous_date: str | None = None
 
         for current_date in ordered_dates:
-            planned_orders = order_plan(current_date, previous_date, self.broker)
+            current_prices = self._current_prices(current_date)
+            planned_orders = self._call_order_plan(order_plan, current_date, previous_date, current_prices)
             orders: List[OrderResult] = []
             for plan in planned_orders:
                 code = str(plan["code"])
                 target_value = float(plan["target_value"])
-                price = self.loader.get_minute_bar(code, current_date, "09:35")["close"]
+                price = current_prices.get(code)
+                if price is None:
+                    price = self.loader.get_minute_bar(code, current_date, "09:35")["close"]
                 orders.append(
                     self.broker.order_target_value(
                         code=code,
@@ -188,6 +192,11 @@ class LocalBacktestEngine:
                 )
 
             marks = self._close_marks(current_date)
+            owner = getattr(order_plan, "__self__", None)
+            if owner is not None and hasattr(owner, "on_orders_filled"):
+                owner.on_orders_filled(current_date, orders)
+            if owner is not None and hasattr(owner, "on_after_close"):
+                owner.on_after_close(current_date, marks)
             positions = {
                 code: Position(pos.code, pos.amount, pos.avg_cost)
                 for code, pos in self.broker.positions.items()
@@ -206,6 +215,25 @@ class LocalBacktestEngine:
             previous_date = current_date
 
         return results
+
+    def _call_order_plan(self, order_plan, current_date: str, previous_date: str | None, current_prices):
+        try:
+            params = inspect.signature(order_plan).parameters
+            if "current_prices" in params:
+                return order_plan(current_date, previous_date, self.broker, current_prices=current_prices)
+        except (TypeError, ValueError):
+            pass
+        return order_plan(current_date, previous_date, self.broker)
+
+    def _current_prices(self, current_date: str) -> Dict[str, float]:
+        prices: Dict[str, float] = {}
+        candidates = set(self.broker.positions.keys())
+        for code in candidates:
+            try:
+                prices[code] = float(self.loader.get_minute_bar(code, current_date, "09:35")["close"])
+            except (FileNotFoundError, KeyError):
+                continue
+        return prices
 
     def _close_marks(self, current_date: str) -> Dict[str, float]:
         marks: Dict[str, float] = {}

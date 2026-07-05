@@ -46,6 +46,7 @@ def candidate(code, buy_score=65, sell_score=0, reversal_score=40):
         "adx": 10,
         "plus_di": 20,
         "minus_di": 10,
+        "atr": 0.1,
     }
 
 
@@ -65,8 +66,8 @@ def test_planner_buys_top_candidates_up_to_empty_slots():
     orders = planner.plan_orders("2019-07-01", "2019-06-28", broker)
 
     assert orders == [
-        {"code": "159915", "target_value": pytest.approx(5000.0)},
-        {"code": "510300", "target_value": pytest.approx(5000.0)},
+        {"code": "159915", "target_value": pytest.approx(5000.0), "reason": "buy_signal"},
+        {"code": "510300", "target_value": pytest.approx(5000.0), "reason": "buy_signal"},
     ]
 
 
@@ -88,7 +89,7 @@ def test_planner_sells_existing_position_before_buying_new_slots():
 
     orders = planner.plan_orders("2019-07-01", "2019-06-28", broker)
 
-    assert orders[0] == {"code": "510300", "target_value": 0.0}
+    assert orders[0] == {"code": "510300", "target_value": 0.0, "reason": "signal_sell"}
     assert [o["code"] for o in orders[1:]] == ["159915", "512100", "159928"]
 
 
@@ -132,3 +133,61 @@ def test_engine_runs_real_signal_planner_smoke_window_without_future_dates():
     assert [day.date for day in results] == ["2019-07-01", "2019-07-02", "2019-07-03"]
     assert all(day.total_value > 0 for day in results)
     assert all(day.previous_date is None or day.previous_date < day.date for day in results)
+
+
+def test_planner_records_entry_atr_and_highest_after_filled_buy():
+    from cross_signal_strategy.local_backtester import OrderResult
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"510300": candidate("510300", buy_score=70)})
+    planner = LocalCrossSignalOrderPlanner(adapter, etf_pool=["510300"])
+    order = OrderResult(
+        code="510300",
+        amount_delta=1000,
+        exec_price=3.0,
+        commission=5.0,
+        side_time="2019-07-01 09:35",
+        filled=True,
+    )
+
+    planner.on_orders_filled("2019-07-01", [order])
+
+    assert planner.entry_atr["510300"] == pytest.approx(0.1)
+    assert planner.highest_since_buy["510300"] == pytest.approx(3.0)
+    assert planner.buy_dates["510300"] == "2019-07-01"
+
+
+def test_planner_atr_stop_sells_before_signal_logic_and_blocks_same_day_rebuy():
+    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({
+        "510300": candidate("510300", buy_score=80),
+        "159915": candidate("159915", buy_score=70),
+    })
+    params = {
+        "max_hold": 3,
+        "base_ratio": 0.75,
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "trailing_atr_mult": 2.5,
+        "stop_floor": 0.05,
+        "stop_cap": 0.15,
+        "adx_trend_threshold": 25,
+    }
+    planner = LocalCrossSignalOrderPlanner(adapter, etf_pool=["510300", "159915"], params=params)
+    planner.highest_since_buy["510300"] = 10.0
+    planner.entry_atr["510300"] = 1.0
+    broker = LocalBroker(initial_cash=15000.0)
+    broker.positions["510300"] = Position("510300", 1000, 9.0)
+
+    orders = planner.plan_orders(
+        "2019-07-02",
+        "2019-07-01",
+        broker,
+        current_prices={"510300": 8.0, "159915": 4.0},
+    )
+
+    assert orders[0] == {"code": "510300", "target_value": 0.0, "reason": "atr_stop"}
+    assert [o["code"] for o in orders[1:]] == ["159915"]
+    assert "510300" not in [o["code"] for o in orders[1:]]
