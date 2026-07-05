@@ -148,3 +148,39 @@ Abnormal logs/errors: none during the local replay run
 
 Can this result be used to change rules? no
 Reason: This is still a local mechanics-alignment checkpoint, not an authoritative strategy result.
+
+### Local Replay With 09:35 Portfolio Mark For Target Sizing
+
+Version: local replay foundation with 2018 daily warm-up, ATR stop state, and 09:35 position marks for buy target sizing
+Code file: `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training infrastructure/mechanics check
+Initial capital: 20000
+
+Strategy return: +42.99%
+Annualized return: not calculated
+Excess return: not calculated
+Benchmark return: not calculated
+Alpha: not calculated
+Beta: not calculated
+Sharpe: not calculated
+Sortino: not calculated
+Win rate: not calculated
+Daily win rate: not calculated
+Profit/loss ratio: not calculated
+Max drawdown: 9.69%
+Max drawdown period: not calculated
+Trade count: 254 filled orders; 128 buys, 126 sells
+Average holding days: not calculated
+
+Main observations:
+- New buy target value now uses cash plus existing positions marked at 09:35 when those prices are available.
+- Return improved from the ATR-state local baseline (+41.42%) to +42.99% with unchanged trade count.
+- The result remains below the JoinQuant training-period reference (+50.07%), so exact order sizing/fill behavior and data/fq alignment still need review.
+
+Bad entries observed: not reviewed
+Sell timing observations: not reviewed
+Abnormal logs/errors: none during the local replay run
+
+Can this result be used to change rules? no
+Reason: This is a local execution-mechanics alignment checkpoint. It does not justify strategy parameter, indicator, or rule changes.

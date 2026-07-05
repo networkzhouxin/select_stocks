@@ -191,3 +191,26 @@ def test_planner_atr_stop_sells_before_signal_logic_and_blocks_same_day_rebuy():
     assert orders[0] == {"code": "510300", "target_value": 0.0, "reason": "atr_stop"}
     assert [o["code"] for o in orders[1:]] == ["159915"]
     assert "510300" not in [o["code"] for o in orders[1:]]
+
+
+def test_planner_uses_0935_position_marks_for_new_buy_target_value():
+    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({
+        "159915": candidate("159915", buy_score=70),
+    })
+    planner = LocalCrossSignalOrderPlanner(adapter, etf_pool=["159915"])
+    broker = LocalBroker(initial_cash=17000.0)
+    broker.positions["510300"] = Position("510300", 1000, 3.0)
+
+    orders = planner.plan_orders(
+        "2019-07-02",
+        "2019-07-01",
+        broker,
+        current_prices={"510300": 4.0},
+    )
+
+    assert orders == [
+        {"code": "159915", "target_value": pytest.approx(5250.0), "reason": "buy_signal"},
+    ]

@@ -71,7 +71,7 @@ class LocalCrossSignalOrderPlanner:
         if slots <= 0:
             return orders
 
-        target_value = self._target_value(broker)
+        target_value = self._target_value(broker, current_prices or {})
         candidates = [
             item for item in strategy.filter_buy_candidates(scores, held_after_sell, self.params)
             if item["code"] not in force_stopped
@@ -138,8 +138,10 @@ class LocalCrossSignalOrderPlanner:
             scores.append(score)
         return strategy.sort_candidates(scores)
 
-    def _target_value(self, broker) -> float:
-        # Before close marks are available, use cash plus cost basis as a conservative total-value proxy.
-        position_value = sum(pos.amount * pos.avg_cost for pos in broker.positions.values())
+    def _target_value(self, broker, current_prices: Mapping[str, float]) -> float:
+        position_value = sum(
+            pos.amount * float(current_prices.get(code, pos.avg_cost))
+            for code, pos in broker.positions.items()
+        )
         total_value = broker.cash + position_value
         return total_value * float(self.params["base_ratio"]) / int(self.params["max_hold"])
