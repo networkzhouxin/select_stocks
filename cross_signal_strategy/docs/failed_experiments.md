@@ -185,3 +185,13 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it was not adopted: RSI 80 is only marginally better than 85 in the training window (+0.71pp return). This is too small for a pure threshold change and risks parameter overfitting.
 Can it be revisited? yes
 Conditions for revisiting: Only if reserved validation shows repeated high-RSI chase entries, or if a broader anti-overheat rule is adopted for market-structure reasons.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Signal-sell structure variants: severe-only confirmation, remove BOLL-mid confirmation, and MA20/falling-MA10-only confirmation.
+Hypothesis: Normal signal sells may still be too sensitive if soft confirmations such as BOLL-mid weakness trigger exits.
+Training result: All variants produced the identical path as baseline: +106.17% return, 9.35% max drawdown, Sharpe 1.8866, 103 buys and 101 sells.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The current signal sells that actually execute already satisfy the harder structure conditions. Soft confirmation terms are not changing the realized training path.
+Can it be revisited? yes
+Conditions for revisiting: Only after sell-score components change or after validation reveals soft-confirmation exits not visible in training.
