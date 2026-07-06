@@ -33,6 +33,7 @@ def get_default_params():
         "rebalance_weekdays": [0, 1, 2, 3, 4],
         "max_hold": 3,
         "base_ratio": 0.90,
+        "min_signal_hold_days": 5,
         "buy_threshold": 60,
         "strong_buy_threshold": 70,
         "sell_threshold": 30,
@@ -419,8 +420,22 @@ def has_signal_sell_confirmation(snapshot):
     )
 
 
-def can_sell_by_signal(buy_date, today):
-    return buy_date is None or buy_date != today
+def _date_key(value):
+    return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def can_sell_by_signal(buy_date, today, min_hold_days=1, trade_days=None):
+    if buy_date is None:
+        return True
+    if int(min_hold_days) <= 1:
+        return _date_key(buy_date) != _date_key(today)
+    buy_key = _date_key(buy_date)
+    today_key = _date_key(today)
+    if trade_days is not None:
+        keys = [_date_key(day) for day in trade_days]
+        if buy_key in keys and today_key in keys:
+            return keys.index(today_key) - keys.index(buy_key) >= int(min_hold_days)
+    return (pd.Timestamp(today_key) - pd.Timestamp(buy_key)).days >= int(min_hold_days)
 
 
 def sort_candidates(candidates):
@@ -799,6 +814,10 @@ def do_trading(context):
                     format_indicator_values(item)))
 
     held = current_hold_codes(context)
+    signal_hold_days = get_trade_days(
+        end_date=today,
+        count=max(2, int(p.get("min_signal_hold_days", 1)) + 1),
+    )
     for code in list(held):
         if code not in score_map:
             continue
@@ -806,8 +825,13 @@ def do_trading(context):
             log.info("[hold] %s paused, skip signal sell" % code)
             continue
         score = score_map[code]
-        if not can_sell_by_signal(g.buy_date.get(code), today):
-            log.info("[hold] %s bought today, skip signal sell" % code)
+        if not can_sell_by_signal(
+            g.buy_date.get(code),
+            today,
+            min_hold_days=p.get("min_signal_hold_days", 1),
+            trade_days=signal_hold_days,
+        ):
+            log.info("[hold] %s min-hold, skip signal sell" % code)
             continue
         if score["buy_score"] >= p["strong_buy_threshold"] and score["sell_score"] < p["sell_threshold"]:
             log.info("[hold] %s strong buy_score %.0f sell_score %.0f" % (

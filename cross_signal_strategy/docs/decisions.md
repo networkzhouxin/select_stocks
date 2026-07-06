@@ -396,3 +396,13 @@ Evidence: Training-only sweep with unchanged signals and unchanged trade path: b
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training only; validation periods were not inspected
 Status: adopted
+
+### Add One-Week Minimum Hold For Normal Signal Sells
+
+Date: 2026-07-07
+Decision: Add `min_signal_hold_days=5` for normal signal-based sells. ATR stops remain unconditional and can sell before the minimum hold period.
+Reason: After the base-ratio improvement, trade-reason diagnostics showed ATR exits were strong while normal signal sells were noisy. On the 2019-2021 training replay with `base_ratio=0.90`, ATR exits produced +9670.9 realized PnL with P/L ratio 5.766, while normal signal sells produced only +1853.6 with P/L ratio 1.186. A one-week minimum hold is a standard anti-noise rule with clear market meaning; it filters short-term cross reversals without weakening hard risk control.
+Evidence: Training-only coarse sweep, with unchanged buy rules and ATR stop logic: no minimum hold returned +57.87%, annualized +16.49%, max drawdown 8.85%; 3 trading days returned +70.73%, annualized +19.58%, max drawdown 9.08%; 5 trading days returned +98.34%, annualized +25.72%, max drawdown 8.94%; 7 trading days returned +98.94%, annualized +25.85%, max drawdown 9.71%. The 5-day rule was adopted instead of 7 days because it has clearer one-week market meaning and similar return with lower drawdown.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`, `cross_signal_strategy/local_training_run.py`, `tests/test_cross_signal_strategy.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; validation periods were not inspected
+Status: adopted

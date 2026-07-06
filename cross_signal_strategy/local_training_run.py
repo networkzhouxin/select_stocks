@@ -58,7 +58,7 @@ def build_training_signal_adapter(loader, warmup_root=APPROVED_WARMUP_ROOT) -> L
 def run_training_replay(loader, initial_cash: float = 20000.0, warmup_root=APPROVED_WARMUP_ROOT) -> TrainingReplaySummary:
     trade_dates = get_training_trade_dates(loader)
     adapter = build_training_signal_adapter(loader, warmup_root=warmup_root)
-    planner = LocalCrossSignalOrderPlanner(adapter)
+    planner = LocalCrossSignalOrderPlanner(adapter, trade_dates=trade_dates)
     engine = LocalBacktestEngine(loader=loader, initial_cash=initial_cash)
     results = engine.run(trade_dates, planner.plan_orders)
 

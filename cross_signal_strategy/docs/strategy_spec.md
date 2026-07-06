@@ -129,6 +129,7 @@ A single weak signal may tighten risk, while multi-indicator downside resonance 
 
 - Force sell when ATR stop triggers.
 - Force sell when sell_score >= 30.
+- Normal signal sells require at least 5 trading days since entry. ATR stops are not subject to this minimum hold rule.
 - If sell_score is 18 to 29, keep the position but mark it as risk-tightened in the log.
 - Do not sell a position bought on the same trading day.
 - If a held ETF still has buy_score >= 70 and sell_score < 30, keep it to avoid selling strong trends too early.
@@ -150,7 +151,7 @@ A single weak signal may tighten risk, while multi-indicator downside resonance 
 - Initial trailing stop: 2.5 * ATR from highest close since buy.
 - Stop floor/cap: use broad current-production defaults for the first version unless code reuse proves inappropriate.
 - Profit floor: disabled in v0.1. The first version should test cross-signal sell timing before adding profit-floor protection.
-- Minimum hold: no signal-based sell on the buy day; no fixed multi-day protection for v0.1 except platform T+1 and same-day buy protection.
+- Minimum hold: normal signal-based sells require 5 trading days after entry; ATR stops remain unconditional risk control.
 
 ## Logging Requirements
 

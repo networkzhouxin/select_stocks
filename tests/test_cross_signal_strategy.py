@@ -663,6 +663,36 @@ def test_same_day_buy_blocks_signal_sell():
     assert strategy.can_sell_by_signal(date(2026, 7, 1), date(2026, 7, 2))
 
 
+def test_default_params_use_one_week_min_signal_hold():
+    params = strategy.get_default_params()
+
+    assert params["min_signal_hold_days"] == 5
+
+
+def test_signal_sell_requires_minimum_trading_day_hold():
+    trade_days = [
+        date(2026, 7, 1),
+        date(2026, 7, 2),
+        date(2026, 7, 3),
+        date(2026, 7, 6),
+        date(2026, 7, 7),
+        date(2026, 7, 8),
+    ]
+
+    assert not strategy.can_sell_by_signal(
+        date(2026, 7, 1),
+        date(2026, 7, 7),
+        min_hold_days=5,
+        trade_days=trade_days,
+    )
+    assert strategy.can_sell_by_signal(
+        date(2026, 7, 1),
+        date(2026, 7, 8),
+        min_hold_days=5,
+        trade_days=trade_days,
+    )
+
+
 def test_score_skip_reason_reports_short_data_and_nan_fields():
     short_df = strategy.pd.DataFrame({"close": [1.0], "volume": [100.0]})
     assert strategy.score_skip_reason(short_df, None, ["rsi6"], min_len=3) == "short_data:1<3"

@@ -23,6 +23,7 @@ class LocalCrossSignalOrderPlanner:
     highest_since_buy: Dict[str, float] = field(default_factory=dict)
     entry_atr: Dict[str, float] = field(default_factory=dict)
     last_scores: Dict[str, dict] = field(default_factory=dict)
+    trade_dates: List[str] | None = None
 
     def __post_init__(self) -> None:
         if self.params is None:
@@ -31,6 +32,8 @@ class LocalCrossSignalOrderPlanner:
             self.etf_pool = [code.split(".")[0] for code in strategy.get_default_etf_pool()]
         else:
             self.etf_pool = [str(code).split(".")[0] for code in self.etf_pool]
+        if self.trade_dates is not None:
+            self.trade_dates = [str(day) for day in self.trade_dates]
 
     def plan_orders(
         self,
@@ -56,7 +59,12 @@ class LocalCrossSignalOrderPlanner:
             score = score_map.get(code)
             if score is None:
                 continue
-            if not strategy.can_sell_by_signal(self.buy_dates.get(code), current_date):
+            if not strategy.can_sell_by_signal(
+                self.buy_dates.get(code),
+                current_date,
+                min_hold_days=self.params.get("min_signal_hold_days", 1),
+                trade_days=self.trade_dates,
+            ):
                 continue
             if strategy.should_force_sell(score, atr_stop_triggered=False, params=self.params):
                 orders.append({"code": code, "target_value": 0.0, "reason": "signal_sell"})

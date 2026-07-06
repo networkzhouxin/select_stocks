@@ -77,6 +77,7 @@ class CrossSignalTrainingDataLoader:
         if resolved != approved:
             raise ValueError(f"Use approved training data root only: {APPROVED_TRAINING_ROOT}")
         object.__setattr__(self, "root", resolved)
+        object.__setattr__(self, "_frame_cache", {})
 
     def _year_from_date(self, trade_date: Union[str, pd.Timestamp]) -> int:
         ts = pd.Timestamp(trade_date)
@@ -93,14 +94,20 @@ class CrossSignalTrainingDataLoader:
         return path
 
     def load_minute_frame(self, code: str, trade_date: Union[str, pd.Timestamp]) -> pd.DataFrame:
-        frame = pd.read_csv(self._csv_path("minute_1m", code, trade_date), dtype={"code": str})
-        assert_dates_in_training_window(frame)
-        return frame
+        return self._load_frame("minute_1m", code, trade_date)
 
     def load_daily_frame(self, code: str, trade_date: Union[str, pd.Timestamp]) -> pd.DataFrame:
-        frame = pd.read_csv(self._csv_path("daily", code, trade_date), dtype={"code": str})
-        assert_dates_in_training_window(frame)
-        return frame
+        return self._load_frame("daily", code, trade_date)
+
+    def _load_frame(self, kind: str, code: str, trade_date: Union[str, pd.Timestamp]) -> pd.DataFrame:
+        path = self._csv_path(kind, code, trade_date)
+        cache = getattr(self, "_frame_cache")
+        key = str(path)
+        if key not in cache:
+            frame = pd.read_csv(path, dtype={"code": str})
+            assert_dates_in_training_window(frame)
+            cache[key] = frame
+        return cache[key].copy()
 
     def get_minute_bar(
         self,

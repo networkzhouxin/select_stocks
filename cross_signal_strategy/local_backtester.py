@@ -186,17 +186,19 @@ class LocalBacktestEngine:
             for plan in planned_orders:
                 code = str(plan["code"])
                 target_value = float(plan["target_value"])
+                plan_reason = str(plan.get("reason", ""))
                 price = current_prices.get(code)
                 if price is None:
                     price = self.loader.get_minute_bar(code, current_date, "09:35")["close"]
-                orders.append(
-                    self.broker.order_target_value(
-                        code=code,
-                        target_value=target_value,
-                        price=float(price),
-                        side_time=f"{current_date} 09:35",
-                    )
+                order = self.broker.order_target_value(
+                    code=code,
+                    target_value=target_value,
+                    price=float(price),
+                    side_time=f"{current_date} 09:35",
                 )
+                if order.filled and plan_reason:
+                    order.reason = plan_reason
+                orders.append(order)
 
             marks = self._close_marks(current_date)
             owner = getattr(order_plan, "__self__", None)

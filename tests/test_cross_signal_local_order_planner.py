@@ -113,6 +113,74 @@ def test_planner_does_not_sell_position_bought_today_by_signal():
     assert orders == []
 
 
+def test_planner_blocks_signal_sell_before_minimum_trading_day_hold():
+    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    held_sell = candidate("510300", buy_score=20, sell_score=40)
+    held_sell.update({"close_below_ma20": True})
+    adapter = FakeSignalAdapter({"510300": held_sell})
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["510300"],
+        buy_dates={"510300": "2019-07-01"},
+        trade_dates=[
+            "2019-07-01",
+            "2019-07-02",
+            "2019-07-03",
+            "2019-07-04",
+            "2019-07-05",
+            "2019-07-08",
+        ],
+    )
+    broker = LocalBroker(initial_cash=12000.0)
+    broker.positions["510300"] = Position("510300", 1000, 3.0)
+
+    blocked = planner.plan_orders("2019-07-05", "2019-07-04", broker)
+    allowed = planner.plan_orders("2019-07-08", "2019-07-05", broker)
+
+    assert blocked == []
+    assert allowed[0] == {"code": "510300", "target_value": 0.0, "reason": "signal_sell"}
+
+
+def test_planner_atr_stop_ignores_minimum_signal_hold():
+    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"510300": candidate("510300", buy_score=80)})
+    params = {
+        "max_hold": 3,
+        "base_ratio": 0.90,
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "trailing_atr_mult": 2.5,
+        "stop_floor": 0.05,
+        "stop_cap": 0.15,
+        "adx_trend_threshold": 25,
+        "min_signal_hold_days": 5,
+    }
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["510300"],
+        params=params,
+        buy_dates={"510300": "2019-07-01"},
+        trade_dates=["2019-07-01", "2019-07-02"],
+    )
+    planner.highest_since_buy["510300"] = 10.0
+    planner.entry_atr["510300"] = 1.0
+    broker = LocalBroker(initial_cash=12000.0)
+    broker.positions["510300"] = Position("510300", 1000, 9.0)
+
+    orders = planner.plan_orders(
+        "2019-07-02",
+        "2019-07-01",
+        broker,
+        current_prices={"510300": 8.0},
+    )
+
+    assert orders[0] == {"code": "510300", "target_value": 0.0, "reason": "atr_stop"}
+
+
 def test_engine_runs_real_signal_planner_smoke_window_without_future_dates():
     from cross_signal_strategy.local_backtester import LocalBacktestEngine
     from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader

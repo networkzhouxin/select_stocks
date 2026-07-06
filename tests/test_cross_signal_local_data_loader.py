@@ -65,3 +65,24 @@ def test_loader_detects_out_of_window_dates_in_loaded_frame(tmp_path):
 
     with pytest.raises(ValueError, match="outside training window"):
         assert_dates_in_training_window(frame)
+
+
+def test_loader_caches_training_csv_reads_and_returns_defensive_copies(monkeypatch):
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+
+    calls = []
+    original_read_csv = pd.read_csv
+
+    def tracking_read_csv(*args, **kwargs):
+        calls.append(pathlib.Path(args[0]).name)
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", tracking_read_csv)
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+
+    first = loader.load_daily_frame("510300", "2019-01-02")
+    first.loc[0, "close"] = -999.0
+    second = loader.load_daily_frame("510300", "2019-01-02")
+
+    assert calls == ["510300.csv"]
+    assert second.loc[0, "close"] != -999.0

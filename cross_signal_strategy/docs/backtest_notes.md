@@ -782,3 +782,37 @@ Main observations:
 
 Can this result be used to change rules? yes, training-only sizing policy
 Reason: The change is broad, explainable, and affects only capital usage after already selected signals. It still requires reserved-period validation after the rule set is frozen.
+
+### Normal Signal Sell Minimum-Hold Sweep
+
+Version: cross-v0.2.6 local replay with `base_ratio=0.90` and varied normal-signal minimum hold
+Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only sell-noise structure experiment
+Initial capital: 20000
+
+Hypothesis:
+- Daily cross-signal exits may react too quickly to short-term noise.
+- A standard one-week minimum hold should block early normal `signal_sell` exits while keeping ATR stop-loss fully active.
+
+Pre-experiment trade-reason diagnostic at `base_ratio=0.90`:
+- ATR stop exits: 19 trades, win rate 68.42%, realized PnL +9670.9, P/L ratio 5.766, average hold 21.58 trading days.
+- Normal signal exits: 111 trades, win rate 38.74%, realized PnL +1853.6, P/L ratio 1.186, average hold 11.66 trading days.
+- Interpretation: ATR stop is not the weak link; normal signal exits are the noisy component.
+
+Training-only coarse sweep:
+- `min_signal_hold_days=0`: return +57.87%, annualized +16.49%, max drawdown 8.85%, win rate 43.08%, P/L ratio 1.9622, buys 132, sells 130, sell reasons `signal_sell=111`, `atr_stop=19`.
+- `min_signal_hold_days=3`: return +70.73%, annualized +19.58%, max drawdown 9.08%, win rate 44.54%, P/L ratio 2.289, buys 122, sells 119, sell reasons `signal_sell=98`, `atr_stop=21`.
+- `min_signal_hold_days=5`: return +98.34%, annualized +25.72%, max drawdown 8.94%, win rate 53.47%, P/L ratio 2.8625, buys 103, sells 101, sell reasons `signal_sell=75`, `atr_stop=26`.
+- `min_signal_hold_days=7`: return +98.94%, annualized +25.85%, max drawdown 9.71%, win rate 57.89%, P/L ratio 2.882, buys 98, sells 95, sell reasons `signal_sell=65`, `atr_stop=30`.
+
+Adopted:
+- `min_signal_hold_days=5`.
+
+Reason for choosing 5 instead of the highest-return 7:
+- 5 trading days maps to a normal one-week minimum hold and is easier to justify before validation.
+- 7 trading days adds only +0.60pp return in training but increases max drawdown by about +0.76pp versus 5 days.
+- Choosing 5 avoids fitting to the single best training number while preserving the clear sell-noise improvement.
+
+Can this result be used to change rules? yes, training-only sell structure
+Reason: The rule is broad, standard, and supported by trade-reason diagnostics. It still requires reserved-period validation after the training rule set is frozen.
