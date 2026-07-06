@@ -416,3 +416,13 @@ Evidence: Training-only sweep with unchanged signals and `min_signal_hold_days=5
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training only; validation periods were not inspected
 Status: adopted
+
+### Add Local Risk Metrics To Baseline Report
+
+Date: 2026-07-07
+Decision: Extend `BaselineReport` with daily win rate, annualized volatility, Sharpe ratio, and Sortino ratio.
+Reason: The user asked for metrics commonly shown in JoinQuant, and future experiments need a richer comparison set than return and max drawdown alone.
+Evidence: Added failing tests before implementation. Current training mainline reports: +106.17% return, +27.36% annualized return, 9.35% max drawdown, 53.47% closed-trade win rate, 53.70% daily win rate, 13.29% annualized volatility, Sharpe 1.8866, Sortino 2.9313.
+Affected files: `cross_signal_strategy/baseline_report.py`, `tests/test_cross_signal_baseline_report.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; reporting only
+Status: adopted

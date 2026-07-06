@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Dict, Iterable
 
 
@@ -27,6 +28,10 @@ class BaselineReport:
     total_return: float
     annualized_return: float
     max_drawdown: float
+    daily_win_rate: float
+    annualized_volatility: float
+    sharpe_ratio: float | None
+    sortino_ratio: float | None
     buy_count: int
     sell_count: int
     closed_trade_count: int
@@ -82,6 +87,10 @@ def build_baseline_report(
             total_return=0.0,
             annualized_return=0.0,
             max_drawdown=0.0,
+            daily_win_rate=0.0,
+            annualized_volatility=0.0,
+            sharpe_ratio=None,
+            sortino_ratio=None,
             buy_count=0,
             sell_count=0,
             closed_trade_count=0,
@@ -98,6 +107,8 @@ def build_baseline_report(
     max_drawdown = _max_drawdown(values)
     total_return = values[-1] / float(initial_cash) - 1.0
     annualized_return = (1.0 + total_return) ** (periods_per_year / len(days)) - 1.0
+    daily_returns = _daily_returns(values, float(initial_cash))
+    annualized_volatility = _annualized_volatility(daily_returns, periods_per_year)
 
     open_lots: Dict[str, _OpenLot] = {}
     stats: Dict[str, _MutableCodeStats] = {}
@@ -150,6 +161,10 @@ def build_baseline_report(
         total_return=total_return,
         annualized_return=annualized_return,
         max_drawdown=max_drawdown,
+        daily_win_rate=_daily_win_rate(daily_returns),
+        annualized_volatility=annualized_volatility,
+        sharpe_ratio=_sharpe_ratio(daily_returns, periods_per_year),
+        sortino_ratio=_sortino_ratio(daily_returns, periods_per_year),
         buy_count=buy_count,
         sell_count=sell_count,
         closed_trade_count=closed_trade_count,
@@ -171,6 +186,52 @@ def _max_drawdown(values: list[float]) -> float:
         if peak > 0:
             drawdown = max(drawdown, (peak - value) / peak)
     return drawdown
+
+
+def _daily_returns(values: list[float], initial_cash: float) -> list[float]:
+    returns = []
+    previous = float(initial_cash)
+    for value in values:
+        if previous > 0:
+            returns.append(float(value) / previous - 1.0)
+        previous = float(value)
+    return returns
+
+
+def _daily_win_rate(returns: list[float]) -> float:
+    return sum(1 for item in returns if item > 0) / len(returns) if returns else 0.0
+
+
+def _annualized_volatility(returns: list[float], periods_per_year: int) -> float:
+    std = _population_std(returns)
+    return std * math.sqrt(periods_per_year)
+
+
+def _sharpe_ratio(returns: list[float], periods_per_year: int) -> float | None:
+    std = _population_std(returns)
+    if std <= 0:
+        return None
+    mean_return = sum(returns) / len(returns)
+    return mean_return / std * math.sqrt(periods_per_year)
+
+
+def _sortino_ratio(returns: list[float], periods_per_year: int) -> float | None:
+    if not returns:
+        return None
+    downside = [min(item, 0.0) for item in returns]
+    downside_deviation = math.sqrt(sum(item ** 2 for item in downside) / len(downside))
+    if downside_deviation <= 0:
+        return None
+    mean_return = sum(returns) / len(returns)
+    return mean_return / downside_deviation * math.sqrt(periods_per_year)
+
+
+def _population_std(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    mean_value = sum(values) / len(values)
+    variance = sum((item - mean_value) ** 2 for item in values) / len(values)
+    return math.sqrt(variance)
 
 
 def _average_exposure(days: list[object]) -> float:

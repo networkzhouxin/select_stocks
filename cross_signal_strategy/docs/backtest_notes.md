@@ -837,3 +837,35 @@ Interpretation:
 
 Can this result be used to change rules? yes, training-only sizing policy
 Reason: The change is broad and affects only capital usage after signals are selected. It still requires reserved-period validation after the rule set is frozen.
+
+### Current Training Metrics With Local Risk Ratios
+
+Version: cross-signal current local training mainline
+Code file: `cross_signal_strategy/baseline_report.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only reporting checkpoint
+Initial capital: 20000
+
+Metric口径:
+- Return, annualized return, max drawdown, exposure, trade win rate, and profit/loss ratio are computed from local replay results.
+- Daily returns use each daily total value versus the previous daily total value; the first day uses initial cash as the prior value.
+- Annualized volatility, Sharpe ratio, and Sortino ratio use `244` periods per year and zero risk-free return.
+- Sharpe uses population standard deviation of daily returns.
+- Sortino uses downside deviation from zero daily return.
+- No alpha, beta, information ratio, or benchmark-relative excess metrics are reported locally until a benchmark equity curve is explicitly added.
+
+Current training result:
+- Strategy return: +106.17%.
+- Annualized return: +27.36%.
+- Max drawdown: 9.35%.
+- Closed-trade win rate: 53.47%.
+- Daily win rate: 53.70%.
+- Profit/loss ratio: 2.8530.
+- Annualized volatility: 13.29%.
+- Sharpe ratio: 1.8866.
+- Sortino ratio: 2.9313.
+- Buy/sell count: 103 / 101.
+- Average exposure: 78.56%.
+
+Can this result be used to change rules? no
+Reason: This section adds reporting metrics only. It should help compare future experiments, but it does not itself justify strategy changes.

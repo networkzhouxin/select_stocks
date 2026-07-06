@@ -3,6 +3,7 @@
 
 import pathlib
 import sys
+import math
 
 import pytest
 
@@ -41,6 +42,20 @@ def test_baseline_report_summarizes_returns_drawdown_and_closed_trades():
     assert report.closed_trade_count == 2
     assert report.win_rate == pytest.approx(0.5)
     assert report.profit_loss_ratio == pytest.approx(190.0 / 210.0)
+    daily_returns = [
+        9995.0 / 10000.0 - 1.0,
+        10095.0 / 9995.0 - 1.0,
+        10185.0 / 10095.0 - 1.0,
+        9980.0 / 10185.0 - 1.0,
+    ]
+    mean_return = sum(daily_returns) / len(daily_returns)
+    variance = sum((item - mean_return) ** 2 for item in daily_returns) / len(daily_returns)
+    downside = [min(item, 0.0) for item in daily_returns]
+    downside_variance = sum(item ** 2 for item in downside) / len(downside)
+    assert report.daily_win_rate == pytest.approx(0.5)
+    assert report.annualized_volatility == pytest.approx(math.sqrt(variance) * math.sqrt(244))
+    assert report.sharpe_ratio == pytest.approx(mean_return / math.sqrt(variance) * math.sqrt(244))
+    assert report.sortino_ratio == pytest.approx(mean_return / math.sqrt(downside_variance) * math.sqrt(244))
     assert report.average_exposure == pytest.approx((1000.0 + 1100.0 + 2000.0) / (9995.0 + 10095.0 + 10185.0 + 9980.0))
     assert report.position_count_days == {0: 1, 1: 3}
     assert report.full_position_days == 0
