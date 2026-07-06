@@ -49,12 +49,14 @@ class LocalBroker:
         commission_rate: float = 0.0003,
         min_commission: float = 5.0,
         slippage_rate: float = 0.001,
+        price_tick: float = 0.001,
         lot_size: int = LOT_SIZE,
     ) -> None:
         self.cash = float(initial_cash)
         self.commission_rate = float(commission_rate)
         self.min_commission = float(min_commission)
         self.slippage_rate = float(slippage_rate)
+        self.price_tick = float(price_tick)
         self.lot_size = int(lot_size)
         self.positions: Dict[str, Position] = {}
 
@@ -65,10 +67,15 @@ class LocalBroker:
         return int(amount // self.lot_size) * self.lot_size
 
     def _buy_exec_price(self, price: float) -> float:
-        return float(price) * (1.0 + self.slippage_rate)
+        return self._round_price(float(price) * (1.0 + self.slippage_rate))
 
     def _sell_exec_price(self, price: float) -> float:
-        return float(price) * (1.0 - self.slippage_rate)
+        return self._round_price(float(price) * (1.0 - self.slippage_rate))
+
+    def _round_price(self, price: float) -> float:
+        if self.price_tick <= 0:
+            return float(price)
+        return round(round(float(price) / self.price_tick) * self.price_tick, 3)
 
     def order_target_value(
         self,

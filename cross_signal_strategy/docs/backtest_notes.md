@@ -665,3 +665,39 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: The evidence identifies a local data defect and fixes replay alignment only. It does not support changing indicators, thresholds, windows, or execution rules.
+
+### Local Execution Price Diagnostics
+
+Version: transaction/log execution-field comparison
+Code files: `cross_signal_strategy/order_path_diagnostics.py`, `cross_signal_strategy/local_backtester.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: explain remaining local/JoinQuant return gap after order path alignment
+Initial capital: 20000
+
+Finding:
+- The JoinQuant transaction CSV parser is now available for exported transaction details, including filled amount, price, signed trade value, commission, and status.
+- The original temporary CSV attachment was no longer available when the full diagnostic was rerun, so the execution-field comparison used the latest JoinQuant log's filled-order records.
+- Order path remains fully aligned: JoinQuant filled events 262, local filled events 262, first divergence none.
+- JoinQuant and local commissions are identical in the log-based comparison: `1310.0` versus `1310.0`.
+- The remaining local/JoinQuant return gap is mainly execution-price and rolling share-quantity drift, not signal timing or commission.
+- With the prior unrounded 0.1% local slippage model, local final value was `29074.94` (+45.37%).
+- A no-slippage local diagnostic raised final value to `31030.00` (+55.15%), overshooting JoinQuant, so removing slippage is not the right alignment fix.
+- Applying ETF tick precision to local slippage execution prices raises local final value slightly to `29090.70` (+45.45%) while preserving the aligned 262-event path.
+
+Implementation:
+- `parse_joinquant_transaction_csv()` parses JoinQuant exported transaction CSV files and ignores cancelled/unfilled rows by default.
+- `parse_joinquant_filled_order_events()` now captures commission and signed trade value from JoinQuant logs.
+- `compare_order_execution_fields()` reports per-order amount, price, commission, and signed-trade-value differences after path alignment.
+- `LocalBroker` rounds slippage-adjusted execution prices to ETF tick precision (`0.001`).
+
+Verification:
+- Added failing tests before implementation for transaction CSV parsing, cancelled-row filtering, execution-field diffing, and tick-rounded local broker prices.
+- Full cross-signal test suite: `uvx --with pandas pytest tests/test_cross_signal_strategy.py tests/test_cross_signal_local_signal_adapter.py tests/test_cross_signal_local_order_planner.py tests/test_cross_signal_local_backtester.py tests/test_cross_signal_data_quality.py tests/test_cross_signal_order_path_diagnostics.py tests/test_cross_signal_local_data_loader.py tests/test_cross_signal_local_training_run.py -q` -> 88 passed.
+
+Interpretation:
+- The local replay is now suitable for signal-path debugging and approximate execution diagnostics.
+- It should not be treated as a penny-perfect substitute for JoinQuant performance, because JoinQuant's internal market-order matching price is not fully reproduced from the local 09:35 minute bar alone.
+- Further forcing local prices to match JoinQuant transaction prices would turn the local broker into a replay of JoinQuant fills rather than an independent backtest model.
+
+Can this result be used to change strategy rules? no
+Reason: This is an execution-simulator alignment and diagnostic improvement only. It does not justify changing strategy indicators, thresholds, or parameters.

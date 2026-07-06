@@ -4,6 +4,8 @@
 import pathlib
 import sys
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -72,6 +74,53 @@ def test_parse_joinquant_filled_order_events_parses_open_as_buy():
     assert [event.as_key() for event in events] == [("2019-10-18", "BUY", "513880")]
     assert events[0].amount == 5700
     assert events[0].price == 1.063
+    assert events[0].commission == 5.0
+
+
+def test_parse_joinquant_transaction_csv_reads_filled_rows(tmp_path):
+    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_transaction_csv
+
+    csv_path = tmp_path / "transaction.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "日期,委托时间,品种,标的,交易类型,下单类型,成交数量,成交价,成交额,委托数量,委托价格,平仓盈亏,手续费,状态,最后更新时间",
+                "2020-09-22,09:35:00,基金,南方中证1000ETF(512100.XSHG),买,市价单,7700股,0.954,7345.8,7700股,--,0,5,全部成交,2020-09-22 09:35:00",
+                "2020-09-23,09:35:00,基金,南方中证1000ETF(512100.XSHG),卖,市价单,7700股,0.947,-7291.9,7700股,--,-53.9,5,全部成交,2020-09-23 09:35:00",
+            ]
+        ),
+        encoding="gbk",
+    )
+
+    events = parse_joinquant_transaction_csv(csv_path)
+
+    assert [event.as_key() for event in events] == [
+        ("2020-09-22", "BUY", "512100"),
+        ("2020-09-23", "SELL", "512100"),
+    ]
+    assert events[0].amount == 7700
+    assert events[0].price == 0.954
+    assert events[0].trade_value == 7345.8
+    assert events[0].commission == 5.0
+    assert events[0].status == "全部成交"
+    assert events[1].trade_value == -7291.9
+
+
+def test_parse_joinquant_transaction_csv_ignores_cancelled_rows_by_default(tmp_path):
+    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_transaction_csv
+
+    csv_path = tmp_path / "transaction.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "日期,委托时间,品种,标的,交易类型,下单类型,成交数量,成交价,成交额,委托数量,委托价格,平仓盈亏,手续费,状态,最后更新时间",
+                "2019-12-12,09:35:00,基金,日经ETF(513880.XSHG),卖,市价单,0股,--,0,5700股,--,0,0,已撤单,2019-12-12 09:35:00",
+            ]
+        ),
+        encoding="gbk",
+    )
+
+    assert parse_joinquant_transaction_csv(csv_path) == []
 
 
 def test_extract_local_order_events_uses_filled_orders_only():
@@ -134,3 +183,22 @@ def test_find_first_order_divergence_reports_missing_or_different_event():
     assert divergence.expected.as_key() == ("2020-09-22", "BUY", "512100")
     assert divergence.actual.as_key() == ("2020-09-29", "BUY", "512100")
     assert "first mismatch at order index 1" in divergence.message
+
+
+def test_compare_order_execution_fields_reports_amount_price_fee_and_value_diffs():
+    from cross_signal_strategy.order_path_diagnostics import (
+        OrderPathEvent,
+        compare_order_execution_fields,
+    )
+
+    expected = [OrderPathEvent("2020-09-22", "BUY", "512100", amount=7700, price=0.954, trade_value=7345.8, commission=5.0)]
+    actual = [OrderPathEvent("2020-09-22", "BUY", "512100", amount=7600, price=0.954954, trade_value=7257.6504, commission=5.0)]
+
+    diffs = compare_order_execution_fields(expected, actual)
+
+    assert len(diffs) == 1
+    assert diffs[0].key == ("2020-09-22", "BUY", "512100")
+    assert diffs[0].amount_diff == -100
+    assert diffs[0].price_diff == pytest.approx(0.000954)
+    assert diffs[0].commission_diff == 0.0
+    assert diffs[0].trade_value_diff == pytest.approx(-88.1496)

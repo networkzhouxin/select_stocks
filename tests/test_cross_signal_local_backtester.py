@@ -28,12 +28,12 @@ def test_broker_buys_target_value_at_0935_with_lot_fee_and_slippage():
 
     assert order.filled
     assert order.amount_delta == 1600
-    assert order.exec_price == pytest.approx(3.06306)
+    assert order.exec_price == pytest.approx(3.063)
     assert order.commission == pytest.approx(5.0)
-    assert broker.cash == pytest.approx(15094.104)
+    assert broker.cash == pytest.approx(15094.2)
     assert broker.positions["510300"].amount == 1600
-    assert broker.positions["510300"].avg_cost == pytest.approx(3.06306)
-    assert broker.total_value({"510300": 3.060}) == pytest.approx(19990.104)
+    assert broker.positions["510300"].avg_cost == pytest.approx(3.063)
+    assert broker.total_value({"510300": 3.060}) == pytest.approx(19990.2)
 
 
 def test_broker_sells_to_zero_with_sell_slippage_and_min_commission():
@@ -49,10 +49,10 @@ def test_broker_sells_to_zero_with_sell_slippage_and_min_commission():
 
     assert order.filled
     assert order.amount_delta == -1600
-    assert order.exec_price == pytest.approx(3.05694)
+    assert order.exec_price == pytest.approx(3.057)
     assert order.commission == pytest.approx(5.0)
     assert "510300" not in broker.positions
-    assert broker.cash == pytest.approx(19980.208)
+    assert broker.cash == pytest.approx(19980.4)
 
 
 def test_broker_rejects_buy_when_cash_cannot_cover_one_lot_plus_commission():
@@ -86,11 +86,11 @@ def test_engine_runs_one_day_order_plan_with_0935_execution_and_close_mark():
     day = results[0]
     assert day.date == "2019-01-02"
     assert day.orders[0].amount_delta == 1600
-    assert day.orders[0].exec_price == pytest.approx(3.06306)
-    assert day.cash == pytest.approx(15094.104)
+    assert day.orders[0].exec_price == pytest.approx(3.063)
+    assert day.cash == pytest.approx(15094.2)
     assert day.positions["510300"].amount == 1600
     assert day.marks["510300"] == pytest.approx(3.017)
-    assert day.total_value == pytest.approx(19921.304)
+    assert day.total_value == pytest.approx(19921.4)
 
 
 def test_engine_passes_previous_training_trade_date_to_order_plan():

@@ -376,3 +376,13 @@ Evidence: Added failing tests before implementation. After the correction layer,
 Affected files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`, `tests/test_cross_signal_local_signal_adapter.py`, `tests/test_cross_signal_local_training_run.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training log and confirmed source-data correction only; no validation-period influence
 Status: adopted
+
+### Use ETF Tick Precision For Local Execution Prices
+
+Date: 2026-07-06
+Decision: Local replay should round slippage-adjusted execution prices to ETF tick precision (`0.001`) before applying cash, commission, and position updates.
+Reason: JoinQuant strategy uses `PriceRelatedSlippage(0.001)`, but ETF market orders still fill at quoted ETF price precision. The prior local broker kept sub-tick prices such as `3.06306`, which is not a tradable ETF price and caused extra cash/position drift.
+Evidence: Added failing tests before implementation and updated local broker expectations from sub-tick prices to tick-rounded prices. Full order path remains aligned with JoinQuant at 262 events versus 262 events, with no first divergence. Full cross-signal test suite passed with 88 tests. The remaining return gap is still mostly JoinQuant internal market-order matching price and rolling share-quantity drift, so no further strategy-rule change is justified.
+Affected files: `cross_signal_strategy/local_backtester.py`, `cross_signal_strategy/order_path_diagnostics.py`, `tests/test_cross_signal_local_backtester.py`, `tests/test_cross_signal_order_path_diagnostics.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training log execution diagnostics only; no validation-period influence
+Status: adopted
