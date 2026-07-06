@@ -137,7 +137,7 @@ A single weak signal may tighten risk, while multi-indicator downside resonance 
 
 - Initial capital assumption: 20,000 CNY.
 - Max holdings: 3.
-- Base capital usage: 0.75 of account value, inherited from the current production strategy as the initial test setting.
+- Base capital usage: 0.90 of account value. The original 0.75 setting was only the inherited initial test baseline; the 2019-2021 training-only exposure diagnostic showed capital utilization, not signal scarcity, was the first structural bottleneck.
 - Position sizing: equal-weight among selected holdings for v0.1. Do not add volatility-inverse sizing yet, so signal quality can be evaluated before sizing complexity.
 - Rebalance days: Tuesday and Thursday, same as the current production strategy.
 - Daily stop check: 09:35.

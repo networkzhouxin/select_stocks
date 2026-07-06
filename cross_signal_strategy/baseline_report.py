@@ -33,6 +33,9 @@ class BaselineReport:
     win_rate: float
     profit_loss_ratio: float | None
     average_exposure: float
+    position_count_days: Dict[int, int] = field(default_factory=dict)
+    full_position_days: int = 0
+    empty_days: int = 0
     by_code: Dict[str, CodeBaselineStats] = field(default_factory=dict)
 
 
@@ -85,6 +88,9 @@ def build_baseline_report(
             win_rate=0.0,
             profit_loss_ratio=None,
             average_exposure=0.0,
+            position_count_days={},
+            full_position_days=0,
+            empty_days=0,
             by_code={},
         )
 
@@ -150,6 +156,9 @@ def build_baseline_report(
         win_rate=wins / closed_trade_count if closed_trade_count else 0.0,
         profit_loss_ratio=gross_profit / gross_loss if gross_loss > 0 else None,
         average_exposure=_average_exposure(days),
+        position_count_days=_position_count_days(days),
+        full_position_days=sum(1 for day in days if len(getattr(day, "positions", {})) >= 3),
+        empty_days=sum(1 for day in days if len(getattr(day, "positions", {})) == 0),
         by_code=frozen,
     )
 
@@ -177,3 +186,11 @@ def _average_exposure(days: list[object]) -> float:
         total_exposure += exposure
         total_value_sum += total_value
     return total_exposure / total_value_sum if total_value_sum > 0 else 0.0
+
+
+def _position_count_days(days: list[object]) -> Dict[int, int]:
+    counts: Dict[int, int] = {}
+    for day in days:
+        count = len(getattr(day, "positions", {}))
+        counts[count] = counts.get(count, 0) + 1
+    return dict(sorted(counts.items()))

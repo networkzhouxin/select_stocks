@@ -66,8 +66,8 @@ def test_planner_buys_top_candidates_up_to_empty_slots():
     orders = planner.plan_orders("2019-07-01", "2019-06-28", broker)
 
     assert orders == [
-        {"code": "159915", "target_value": pytest.approx(5000.0), "reason": "buy_signal"},
-        {"code": "510300", "target_value": pytest.approx(5000.0), "reason": "buy_signal"},
+        {"code": "159915", "target_value": pytest.approx(6000.0), "reason": "buy_signal"},
+        {"code": "510300", "target_value": pytest.approx(6000.0), "reason": "buy_signal"},
     ]
 
 
@@ -235,5 +235,5 @@ def test_planner_uses_0935_position_marks_for_new_buy_target_value():
     )
 
     assert orders == [
-        {"code": "159915", "target_value": pytest.approx(5250.0), "reason": "buy_signal"},
+        {"code": "159915", "target_value": pytest.approx(6300.0), "reason": "buy_signal"},
     ]

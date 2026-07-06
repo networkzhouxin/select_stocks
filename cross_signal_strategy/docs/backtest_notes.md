@@ -748,3 +748,37 @@ Interpretation:
 
 Can this result be used to change strategy rules? no
 Reason: This is an execution-simulator alignment and diagnostic improvement only. It does not justify changing strategy indicators, thresholds, or parameters.
+
+### Base Ratio Exposure Sweep
+
+Version: cross-v0.2.6 local replay with unchanged signal rules and varied `base_ratio`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only structure experiment
+Initial capital: 20000
+
+Hypothesis:
+- The frozen baseline's average exposure of 59.74% may be a capital-utilization bottleneck rather than a candidate-generation bottleneck.
+- A broad increase in base portfolio usage should improve return without changing entry/exit signal timing, while drawdown should rise in a proportional and understandable way.
+
+Position-count diagnostic at baseline `base_ratio=0.75`:
+- Empty days: 36.
+- 1-position days: 107.
+- 2-position days: 144.
+- Full 3-position days: 443.
+- Interpretation: the strategy is full 3 holdings on 60.7% of training days, so low exposure mainly comes from the base-ratio cap.
+
+Training-only sweep:
+- `base_ratio=0.75`: return +45.45%, annualized +13.34%, max drawdown 7.67%, win rate 42.31%, P/L ratio 1.9597, average exposure 59.74%.
+- `base_ratio=0.80`: return +49.27%, annualized +14.33%, max drawdown 8.07%, win rate 43.08%, P/L ratio 1.9579, average exposure 63.69%.
+- `base_ratio=0.85`: return +53.19%, annualized +15.32%, max drawdown 8.44%, win rate 43.08%, P/L ratio 1.9567, average exposure 67.75%.
+- `base_ratio=0.90`: return +57.87%, annualized +16.49%, max drawdown 8.85%, win rate 43.08%, P/L ratio 1.9622, average exposure 71.87%.
+- `base_ratio=0.95`: return +62.30%, annualized +17.57%, max drawdown 9.20%, win rate 43.08%, P/L ratio 1.9615, average exposure 75.85%.
+
+Main observations:
+- Trade count and signal path were unchanged across the sweep, so this is a sizing-policy experiment, not an indicator or threshold fit.
+- `0.90` reaches the initial training target of roughly 16%-17% annualized while leaving a 10% cash buffer.
+- `0.95` has the best training-period return, but it is rejected for now because near-full exposure is more fragile and lacks enough out-of-sample evidence.
+
+Can this result be used to change rules? yes, training-only sizing policy
+Reason: The change is broad, explainable, and affects only capital usage after already selected signals. It still requires reserved-period validation after the rule set is frozen.

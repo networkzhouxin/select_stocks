@@ -386,3 +386,13 @@ Evidence: Added failing tests before implementation and updated local broker exp
 Affected files: `cross_signal_strategy/local_backtester.py`, `cross_signal_strategy/order_path_diagnostics.py`, `tests/test_cross_signal_local_backtester.py`, `tests/test_cross_signal_order_path_diagnostics.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training log execution diagnostics only; no validation-period influence
 Status: adopted
+
+### Raise Cross-Signal Base Ratio To 0.90
+
+Date: 2026-07-07
+Decision: Set the cross-signal default `base_ratio` to 0.90 instead of the inherited initial value 0.75.
+Reason: After local/JoinQuant order-path alignment, the frozen training baseline showed average exposure of only 59.74%. Position-count diagnostics showed this was not mostly caused by missing candidates: the strategy held the full 3 positions on 443 of 730 training days, but a 0.75 base ratio means even a full book uses only about 75% of account value. Raising base usage is a simple capital-utilization policy, not a new indicator or narrow signal threshold.
+Evidence: Training-only sweep with unchanged signals and unchanged trade path: base_ratio 0.75 returned +45.45% local replay, annualized +13.34%, max drawdown 7.67%; 0.80 returned +49.27%, annualized +14.33%, max drawdown 8.07%; 0.85 returned +53.19%, annualized +15.32%, max drawdown 8.44%; 0.90 returned +57.87%, annualized +16.49%, max drawdown 8.85%; 0.95 returned +62.30%, annualized +17.57%, max drawdown 9.20%. The 0.95 candidate was not adopted because it is near full exposure and more likely to reflect training-period aggressiveness. The adopted 0.90 keeps a 10% cash buffer while reaching the initial 16%-17% annualized target in local training replay.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; validation periods were not inspected
+Status: adopted

@@ -42,6 +42,9 @@ def test_baseline_report_summarizes_returns_drawdown_and_closed_trades():
     assert report.win_rate == pytest.approx(0.5)
     assert report.profit_loss_ratio == pytest.approx(190.0 / 210.0)
     assert report.average_exposure == pytest.approx((1000.0 + 1100.0 + 2000.0) / (9995.0 + 10095.0 + 10185.0 + 9980.0))
+    assert report.position_count_days == {0: 1, 1: 3}
+    assert report.full_position_days == 0
+    assert report.empty_days == 1
     assert report.by_code["AAA"].closed_trades == 1
     assert report.by_code["AAA"].realized_pnl == pytest.approx(190.0)
     assert report.by_code["BBB"].closed_trades == 1

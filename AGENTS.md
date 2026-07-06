@@ -12,6 +12,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **不确定就停止并询问**：当数据来源、目录含义、回测口径、策略规则、用户意图或事实依据不清楚时，必须实事求是说明不确定，并停下来问用户。不要胡编乱造、不要把推测当事实、不要为了继续推进而擅自补全关键信息。
 - **坚决防止未来函数和过拟合**：任何策略、本地回测、数据 loader 或实验脚本都必须只使用决策时点之前已经可获得的数据。日线信号默认只能使用 T-1 及以前数据；T 日 09:35 只能用于执行价格或明确声明的盘中执行过滤，不能反向参与 T-1 信号计算。2019-2021 训练回放允许使用训练期开始日前的独立只读 warm-up 日线数据计算滚动指标，但 warm-up 数据不得计入收益统计、不得用于调参、不得用于规则选择。不得使用验证期、全周期或最终汇总结果调参、选指标、改阈值或筛选规则；验证期只用于冻结规则后的检验。
 - **里程碑总结并提交**：当完成一个清晰里程碑（例如数据隔离、loader、broker、日循环、信号接入、训练期完整回放）且相关测试/校验通过后，应先总结当前版本的范围、验证结果、风险和下一步，再提交，形成可回滚的安全点。经过综合分析确认适合提交时，可以不再单独征求用户同意而自主提交，但必须向用户清楚总结提交内容、验证结果和剩余风险。不要把多个里程碑长期混在一个未提交工作区里。
+- **Cross-signal autonomous training iteration**: The user has authorized autonomous test-optimize-test cycles for `cross_signal_strategy` inside the 2019-2021 training protocol. This autonomy does not relax the rules on test-first changes, source-data immutability, no future functions, no validation-period tuning, and no overfitting. Each experiment must record the hypothesis, change, training result, interpretation, and next step; failed experiments must be documented instead of silently discarded.
 
 ## Key Files
 
