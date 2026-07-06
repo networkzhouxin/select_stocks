@@ -55,3 +55,43 @@ Validation result: Not run. Per protocol, validation periods were not inspected 
 Why it failed: The added 55-59 point entries reduced cash but mostly added short-term false reversals. A typical early example bought 159928.XSHE at buy=57 on 2019-01-02 and sold it the next day on sell_score=34, showing that lower-threshold low-position entries increased churn rather than trade quality.
 Can it be revisited? yes
 Conditions for revisiting: Only as a delayed-confirmation or volume-confirmed entry rule. Do not lower the main buy threshold or keep same-day weak-buy supplementation as a mainline rule.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.90` and `min_signal_hold_days=5`
+Experiment: Remove `510880` dividend ETF from the cross-signal ETF pool.
+Hypothesis: `510880` had the weakest realized trade contribution and its low-volatility dividend style may be unsuitable for a cross-signal reversal/trend framework.
+Training result: Return fell from +98.34% to +95.07%; annualized return fell from +25.72% to +25.02%; max drawdown worsened from 8.94% to 9.24%.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Single-ETF realized PnL did not capture portfolio path effects. Even a weak individual ETF may diversify, occupy a slot during otherwise worse opportunities, or change later cash deployment.
+Can it be revisited? yes
+Conditions for revisiting: Only as part of a broader ETF-pool design rule tested after freeze across validation periods; do not remove solely because training-period standalone PnL is negative.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.90` and `min_signal_hold_days=5`
+Experiment: Require `volume_score > 0` for new buys.
+Hypothesis: Up-cross buy signals should be more reliable when confirmed by volume expansion.
+Training result: Return fell from +98.34% to +67.36%; annualized return fell from +25.72% to +18.78%; max drawdown worsened from 8.94% to 9.69%; average exposure fell from 74.46% to 69.60%.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: A hard volume confirmation filter removed too many valid ETF signals, especially for cross-market/QDII-style ETFs where local turnover patterns are not always a clean confirmation signal.
+Can it be revisited? yes
+Conditions for revisiting: Only as a soft score or ETF-type-specific diagnostic, not as a hard universal buy gate.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.90` and `min_signal_hold_days=5`
+Experiment: Remove `159920` Hang Seng ETF from the cross-signal ETF pool.
+Hypothesis: `159920` had weak realized contribution in the 2019-2021 training replay and may drag the cross-signal pool.
+Training result: Return improved only modestly from +98.34% to +99.70%; annualized return improved from +25.72% to +26.01%; max drawdown improved from 8.94% to 8.50%.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it was not adopted: The improvement is small and highly likely to be period/market-regime-specific. Removing a broad cross-market ETF because Hong Kong was weak in 2019-2021 risks overfitting the pool to the training window.
+Can it be revisited? yes
+Conditions for revisiting: Only if reserved validation periods also show persistent weakness or if a broader ETF-pool construction rule justifies excluding it.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.90` and `min_signal_hold_days=5`
+Experiment: Add profit-segmented ATR tightening: 2.0x ATR after 5% profit and 1.5x ATR after 15% profit, with lower stop floors.
+Hypothesis: Once a position has a profit cushion, a tighter trailing stop may preserve gains without hurting entry quality.
+Training result: Return fell from +98.34% to +89.59%; annualized return fell from +25.72% to +23.84%; max drawdown was 9.04%; ATR exits rose from 26 to 33.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The current cross-signal framework benefits from giving profitable ETF moves room to breathe. Profit tightening clipped some larger trends and did not materially reduce drawdown.
+Can it be revisited? yes
+Conditions for revisiting: Only with regime-specific logic or after validation shows profit giveback is a repeated out-of-sample weakness.

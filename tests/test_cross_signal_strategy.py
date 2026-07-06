@@ -445,7 +445,7 @@ def test_default_params_evaluate_signals_every_trading_weekday():
 def test_default_params_use_training_selected_broad_base_ratio():
     params = strategy.get_default_params()
 
-    assert params["base_ratio"] == 0.90
+    assert params["base_ratio"] == 0.95
 
 
 def test_buy_candidates_exclude_force_sell_conflicts():

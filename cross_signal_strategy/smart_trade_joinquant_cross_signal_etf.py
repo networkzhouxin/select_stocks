@@ -32,7 +32,7 @@ def get_default_params():
         "lookback": 120,
         "rebalance_weekdays": [0, 1, 2, 3, 4],
         "max_hold": 3,
-        "base_ratio": 0.90,
+        "base_ratio": 0.95,
         "min_signal_hold_days": 5,
         "buy_threshold": 60,
         "strong_buy_threshold": 70,

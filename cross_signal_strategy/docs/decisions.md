@@ -406,3 +406,13 @@ Evidence: Training-only coarse sweep, with unchanged buy rules and ATR stop logi
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`, `cross_signal_strategy/local_training_run.py`, `tests/test_cross_signal_strategy.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training only; validation periods were not inspected
 Status: adopted
+
+### Raise Cross-Signal Base Ratio To 0.95 After Sell-Noise Filter
+
+Date: 2026-07-07
+Decision: After adopting the one-week normal-signal minimum hold, raise the cross-signal default `base_ratio` from 0.90 to 0.95.
+Reason: The sell-noise filter materially improved trade quality and lowered churn, so the sizing policy was rechecked at coarse, market-meaningful levels only. `0.95` is a common maximum-capital-use policy with a 5% cash buffer; no fine-grained ratios above 0.95 were tested.
+Evidence: Training-only sweep with unchanged signals and `min_signal_hold_days=5`: `base_ratio=0.85` returned +90.13%, annualized +23.96%, max drawdown 8.58%; `base_ratio=0.90` returned +98.34%, annualized +25.72%, max drawdown 8.94%; `base_ratio=0.95` returned +106.17%, annualized +27.36%, max drawdown 9.35%. Trade count and signal path were unchanged at 103 buys and 101 sells.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training only; validation periods were not inspected
+Status: adopted

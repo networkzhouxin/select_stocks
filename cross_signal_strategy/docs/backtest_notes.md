@@ -816,3 +816,24 @@ Reason for choosing 5 instead of the highest-return 7:
 
 Can this result be used to change rules? yes, training-only sell structure
 Reason: The rule is broad, standard, and supported by trade-reason diagnostics. It still requires reserved-period validation after the training rule set is frozen.
+
+### Base Ratio Recheck After Sell-Noise Filter
+
+Version: cross-signal local replay after `min_signal_hold_days=5`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only sizing-policy recheck
+Initial capital: 20000
+
+Training-only sweep:
+- `base_ratio=0.85`: return +90.13%, annualized +23.96%, max drawdown 8.58%, win rate 53.47%, P/L ratio 2.8640, average exposure 70.32%.
+- `base_ratio=0.90`: return +98.34%, annualized +25.72%, max drawdown 8.94%, win rate 53.47%, P/L ratio 2.8625, average exposure 74.46%.
+- `base_ratio=0.95`: return +106.17%, annualized +27.36%, max drawdown 9.35%, win rate 53.47%, P/L ratio 2.8530, average exposure 78.56%.
+
+Interpretation:
+- The signal path was unchanged across the sweep: 103 buys and 101 sells.
+- `0.95` is adopted as a broad practical cap with a 5% cash buffer.
+- No fine-grained ratios above `0.95` were tested, to avoid fitting the training window.
+
+Can this result be used to change rules? yes, training-only sizing policy
+Reason: The change is broad and affects only capital usage after signals are selected. It still requires reserved-period validation after the rule set is frozen.
