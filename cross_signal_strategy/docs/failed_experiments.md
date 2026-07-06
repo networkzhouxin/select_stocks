@@ -145,3 +145,43 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: Current signal sells do not materially occur in the targeted state. When sells happen, positions usually lack the profitable/strong-buy condition, or the existing sell rules already handle the case.
 Can it be revisited? yes
 Conditions for revisiting: Only after sell-score components or ATR logic change materially.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Component-gate diagnostics for KDJ, location score, volume/trend confirmation, and KDJ+high-location rejection.
+Hypothesis: Entry attribution suggested KDJ-tagged trades and high-location-score trades were weaker, so filtering them might reduce noisy entries.
+Training result: Baseline returned +106.17% with 9.35% max drawdown and Sharpe 1.8866. Rejecting KDJ-up candidates collapsed return to +3.65% with 14.24% max drawdown. Rejecting location_score >= 15 returned +41.72% with 12.64% max drawdown. Requiring volume confirmation or strong trend returned +81.21% with 10.71% max drawdown. Rejecting both KDJ and high-location candidates returned -9.74%.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Single-label trade attribution was misleading because indicators affect the entire portfolio path. KDJ is a load-bearing trigger even though standalone KDJ-tagged closed trades looked mediocre.
+Can it be revisited? yes
+Conditions for revisiting: Only as a reweighting experiment after signal scoring is redesigned; do not hard-filter KDJ or location-score candidates in the current framework.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Use volume as a soft preference: volume-first sorting, +5 volume boost, and +10 volume boost.
+Hypothesis: Volume-confirmed entries had better standalone trade quality, so soft preference might improve ranking without the damage caused by a hard volume gate.
+Training result: Baseline returned +106.17% with 9.35% max drawdown and Sharpe 1.8866. Volume-first returned +100.61% with 8.84% max drawdown and Sharpe 1.8702. +5 volume boost returned +72.71% with 12.19% max drawdown. +10 volume boost returned +91.32% with 11.92% max drawdown.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Volume confirmation is correlated with some good trades but is not a stable primary selection signal across ETF types. Boosting it changes path quality for the worse.
+Can it be revisited? yes
+Conditions for revisiting: Only as an ETF-type-specific diagnostic or after QDII/cross-market volume behavior is modeled separately.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Cap new buys by ADX at 35, 30, 25, and 20 to avoid chasing overly mature trends.
+Hypothesis: Entry attribution showed very high ADX entries had lower win rate and P/L ratio; filtering extreme trend strength might reduce chase risk.
+Training result: Baseline returned +106.17% with 9.35% max drawdown and Sharpe 1.8866. ADX<=35 returned +80.04%; ADX<=30 returned +83.32%; ADX<=25 returned +80.22%; ADX<=20 returned +79.57%. Drawdowns improved, but returns and Sharpe were lower than baseline.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Strong ADX can mark mature trends, but it also captures some high-payoff momentum continuation. A hard ADX cap sacrifices too much upside.
+Can it be revisited? yes
+Conditions for revisiting: Only as a position-sizing modifier or if validation later shows high-ADX chase risk is a repeated weakness.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Coarse overheat RSI sweep at 75, 80, 85, 90, and 95.
+Hypothesis: A lower RSI overheat threshold might prevent chase entries.
+Training result: RSI 75 returned +100.43%; RSI 80 returned +106.88% with 9.04% max drawdown and Sharpe 1.8962; RSI 85/90/95 produced the current baseline path at +106.17%, 9.35% max drawdown, Sharpe 1.8866.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it was not adopted: RSI 80 is only marginally better than 85 in the training window (+0.71pp return). This is too small for a pure threshold change and risks parameter overfitting.
+Can it be revisited? yes
+Conditions for revisiting: Only if reserved validation shows repeated high-RSI chase entries, or if a broader anti-overheat rule is adopted for market-structure reasons.
