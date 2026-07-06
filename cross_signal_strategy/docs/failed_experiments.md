@@ -95,3 +95,23 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: The current cross-signal framework benefits from giving profitable ETF moves room to breathe. Profit tightening clipped some larger trends and did not materially reduce drawdown.
 Can it be revisited? yes
 Conditions for revisiting: Only with regime-specific logic or after validation shows profit giveback is a repeated out-of-sample weakness.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Coarse buy-threshold sweep at 55, 60, 65, and 70.
+Hypothesis: After the sell-noise filter, the buy gate may need to be looser or stricter than the original 60-point threshold.
+Training result: `55` returned +76.40% with 11.27% max drawdown; `60` returned +106.17% with 9.35% max drawdown; `65` returned +62.65% with 9.50% max drawdown; `70` returned +83.80% with 12.77% max drawdown.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The current 60-point threshold is already the best broad gate in training. Lowering it adds noisy entries; raising it misses too many valid reversal/trend entries. No parameter change is justified.
+Can it be revisited? yes
+Conditions for revisiting: Only after a structural indicator change alters the meaning of `buy_score`; do not fine-tune thresholds around 60.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Coarse sell-threshold sweep at 25, 30, 35, and 40.
+Hypothesis: After adding the one-week minimum hold, normal signal sells may need a different force-sell threshold.
+Training result: `25` and `30` produced identical paths: +106.17% return, 9.35% max drawdown, 103 buys, 101 sells. `35` returned +85.31% with 7.64% max drawdown. `40` returned +74.35% with 8.99% max drawdown.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The active sell-score clusters already make 25 and 30 equivalent, while higher thresholds delay exits too much and materially reduce return. No threshold change is justified.
+Can it be revisited? yes
+Conditions for revisiting: Only if sell-score components change; do not fine-tune the current 30 threshold.
