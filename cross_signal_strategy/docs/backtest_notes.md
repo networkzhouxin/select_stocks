@@ -38,6 +38,53 @@ Reason:
 
 ## Results
 
+### Frozen Training Baseline After JoinQuant Path Alignment
+
+Version: cross-v0.2.6 local replay baseline after data/path/execution alignment
+Code files: `cross_signal_strategy/baseline_report.py`, `cross_signal_strategy/local_training_run.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: frozen training baseline for future structure experiments
+Initial capital: 20000
+
+Strategy return: +45.45% local replay / +50.07% JoinQuant reference
+Annualized return: +13.34% local replay
+Excess return: not calculated locally
+Benchmark return: not calculated locally
+Alpha: not calculated locally
+Beta: not calculated locally
+Sharpe: not calculated locally
+Sortino: not calculated locally
+Win rate: 42.31% by closed local trades
+Daily win rate: not calculated locally
+Profit/loss ratio: 1.9597
+Max drawdown: 7.67%
+Max drawdown period: not calculated locally
+Trade count: 262 filled local orders; 132 buys, 130 sells; 130 closed trades
+Average holding days: not calculated locally
+Average exposure: 59.74%
+
+ETF realized PnL by closed local trades:
+- Negative contributors: `510880` -466.5, `510300` -377.9, `159920` -199.8, `513880` -31.3.
+- Positive contributors: `159915` +4106.0, `513050` +2038.5, `518880` +1020.6, `513100` +899.9, `513500` +800.3, `159928` +481.5, `512100` +481.1, `159985` +302.3.
+
+Main observations:
+- The low-ish win rate is offset by a nearly 2:1 profit/loss ratio, so the strategy is not failing because every trade is random noise.
+- Average exposure is only 59.74%, which means capital utilization is a major candidate for future improvement.
+- Drag is concentrated in a small group of ETFs, especially `510880`, `510300`, and `159920`, while the largest positive contribution came from `159915`.
+- The strongest contributors include cross-market/cross-asset ETFs (`513050`, `518880`, `513100`, `513500`), supporting the value of diversified ETF exposure even in this cross-signal framework.
+
+Bad entries observed:
+- Not yet classified; next diagnostic should inspect worst closed trades and whether they were false reversal entries, late entries, or stop/exit problems.
+
+Sell timing observations:
+- Not yet classified; next diagnostic should separate signal sells, ATR stops, and risk-tighten cases if possible.
+
+Abnormal logs/errors:
+- None in the aligned local replay. Known local-vs-JoinQuant performance gap remains attributable mainly to market-order execution-price modeling, not signal path.
+
+Can this result be used to change rules? yes, as a training baseline only
+Reason: This freezes the aligned 2019-2021 training baseline for future experiments. It can guide training-period structure diagnostics, but validation periods must remain unseen until rules are frozen.
+
 ### Local Replay Baseline: cross-v0.2.6 Mechanics Draft
 
 Version: local replay foundation, using `cross-v0.2.6` scoring rules
