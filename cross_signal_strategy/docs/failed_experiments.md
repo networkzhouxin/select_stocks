@@ -115,3 +115,33 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: The active sell-score clusters already make 25 and 30 equivalent, while higher thresholds delay exits too much and materially reduce return. No threshold change is justified.
 Can it be revisited? yes
 Conditions for revisiting: Only if sell-score components change; do not fine-tune the current 30 threshold.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Coarse max-hold sweep at 2, 3, 4, and 5 holdings.
+Hypothesis: Higher return might come from either more concentrated winners or broader diversification.
+Training result: `max_hold=2` returned +90.22% with 10.08% max drawdown and Sharpe 1.4942; `max_hold=3` returned +106.17% with 9.35% max drawdown and Sharpe 1.8866; `max_hold=4` returned +66.02% with 8.36% max drawdown and Sharpe 1.5005; `max_hold=5` returned +50.62% with 8.69% max drawdown and Sharpe 1.3131.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The current 3-holding structure is already the best broad concentration/diversification balance in training. Two holdings concentrate risk too much; four or five holdings dilute signal quality and admit weaker candidates.
+Can it be revisited? yes
+Conditions for revisiting: Only after ETF pool or signal scoring changes materially; do not fine-tune holding count around the current framework.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Candidate sorting variants: reversal-first, location-first, risk-adjusted buy-minus-sell, and reversal-plus-location.
+Hypothesis: The strategy might improve by prioritizing purer reversal or lower-location candidates instead of total buy score.
+Training result: Baseline, reversal-first, risk-adjusted, and reversal-plus-location produced identical paths: +106.17% return, 9.35% max drawdown, Sharpe 1.8866. Location-first returned +102.08% with 8.86% max drawdown and Sharpe 1.8724.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Candidate conflicts are rare under the current filters, so most alternate sorting rules do not change the path. Emphasizing location first slightly worsens return without a meaningful risk-adjusted improvement.
+Can it be revisited? yes
+Conditions for revisiting: Only if buy filters are loosened or new indicators create more competing candidates.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Profit-position signal-sell protection: skip normal signal sell when profitable and still strong-buy, when profitable and buy-score remains above threshold, or when profitable without severe structure break.
+Hypothesis: Letting profitable positions run longer might improve return while ATR stops keep risk bounded.
+Training result: All three variants produced the same path as baseline: +106.17% return, 9.35% max drawdown, Sharpe 1.8866, 103 buys and 101 sells.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Current signal sells do not materially occur in the targeted state. When sells happen, positions usually lack the profitable/strong-buy condition, or the existing sell rules already handle the case.
+Can it be revisited? yes
+Conditions for revisiting: Only after sell-score components or ATR logic change materially.
