@@ -14,6 +14,9 @@ import builtins as _builtins
 from jqdata import *
 
 
+STRATEGY_VERSION = "cross-v0.3.0"
+
+
 try:
     log
 except NameError:
@@ -103,9 +106,9 @@ def format_self_check():
         "kdj_j_cross_up": False,
     })
     return (
-        "[cross-v0.2.6] positional-diff-cross enabled | "
+        "[%s] positional-diff-cross enabled | "
         "diff_cross_self_check=%s expected=True | self_rev=%.0f" % (
-            diff_cross_ok, score["reversal_score"])
+            STRATEGY_VERSION, diff_cross_ok, score["reversal_score"])
     )
 
 
@@ -188,8 +191,11 @@ def initialize(context):
     run_daily(do_trading, time="09:35")
     run_daily(after_close, time="15:30")
 
-    log.info("[cross-v0.1] initialized: max_hold=%d base_ratio=%.2f" % (
-        g.params["max_hold"], g.params["base_ratio"]))
+    log.info("[%s] initialized: max_hold=%d base_ratio=%.2f min_signal_hold=%d" % (
+        STRATEGY_VERSION,
+        g.params["max_hold"],
+        g.params["base_ratio"],
+        g.params["min_signal_hold_days"]))
     log.info(format_self_check())
     log.info("[indicator params] %s" % format_indicator_params(g.params))
 

@@ -848,7 +848,7 @@ def test_format_cross_flags_shows_rsi_and_kdj_detail():
 def test_format_self_check_reports_version_and_diff_cross_status():
     text = strategy.format_self_check()
 
-    assert "[cross-v0.2.6] positional-diff-cross enabled" in text
+    assert "[cross-v0.3.0] positional-diff-cross enabled" in text
     assert "diff_cross_self_check=True expected=True" in text
     assert "self_rev=12" in text
 
