@@ -204,6 +204,40 @@ def probe_513880_status(context):
     except Exception as exc:
         log.info("[probe-513880-1m-error] dt=%s code=%s error=%s", context.current_dt, code, exc)
 
+    if context.current_dt.time() == datetime.time(14, 50):
+        probe_513880_day_volume(context)
+
+
+def probe_513880_day_volume(context):
+    code = "513880.XSHG"
+    try:
+        bars = get_price(
+            code,
+            start_date="2019-12-12 09:30:00",
+            end_date="2019-12-12 15:00:00",
+            frequency="1m",
+            fields=["open", "close", "high", "low", "volume", "money"],
+            skip_paused=False,
+        )
+        total_minutes = len(bars)
+        volume = bars["volume"]
+        money = bars["money"]
+        nonzero = bars[volume > 0]
+        first_nonzero = nonzero.index[0] if len(nonzero) else None
+        last_nonzero = nonzero.index[-1] if len(nonzero) else None
+        log.info(
+            "[probe-513880-day-volume] code=%s total_minutes=%s nonzero_minutes=%s total_volume=%s total_money=%s first_nonzero=%s last_nonzero=%s",
+            code,
+            total_minutes,
+            len(nonzero),
+            float(volume.sum()),
+            float(money.sum()),
+            first_nonzero,
+            last_nonzero,
+        )
+    except Exception as exc:
+        log.info("[probe-513880-day-volume-error] code=%s error=%s", code, exc)
+
 
 def initialize(context):
     set_benchmark("000300.XSHG")
