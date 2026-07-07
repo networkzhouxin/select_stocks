@@ -195,3 +195,23 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: The current signal sells that actually execute already satisfy the harder structure conditions. Soft confirmation terms are not changing the realized training path.
 Can it be revisited? yes
 Conditions for revisiting: Only after sell-score components change or after validation reveals soft-confirmation exits not visible in training.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Conditional volume confirmation for MA20-repair / non-BOLL-low entries.
+Hypothesis: 2021Q3 diagnostics showed no-volume-confirmation entries were especially weak, while global volume confirmation was too strict. A narrower rule might filter Q3 noise without killing full-period winners.
+Training result: Baseline returned +106.17%, max drawdown 9.35%, Sharpe 1.8866. Conditional volume variants all returned +84.03%, max drawdown 8.24%, Sharpe 1.6476, with 106 buys and 104 sells.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The Q3-specific volume weakness does not generalize cleanly across the full training window. Even conditional volume gates remove too many valid recovery entries.
+Can it be revisited? yes
+Conditions for revisiting: Only with a broader regime detector that independently identifies the weak environment before applying volume confirmation.
+
+Date: 2026-07-07
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Market-state guards using `510300` T-1 state: block A-share buys during downside continuation, block A-share buys below MA60, and halve all new-buy targets below MA60.
+Hypothesis: 2021Q3 weakness may be reduced by avoiding A-share exposure or reducing risk when the broad A-share market is weak.
+Training result: Baseline returned +106.17%, max drawdown 9.35%, Sharpe 1.8866. Blocking A-share buys during downside continuation returned +101.56%, max drawdown 9.17%, Sharpe 1.8526. Blocking A-share buys below MA60 returned +86.36%, max drawdown 15.31%, Sharpe 1.6573. Halving all new-buy targets below MA60 returned +83.19%, max drawdown 8.12%, Sharpe 1.7725.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Simple market-state guards cut too many profitable opportunities. The cross-signal framework already uses cross-market and cross-asset switching; broad market filters reduce upside more than they reduce risk.
+Can it be revisited? yes
+Conditions for revisiting: Only with a more nuanced regime rule that preserves cross-market opportunity and is validated after the training rule set is frozen.

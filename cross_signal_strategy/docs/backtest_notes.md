@@ -869,3 +869,34 @@ Current training result:
 
 Can this result be used to change rules? no
 Reason: This section adds reporting metrics only. It should help compare future experiments, but it does not itself justify strategy changes.
+
+### Training Segment Diagnostics
+
+Version: cross-signal current local training mainline
+Code file: diagnostic only
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only robustness diagnosis
+Initial capital: 20000
+
+Annual segments:
+- 2019: +38.46%, max drawdown 4.61%, daily win rate 54.51%, Sharpe 2.664, Sortino 4.614.
+- 2020: +47.40%, max drawdown 7.70%, daily win rate 54.32%, Sharpe 2.546, Sortino 3.940.
+- 2021: +1.02%, max drawdown 9.35%, daily win rate 52.26%, Sharpe 0.148, Sortino 0.204.
+
+Quarter segments:
+- Best quarters: 2019Q1 +20.70%, 2020Q2 +16.50%, 2020Q3 +10.57%, 2020Q4 +9.45%.
+- Weak quarters: 2021Q1 -0.03%, 2021Q3 -6.04%.
+- Main weakness is concentrated in 2021Q3, not spread evenly across all years.
+
+2021Q3 closed-trade diagnosis:
+- 13 closed trades, win rate 38.46%, realized PnL -1579.5, P/L ratio 0.304.
+- Main negative contributors by sell date: `518880` -659.4, `510300` -492.5, `513500` -386.4, `159915` -278.8.
+- Trades bought during 2021Q3: 12 closed trades, win rate 33.33%, realized PnL -1445.1.
+- In Q3 buys, no-volume-confirmation entries were especially weak: 5 trades, all losing, realized PnL -2000.9. However, global and conditional volume filters failed in full-period training, so this observation alone does not justify a rule.
+
+Interpretation:
+- Training performance is not purely one lucky month, but 2021 is a clear weak regime.
+- Simple full-period filters aimed at the 2021Q3 weakness must be rejected unless they improve overall training robustness without sacrificing too much upside.
+
+Can this result be used to change rules? diagnostic only
+Reason: It identifies the weak training regime and informs experiments, but does not itself justify a strategy rule.
