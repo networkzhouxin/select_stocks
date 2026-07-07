@@ -204,11 +204,11 @@ def probe_513880_status(context):
     except Exception as exc:
         log.info("[probe-513880-1m-error] dt=%s code=%s error=%s", context.current_dt, code, exc)
 
-    if context.current_dt.time() == datetime.time(14, 50):
-        probe_513880_day_volume(context)
-
 
 def probe_513880_day_volume(context):
+    if context.current_dt.date() != datetime.date(2019, 12, 12):
+        return
+
     code = "513880.XSHG"
     try:
         bars = get_price(
@@ -262,6 +262,7 @@ def initialize(context):
     run_daily(probe_513880_status, time="09:35")
     run_daily(probe_513880_status, time="10:35")
     run_daily(probe_513880_status, time="14:50")
+    run_daily(probe_513880_day_volume, time="15:30")
     run_daily(after_close, time="15:30")
 
     log.info("[%s] initialized: max_hold=%d base_ratio=%.2f min_signal_hold=%d" % (
