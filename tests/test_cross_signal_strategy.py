@@ -338,6 +338,108 @@ def test_check_atr_stops_ignores_archived_risk_tightened_state():
             strategy.g = old_g
 
 
+def test_sell_state_is_kept_when_order_does_not_change_position():
+    class Position(object):
+        total_amount = 7900
+
+    class Portfolio(object):
+        positions = {"513880.XSHG": Position()}
+
+    class Context(object):
+        portfolio = Portfolio()
+
+    old_g = strategy.g if hasattr(strategy, "g") else None
+    strategy.g = types.SimpleNamespace(
+        highest_since_buy={"513880.XSHG": 1.092},
+        entry_atr={"513880.XSHG": 0.0071},
+        buy_date={"513880.XSHG": date(2019, 10, 18)},
+        last_scores={"513880.XSHG": {"sell_score": 45}},
+    )
+    try:
+        strategy.sync_sell_state_after_order("513880.XSHG", Context())
+
+        assert strategy.g.highest_since_buy["513880.XSHG"] == 1.092
+        assert strategy.g.entry_atr["513880.XSHG"] == 0.0071
+        assert strategy.g.buy_date["513880.XSHG"] == date(2019, 10, 18)
+        assert strategy.g.last_scores["513880.XSHG"] == {"sell_score": 45}
+    finally:
+        if old_g is None:
+            del strategy.g
+        else:
+            strategy.g = old_g
+
+
+def test_sell_state_is_cleared_only_after_position_is_flat():
+    class Portfolio(object):
+        positions = {}
+
+    class Context(object):
+        portfolio = Portfolio()
+
+    old_g = strategy.g if hasattr(strategy, "g") else None
+    strategy.g = types.SimpleNamespace(
+        highest_since_buy={"513880.XSHG": 1.092},
+        entry_atr={"513880.XSHG": 0.0071},
+        buy_date={"513880.XSHG": date(2019, 10, 18)},
+        last_scores={"513880.XSHG": {"sell_score": 45}},
+    )
+    try:
+        strategy.sync_sell_state_after_order("513880.XSHG", Context())
+
+        assert "513880.XSHG" not in strategy.g.highest_since_buy
+        assert "513880.XSHG" not in strategy.g.entry_atr
+        assert "513880.XSHG" not in strategy.g.buy_date
+        assert "513880.XSHG" not in strategy.g.last_scores
+    finally:
+        if old_g is None:
+            del strategy.g
+        else:
+            strategy.g = old_g
+
+
+def test_buy_state_is_written_only_after_position_exists():
+    class EmptyPortfolio(object):
+        positions = {}
+
+    class EmptyContext(object):
+        portfolio = EmptyPortfolio()
+
+    class Position(object):
+        total_amount = 100
+
+    class FilledPortfolio(object):
+        positions = {"513880.XSHG": Position()}
+
+    class FilledContext(object):
+        portfolio = FilledPortfolio()
+
+    old_g = strategy.g if hasattr(strategy, "g") else None
+    strategy.g = types.SimpleNamespace(
+        highest_since_buy={},
+        entry_atr={},
+        buy_date={},
+    )
+    try:
+        strategy.sync_buy_state_after_order(
+            "513880.XSHG", EmptyContext(), date(2019, 10, 18), 1.063, 0.0071)
+
+        assert strategy.g.highest_since_buy == {}
+        assert strategy.g.entry_atr == {}
+        assert strategy.g.buy_date == {}
+
+        strategy.sync_buy_state_after_order(
+            "513880.XSHG", FilledContext(), date(2019, 10, 18), 1.063, 0.0071)
+
+        assert strategy.g.highest_since_buy["513880.XSHG"] == 1.063
+        assert strategy.g.entry_atr["513880.XSHG"] == 0.0071
+        assert strategy.g.buy_date["513880.XSHG"] == date(2019, 10, 18)
+    finally:
+        if old_g is None:
+            del strategy.g
+        else:
+            strategy.g = old_g
+
+
 def test_buy_score_ignores_mixed_rsi_group_direction():
     snapshot = {
         "rsi6_cross_rsi24_up": True,
@@ -872,6 +974,9 @@ if __name__ == "__main__":
         test_atr_stop_sells_without_signal_confirmation,
         test_risk_warning_does_not_change_mainline_stop_price,
         test_check_atr_stops_ignores_archived_risk_tightened_state,
+        test_sell_state_is_kept_when_order_does_not_change_position,
+        test_sell_state_is_cleared_only_after_position_is_flat,
+        test_buy_state_is_written_only_after_position_exists,
         test_buy_score_ignores_mixed_rsi_group_direction,
         test_sell_score_ignores_mixed_rsi_group_direction,
         test_buy_score_does_not_add_widening_positive_confirmations_without_cross,

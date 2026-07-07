@@ -688,6 +688,28 @@ def current_hold_codes(context):
     ]
 
 
+def has_position(context, code):
+    pos = context.portfolio.positions.get(code)
+    return pos is not None and getattr(pos, "total_amount", 0) > 0
+
+
+def sync_sell_state_after_order(code, context):
+    if has_position(context, code):
+        return
+    g.highest_since_buy.pop(code, None)
+    g.entry_atr.pop(code, None)
+    g.buy_date.pop(code, None)
+    g.last_scores.pop(code, None)
+
+
+def sync_buy_state_after_order(code, context, today, price, atr):
+    if not has_position(context, code):
+        return
+    g.buy_date[code] = today
+    g.highest_since_buy[code] = price
+    g.entry_atr[code] = atr
+
+
 def is_paused(current_data, code):
     try:
         return current_data[code].paused
@@ -706,10 +728,7 @@ def execute_sell(code, context, reason):
     pos = context.portfolio.positions[code]
     log.info("[sell] %s reason=%s amount=%s" % (code, reason, pos.total_amount))
     order_target(code, 0)
-    g.highest_since_buy.pop(code, None)
-    g.entry_atr.pop(code, None)
-    g.buy_date.pop(code, None)
-    g.last_scores.pop(code, None)
+    sync_sell_state_after_order(code, context)
 
 
 def check_atr_stops(context, current_data):
@@ -873,9 +892,7 @@ def do_trading(context):
             code, score["buy_score"], score["reversal_score"], score["location_score"],
             score["trend_score"], score["volume_score"], target_value))
         order_target_value(code, target_value)
-        g.buy_date[code] = today
-        g.highest_since_buy[code] = price
-        g.entry_atr[code] = score["atr"]
+        sync_buy_state_after_order(code, context, today, price, score["atr"])
         bought += 1
 
 

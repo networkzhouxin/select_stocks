@@ -436,3 +436,13 @@ Evidence: Added failing-style tests for score snapshot capture and closed-trade 
 Affected files: `cross_signal_strategy/trade_diagnostics.py`, `tests/test_cross_signal_trade_diagnostics.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
 Allowed validation influence: none; reporting only
 Status: adopted
+
+### Sync JoinQuant State Only After Actual Position Change
+
+Date: 2026-07-08
+Decision: In the JoinQuant cross-signal strategy, update buy/sell internal state only after the portfolio position actually reflects the order result. A sell order keeps ATR, buy date, and last-score state if the position still exists; a buy order writes ATR and buy-date state only if a position exists after the order call.
+Reason: The 2019-2021 JoinQuant transaction export contained one canceled order: `513880.XSHG` on 2019-12-12. The strategy emitted a sell signal, but JoinQuant reported zero current volume and canceled the market sell. The old code cleared `highest_since_buy`, `entry_atr`, `buy_date`, and `last_scores` immediately after `order_target(code, 0)`, treating a submitted order as a completed fill. That is incorrect under JoinQuant's actual matching behavior and could weaken later ATR risk control for still-held positions.
+Evidence: Added failing tests before implementation for three cases: canceled sell must keep state, completed sell must clear state, and unfilled buy must not create buy state. The new tests pass, `python tests/test_cross_signal_strategy.py` passes, and `py_compile` passes for the strategy and test file. `pytest`-style related tests could not run in this environment because `pytest` is not installed.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: training-period JoinQuant order/transaction diagnostics only; no validation-period influence
+Status: adopted
