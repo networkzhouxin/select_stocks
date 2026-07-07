@@ -206,3 +206,19 @@ def test_local_signal_adapter_can_align_ex_dividend_signal_close():
     assert reason is None
     assert score["signal_date"] == "2020-01-16"
     assert score["close"] == pytest.approx(2.803, abs=0.001)
+
+
+def test_signal_score_cache_returns_isolated_copies():
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
+
+    first, first_reason = adapter.score("510300", "2019-07-01", return_reason=True)
+    first["buy_score"] = -999
+    second, second_reason = adapter.score("510300", "2019-07-01", return_reason=True)
+
+    assert first_reason is None
+    assert second_reason is None
+    assert second["buy_score"] != -999
+    assert ("510300", "2019-07-01") in adapter._score_cache

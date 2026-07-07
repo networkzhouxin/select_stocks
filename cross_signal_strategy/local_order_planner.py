@@ -89,10 +89,20 @@ class LocalCrossSignalOrderPlanner:
             if bought >= slots:
                 break
             code = score["code"]
-            orders.append({"code": code, "target_value": target_value, "reason": "buy_signal"})
+            orders.append({
+                "code": code,
+                "target_value": target_value * self._buy_position_scale(score),
+                "reason": "buy_signal",
+            })
             bought += 1
 
         return orders
+
+    def _buy_position_scale(self, score: Mapping[str, float]) -> float:
+        scale = 1.0
+        if score.get("volume_score", 0) <= 0:
+            scale = float(self.params.get("zero_volume_buy_position_scale", 1.0))
+        return max(0.0, min(1.0, scale))
 
     def _atr_stop_codes(self, broker, current_prices: Mapping[str, float]) -> set:
         stopped = set()

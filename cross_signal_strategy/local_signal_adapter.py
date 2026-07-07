@@ -28,6 +28,7 @@ class LocalSignalAdapter:
     adjustment_factors: object | None = None
     daily_corrections: object | None = None
     _daily_cache: dict = field(default_factory=dict, init=False, repr=False)
+    _score_cache: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.params is None:
@@ -91,6 +92,12 @@ class LocalSignalAdapter:
         return visible, signal_date
 
     def score(self, code: str, current_date: str, return_reason: bool = False):
+        cache_key = (str(code).split(".")[0], pd.Timestamp(current_date).strftime("%Y-%m-%d"))
+        if cache_key in self._score_cache:
+            cached_result, cached_reason = self._score_cache[cache_key]
+            result = dict(cached_result) if cached_result is not None else None
+            return (result, cached_reason) if return_reason else result
+
         p = self.params or strategy.get_default_params()
         min_len = self._local_min_len(p)
         required = ["rsi6", "rsi12", "rsi24", "dif", "dea", "k", "d", "j", "ma20", "atr", "adx"]
@@ -98,16 +105,19 @@ class LocalSignalAdapter:
         frame, signal_date = self.load_signal_frame(code, current_date)
         if signal_date is None:
             reason = "no_previous_trade_date"
+            self._score_cache[cache_key] = (None, reason)
             return (None, reason) if return_reason else None
 
         reason = strategy.score_skip_reason(frame, None, required, min_len)
         if reason is not None:
+            self._score_cache[cache_key] = (None, reason)
             return (None, reason) if return_reason else None
 
         snapshot = strategy.build_signal_snapshot(frame, p)
         self._suppress_float_artifact_flags(snapshot, frame)
         reason = strategy.score_skip_reason(frame, snapshot, required, min_len)
         if reason is not None:
+            self._score_cache[cache_key] = (None, reason)
             return (None, reason) if return_reason else None
 
         result = {}
@@ -118,6 +128,7 @@ class LocalSignalAdapter:
         result["current_date"] = pd.Timestamp(current_date).strftime("%Y-%m-%d")
         result["signal_date"] = signal_date
         result["max_data_date"] = str(frame["date"].max())
+        self._score_cache[cache_key] = (dict(result), None)
         return (result, None) if return_reason else result
 
     def _local_min_len(self, params: dict) -> int:

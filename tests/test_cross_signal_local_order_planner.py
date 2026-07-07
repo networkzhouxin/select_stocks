@@ -305,3 +305,41 @@ def test_planner_uses_0935_position_marks_for_new_buy_target_value():
     assert orders == [
         {"code": "159915", "target_value": pytest.approx(6650.0), "reason": "buy_signal"},
     ]
+
+
+def test_planner_can_scale_zero_volume_score_buy_target_without_blocking_trade():
+    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    no_volume = candidate("159915", buy_score=70)
+    no_volume["volume_score"] = 0
+    with_volume = candidate("510300", buy_score=68)
+    with_volume["volume_score"] = 6
+    adapter = FakeSignalAdapter({
+        "159915": no_volume,
+        "510300": with_volume,
+    })
+    params = {
+        "max_hold": 3,
+        "base_ratio": 0.90,
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "trailing_atr_mult": 2.5,
+        "stop_floor": 0.05,
+        "stop_cap": 0.15,
+        "adx_trend_threshold": 25,
+        "zero_volume_buy_position_scale": 0.50,
+    }
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["159915", "510300"],
+        params=params,
+    )
+    broker = LocalBroker(initial_cash=20000.0)
+
+    orders = planner.plan_orders("2019-07-02", "2019-07-01", broker)
+
+    assert orders == [
+        {"code": "159915", "target_value": pytest.approx(3000.0), "reason": "buy_signal"},
+        {"code": "510300", "target_value": pytest.approx(6000.0), "reason": "buy_signal"},
+    ]

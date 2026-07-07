@@ -215,3 +215,13 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: Simple market-state guards cut too many profitable opportunities. The cross-signal framework already uses cross-market and cross-asset switching; broad market filters reduce upside more than they reduce risk.
 Can it be revisited? yes
 Conditions for revisiting: Only with a more nuanced regime rule that preserves cross-market opportunity and is validated after the training rule set is frozen.
+
+Date: 2026-07-08
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Experiment: Scale new-buy target value when `volume_score == 0`, using coarse position scales `1.00`, `0.75`, `0.50`, `0.25`, and `0.00`.
+Hypothesis: 2021Q3 diagnostics showed no-volume-confirmation entries were especially weak. A soft position-size reduction might reduce false-reversal damage without the path destruction caused by hard volume filters.
+Training result: Baseline scale `1.00` returned +106.17%, annualized +27.36%, max drawdown 9.35%, Sharpe 1.887, Sortino 2.931, Q3 return -5.32%. Scale `0.75` returned +98.02%, max drawdown 7.82%, Sharpe 1.865, Q3 -4.19%. Scale `0.50` returned +90.06%, max drawdown 7.07%, Sharpe 1.826, Q3 -2.99%. Scale `0.25` returned +81.93%, max drawdown 7.03%, Sharpe 1.760, Q3 -1.83%. Scale `0.00` returned +72.92%, max drawdown 10.13%, Sharpe 1.456, Q3 -4.37%.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The rule does reduce the 2021Q3 weak spot, but the full training-window opportunity cost is too large. The best drawdown variants lose 16-24pp total return and reduce Sharpe/Sortino, while hard blocking also worsens max drawdown. No adoption is justified.
+Can it be revisited? yes
+Conditions for revisiting: Only as part of a broader independently defined regime/ETF-type sizing model. Do not use `volume_score == 0` alone as a global position-sizing rule.
