@@ -689,8 +689,10 @@ def current_hold_codes(context):
 
 
 def has_position(context, code):
-    pos = context.portfolio.positions.get(code)
-    return pos is not None and getattr(pos, "total_amount", 0) > 0
+    for held_code, pos in context.portfolio.positions.items():
+        if held_code == code and getattr(pos, "total_amount", 0) > 0:
+            return True
+    return False
 
 
 def sync_sell_state_after_order(code, context):

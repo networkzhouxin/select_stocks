@@ -397,6 +397,24 @@ def test_sell_state_is_cleared_only_after_position_is_flat():
             strategy.g = old_g
 
 
+def test_has_position_does_not_probe_missing_position_with_get():
+    class Positions(dict):
+        def get(self, key, default=None):
+            raise AssertionError("positions.get() probes missing JoinQuant positions")
+
+    class Position(object):
+        total_amount = 100
+
+    class Portfolio(object):
+        positions = Positions({"513880.XSHG": Position()})
+
+    class Context(object):
+        portfolio = Portfolio()
+
+    assert strategy.has_position(Context(), "513880.XSHG") is True
+    assert strategy.has_position(Context(), "159928.XSHE") is False
+
+
 def test_buy_state_is_written_only_after_position_exists():
     class EmptyPortfolio(object):
         positions = {}
