@@ -900,3 +900,29 @@ Interpretation:
 
 Can this result be used to change rules? diagnostic only
 Reason: It identifies the weak training regime and informs experiments, but does not itself justify a strategy rule.
+
+### Formal Entry-Score Trade Diagnostics
+
+Version: cross-signal current local training mainline
+Code file: `cross_signal_strategy/trade_diagnostics.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only attribution-tooling checkpoint
+Initial capital: 20000
+
+Purpose:
+- Capture each buy's score snapshot at order-planning time.
+- Attribute closed-trade PnL to the actual entry-day tags, not to a later refreshed `last_scores` map.
+
+Verification:
+- Added unit coverage proving score snapshots are frozen before later score mutation.
+- Added unit coverage proving closed-trade diagnostics use the entry snapshot.
+- Full cross-signal test suite passed: 98 tests.
+
+Current 2021Q3 diagnostic using formal entry snapshots:
+- Trades sold in 2021Q3: 13, win rate 38.46%, realized PnL -1579.5, P/L ratio 0.304.
+- Trades bought in 2021Q3: 12, win rate 33.33%, realized PnL -1445.1, P/L ratio 0.363.
+- Q3 buys with `volume_score=0`: 5 trades, all losing, realized PnL -2000.9.
+- Q3 buys with `volume_score>0`: 7 trades, win rate 57.14%, realized PnL +555.8.
+
+Can this result be used to change rules? diagnostic only
+Reason: Formal attribution confirms the weak area, but previous volume-filter experiments failed at the full training-window level. The diagnostic should guide future hypotheses, not directly change rules.

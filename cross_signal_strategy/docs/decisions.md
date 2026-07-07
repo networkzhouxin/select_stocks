@@ -426,3 +426,13 @@ Evidence: Added failing tests before implementation. Current training mainline r
 Affected files: `cross_signal_strategy/baseline_report.py`, `tests/test_cross_signal_baseline_report.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; reporting only
 Status: adopted
+
+### Add Entry-Score Trade Diagnostics
+
+Date: 2026-07-07
+Decision: Add a dedicated trade-diagnostics module that captures buy-entry score snapshots at order-planning time and uses those snapshots for closed-trade attribution.
+Reason: A temporary attribution script had read `planner.last_scores` after later days had already refreshed it, which could mislabel historical buys. The issue did not affect local replay returns, positions, or daily equity, but it could mislead factor diagnostics.
+Evidence: Added failing-style tests for score snapshot capture and closed-trade attribution before implementation. Current 2021Q3 diagnostic using the formal tool confirms the same PnL conclusion: sell-date Q3 trades PnL -1579.5; buy-date Q3 trades PnL -1445.1; no-volume-confirmation Q3 buys were 5/5 losers with PnL -2000.9.
+Affected files: `cross_signal_strategy/trade_diagnostics.py`, `tests/test_cross_signal_trade_diagnostics.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
+Allowed validation influence: none; reporting only
+Status: adopted
