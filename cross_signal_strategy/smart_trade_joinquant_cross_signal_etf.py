@@ -60,6 +60,7 @@ def get_default_params():
         "stop_floor": 0.05,
         "stop_cap": 0.15,
         "overheat_rsi": 85,
+        "a_share_zero_volume_buy_scale": 0.50,
     }
 
 
@@ -78,6 +79,31 @@ def get_default_etf_pool():
         "518880.XSHG",
         "159985.XSHE",
     ]
+
+
+def get_a_share_etf_codes():
+    return set([
+        "510300",
+        "159915",
+        "512100",
+        "159928",
+        "510880",
+    ])
+
+
+def buy_position_scale(score, params=None):
+    p = params or get_default_params()
+    code = str(score.get("code", "")).split(".")[0]
+    if code in get_a_share_etf_codes() and score.get("volume_score", 0) <= 0:
+        scale = float(p.get("a_share_zero_volume_buy_scale", 1.0))
+        return max(0.0, min(1.0, scale))
+    return 1.0
+
+
+def calc_buy_target_value(total_value, score, params=None):
+    p = params or get_default_params()
+    base_target = float(total_value) * float(p["base_ratio"]) / int(p["max_hold"])
+    return base_target * buy_position_scale(score, p)
 
 
 def format_indicator_params(params):
@@ -879,7 +905,6 @@ def do_trading(context):
         log.info("[cross-v0.1] no buy candidates above threshold")
         return
 
-    target_value = context.portfolio.total_value * p["base_ratio"] / p["max_hold"]
     bought = 0
     for score in candidates:
         if bought >= slots:
@@ -890,6 +915,7 @@ def do_trading(context):
         price = current_price(current_data, code)
         if price is None or price <= 0:
             continue
+        target_value = calc_buy_target_value(context.portfolio.total_value, score, p)
         log.info("[buy] %s buy=%.0f rev=%.0f loc=%.0f trend=%.0f vol=%.0f target=%.0f" % (
             code, score["buy_score"], score["reversal_score"], score["location_score"],
             score["trend_score"], score["volume_score"], target_value))

@@ -456,3 +456,13 @@ Evidence: A temporary JoinQuant probe file (`cross_signal_strategy/smart_trade_j
 Affected files: `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
 Allowed validation influence: training-period execution diagnostics only; no signal or parameter tuning
 Status: adopted
+
+### Half-Size A-Share Buys Without Volume Confirmation
+
+Date: 2026-07-08
+Decision: When a new-buy candidate is an A-share ETF (`510300`, `159915`, `512100`, `159928`, `510880`) and its `volume_score` is `0`, size the new buy at 50% of the normal per-slot target. Do not apply this rule to cross-market or cross-asset ETFs.
+Reason: In A-share ETFs, a reversal signal without volume confirmation is more likely to be a low-quality repair attempt. For QDII/cross-market and commodity ETFs, local volume has different microstructure and earlier global volume rules damaged returns. A 50% scale is a broad risk-control rule; it deliberately avoids the training-best 25% scale to reduce overfitting risk.
+Evidence: Training-only 2019-2021 local replay: baseline returned +106.17%, annualized +27.36%, max drawdown 9.35%, Sharpe 1.887, Sortino 2.931, 2021Q3 -5.32%. A-share-only zero-volume scale `0.50` returned +109.19%, annualized +27.98%, max drawdown 7.86%, Sharpe 1.995, Sortino 3.113, 2021Q3 -4.25%, with the same 103/101 buy/sell event count. Cross-market and cross-asset scaling reduced return and was rejected.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`, `tests/test_cross_signal_strategy.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
+Allowed validation influence: none; validation periods were not inspected
+Status: adopted for next JoinQuant training backtest

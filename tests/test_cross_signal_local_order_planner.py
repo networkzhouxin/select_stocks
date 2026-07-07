@@ -26,12 +26,13 @@ class FakeSignalAdapter:
         return (dict(item), None) if return_reason else dict(item)
 
 
-def candidate(code, buy_score=65, sell_score=0, reversal_score=40):
+def candidate(code, buy_score=65, sell_score=0, reversal_score=40, volume_score=0):
     return {
         "code": code,
         "buy_score": buy_score,
         "sell_score": sell_score,
         "reversal_score": reversal_score,
+        "volume_score": volume_score,
         "buy_allowed": True,
         "close_between_boll_lower_mid": True,
         "close_cross_boll_mid_up": False,
@@ -55,8 +56,8 @@ def test_planner_buys_top_candidates_up_to_empty_slots():
     from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({
-        "510300": candidate("510300", buy_score=70, reversal_score=30),
-        "159915": candidate("159915", buy_score=75, reversal_score=35),
+        "510300": candidate("510300", buy_score=70, reversal_score=30, volume_score=6),
+        "159915": candidate("159915", buy_score=75, reversal_score=35, volume_score=6),
         "512100": candidate("512100", buy_score=55, reversal_score=45),
         "513100": candidate("513100", buy_score=72, sell_score=35, reversal_score=50),
     })
@@ -289,7 +290,7 @@ def test_planner_uses_0935_position_marks_for_new_buy_target_value():
     from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({
-        "159915": candidate("159915", buy_score=70),
+        "159915": candidate("159915", buy_score=70, volume_score=6),
     })
     planner = LocalCrossSignalOrderPlanner(adapter, etf_pool=["159915"])
     broker = LocalBroker(initial_cash=17000.0)
@@ -328,7 +329,7 @@ def test_planner_can_scale_zero_volume_score_buy_target_without_blocking_trade()
         "stop_floor": 0.05,
         "stop_cap": 0.15,
         "adx_trend_threshold": 25,
-        "zero_volume_buy_position_scale": 0.50,
+        "a_share_zero_volume_buy_scale": 0.50,
     }
     planner = LocalCrossSignalOrderPlanner(
         adapter,

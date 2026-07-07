@@ -7,6 +7,8 @@ import sys
 import types
 from datetime import date
 
+import pytest
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
@@ -566,6 +568,31 @@ def test_default_params_use_training_selected_broad_base_ratio():
     params = strategy.get_default_params()
 
     assert params["base_ratio"] == 0.95
+
+
+def test_default_params_use_half_size_for_a_share_zero_volume_buys():
+    params = strategy.get_default_params()
+
+    assert params["a_share_zero_volume_buy_scale"] == 0.50
+
+
+def test_buy_position_scale_halves_only_a_share_zero_volume_candidates():
+    params = strategy.get_default_params()
+
+    assert strategy.buy_position_scale({"code": "510300", "volume_score": 0}, params) == 0.50
+    assert strategy.buy_position_scale({"code": "159915", "volume_score": 0}, params) == 0.50
+    assert strategy.buy_position_scale({"code": "513100", "volume_score": 0}, params) == 1.0
+    assert strategy.buy_position_scale({"code": "518880", "volume_score": 0}, params) == 1.0
+    assert strategy.buy_position_scale({"code": "510300", "volume_score": 6}, params) == 1.0
+
+
+def test_buy_target_value_applies_position_scale_after_base_allocation():
+    params = strategy.get_default_params()
+    score = {"code": "510300", "volume_score": 0}
+
+    target = strategy.calc_buy_target_value(20000.0, score, params)
+
+    assert target == pytest.approx(20000.0 * 0.95 / 3 * 0.50)
 
 
 def test_buy_candidates_exclude_force_sell_conflicts():

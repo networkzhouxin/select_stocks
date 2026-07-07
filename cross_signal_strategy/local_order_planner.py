@@ -79,7 +79,6 @@ class LocalCrossSignalOrderPlanner:
         if slots <= 0:
             return orders
 
-        target_value = self._target_value(broker, current_prices or {})
         candidates = [
             item for item in strategy.filter_buy_candidates(scores, held_after_sell, self.params)
             if item["code"] not in force_stopped
@@ -91,18 +90,16 @@ class LocalCrossSignalOrderPlanner:
             code = score["code"]
             orders.append({
                 "code": code,
-                "target_value": target_value * self._buy_position_scale(score),
+                "target_value": strategy.calc_buy_target_value(
+                    self._total_value(broker, current_prices or {}),
+                    score,
+                    self.params,
+                ),
                 "reason": "buy_signal",
             })
             bought += 1
 
         return orders
-
-    def _buy_position_scale(self, score: Mapping[str, float]) -> float:
-        scale = 1.0
-        if score.get("volume_score", 0) <= 0:
-            scale = float(self.params.get("zero_volume_buy_position_scale", 1.0))
-        return max(0.0, min(1.0, scale))
 
     def _atr_stop_codes(self, broker, current_prices: Mapping[str, float]) -> set:
         stopped = set()
@@ -157,9 +154,11 @@ class LocalCrossSignalOrderPlanner:
         return strategy.sort_candidates(scores)
 
     def _target_value(self, broker, current_prices: Mapping[str, float]) -> float:
+        return self._total_value(broker, current_prices) * float(self.params["base_ratio"]) / int(self.params["max_hold"])
+
+    def _total_value(self, broker, current_prices: Mapping[str, float]) -> float:
         position_value = sum(
             pos.amount * float(current_prices.get(code, pos.avg_cost))
             for code, pos in broker.positions.items()
         )
-        total_value = broker.cash + position_value
-        return total_value * float(self.params["base_ratio"]) / int(self.params["max_hold"])
+        return broker.cash + position_value

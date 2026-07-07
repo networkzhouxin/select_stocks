@@ -956,3 +956,34 @@ Policy:
 
 Can this result be used to change rules? no
 Reason: This probe only explains a known execution warning. It supports risk documentation and order-state safeguards, but it does not justify changing daily signal structure or training parameters.
+
+### A-Share Zero-Volume Buy Half-Size Rule
+
+Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
+Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only structure experiment
+Initial capital: 20000
+
+Hypothesis:
+- `volume_score=0` should not be used as a global filter, because QDII/cross-market and commodity ETF volume behaves differently.
+- For A-share ETFs only, a buy signal without volume confirmation may deserve smaller initial risk because the reversal quality is weaker.
+
+Training-only group test:
+- Baseline: return +106.17%, annualized +27.36%, max drawdown 9.35%, Sharpe 1.887, Sortino 2.931, P/L ratio 2.853, average exposure 78.56%, 2021Q3 -5.32%.
+- A-share scale `0.75`: return +107.86%, max drawdown 8.64%, Sharpe 1.944, Sortino 3.028, 2021Q3 -4.80%.
+- A-share scale `0.50`: return +109.19%, annualized +27.98%, max drawdown 7.86%, Sharpe 1.995, Sortino 3.113, P/L ratio 3.134, average exposure 75.72%, 2021Q3 -4.25%.
+- A-share scale `0.25`: return +110.60%, max drawdown 7.16%, Sharpe 2.042, Sortino 3.188, 2021Q3 -3.73%.
+- Cross-market scales `0.75/0.50/0.25`: returns +98.69% / +91.02% / +84.07%, all below baseline.
+- Cross-asset scales `0.75/0.50/0.25`: returns +104.22% / +101.53% / +98.69%, all below baseline.
+
+Adopted:
+- `a_share_zero_volume_buy_scale=0.50`.
+
+Reason for choosing 0.50 instead of the highest-training 0.25:
+- 0.50 is a standard half-risk rule and easier to justify as risk management.
+- 0.25 is the best training number, but it is a stronger sizing cut and more likely to be a training-window fit.
+- The goal is to reduce weak A-share no-volume reversal risk while preserving enough upside for validation.
+
+Can this result be used to change rules? yes, training-only sizing structure
+Reason: The rule is ETF-type-specific, uses a broad half-size control, improves return and drawdown in training, and rejects the global volume rule that previously failed. It still requires JoinQuant training confirmation and reserved-period validation after the rule set is frozen.
