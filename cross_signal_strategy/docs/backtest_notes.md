@@ -926,3 +926,33 @@ Current 2021Q3 diagnostic using formal entry snapshots:
 
 Can this result be used to change rules? diagnostic only
 Reason: Formal attribution confirms the weak area, but previous volume-filter experiments failed at the full training-window level. The diagnostic should guide future hypotheses, not directly change rules.
+
+### JoinQuant 513880 Sparse-Liquidity Cancellation Probe
+
+Version: temporary JoinQuant probe `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_probe_513880.py`
+Backtest period: 2019-01-01 to 2021-12-31
+Protocol role: execution-liquidity diagnosis only
+
+Purpose:
+- Explain the two retained JoinQuant warnings on `2019-12-12` for `513880.XSHG`.
+- Determine whether the canceled sell came from a paused ETF, a zero-volume day, a data defect, or an exact-minute matching issue.
+- Keep the result as execution diagnostics only; do not use it to tune signal rules or thresholds.
+
+Findings:
+- JoinQuant reported `paused=False` at `2019-12-12 09:35`, `10:35`, and `14:50`.
+- The sampled 1-minute bars at those three exact times all had `volume=0` and `money=0`.
+- The full-day 1-minute summary showed `total_minutes=240`, `nonzero_minutes=26`, `total_volume=1405700.0`, `total_money=1539142.0`, `first_nonzero=2019-12-12 09:38:00`, and `last_nonzero=2019-12-12 14:57:00`.
+
+Conclusion:
+- The ETF was not considered paused by JoinQuant.
+- The ETF was not zero-volume for the whole day.
+- The `09:35` market sell was canceled because the exact matching minute had no tradable volume under JoinQuant's market-order model.
+
+Policy:
+- Treat this as an execution-liquidity risk, not a strategy signal bug.
+- Keep the formal strategy logic unchanged.
+- Keep state-sync protection for unfilled orders.
+- Do not add a broad `volume == 0` rule without separate evidence, because that would mix execution-time microstructure into a daily signal framework.
+
+Can this result be used to change rules? no
+Reason: This probe only explains a known execution warning. It supports risk documentation and order-state safeguards, but it does not justify changing daily signal structure or training parameters.

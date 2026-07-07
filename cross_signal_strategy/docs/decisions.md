@@ -446,3 +446,13 @@ Evidence: Added failing tests before implementation for three cases: canceled se
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: training-period JoinQuant order/transaction diagnostics only; no validation-period influence
 Status: adopted
+
+### Treat 513880 Zero-Volume Cancellation As Execution Risk
+
+Date: 2026-07-08
+Decision: Do not change cross-signal buy/sell rules based on the 2019-12-12 `513880.XSHG` canceled sell. Record it as an execution-liquidity risk: JoinQuant did not mark the ETF as paused, but the exact order minute had zero tradable volume, so the market sell could not be matched. Keep the state-sync protection for unfilled orders and avoid adding a broad `volume == 0` trading rule without separate evidence.
+Reason: A zero-volume market-order cancellation can be caused by sparse minute liquidity rather than a halted security or a wrong signal. Using current-minute volume as a strategy gate would mix execution-time microstructure into a daily signal framework and could change the training path for reasons unrelated to signal quality.
+Evidence: A temporary JoinQuant probe file (`cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_probe_513880.py`) printed `paused=False` at `2019-12-12 09:35`, `10:35`, and `14:50`. The same minutes had `volume=0` and `money=0`. The full-day minute summary for `2019-12-12` showed `total_minutes=240`, `nonzero_minutes=26`, `total_volume=1405700.0`, `total_money=1539142.0`, `first_nonzero=2019-12-12 09:38:00`, and `last_nonzero=2019-12-12 14:57:00`. This proves the ETF was not considered paused by JoinQuant and was not zero-volume all day; it traded sparsely, and the 09:35 sell minute was one of the zero-volume minutes.
+Affected files: `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
+Allowed validation influence: training-period execution diagnostics only; no signal or parameter tuning
+Status: adopted
