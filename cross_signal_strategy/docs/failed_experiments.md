@@ -245,3 +245,13 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it was not adopted yet: The best local result comes from deleting symbols after observing training attribution, which has high selection-bias risk. It is a candidate for JoinQuant training confirmation, not an adopted strategy rule.
 Can it be revisited? yes
 Conditions for revisiting: Run the candidate in JoinQuant over the 2019-2021 training window first. If JoinQuant confirms improvement, document it as a training-confirmed candidate before any reserved validation.
+
+Date: 2026-07-08
+Version: `cross-v0.3.1`
+Experiment: ATR-stop cooldown after a position is stopped out, tested with cooldown windows of 1, 2, 3, and 5 trading days before the same ETF can be bought again.
+Hypothesis: The 2020 max-drawdown interval showed clustered ATR stops followed by new reversal entries. A short post-stop cooldown might avoid re-entering the same ETF too early during crash/noisy regimes without weakening the core signal framework.
+Training result: Baseline cooldown 0 returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Cooldown 1 and 2 produced the identical path as baseline. Cooldown 3 returned +113.25%, annualized +28.80%, max drawdown 6.94%, Sharpe 2.037. Cooldown 5 returned +95.84%, annualized +25.19%, max drawdown 6.94%, Sharpe 1.822, with 99 buys and 96 sells.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Short cooldowns do not touch the realized path, while a one-week cooldown blocks useful re-entries and materially reduces return without improving drawdown. The max-drawdown problem is not solved by a simple per-ETF post-ATR cooldown.
+Can it be revisited? yes
+Conditions for revisiting: Only as part of a broader independently defined crash/regime model. Do not adopt a standalone ATR-stop cooldown in the current framework.

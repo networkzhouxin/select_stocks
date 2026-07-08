@@ -262,6 +262,72 @@ def test_planner_atr_stop_sells_before_signal_logic_and_blocks_same_day_rebuy():
     assert "510300" not in [o["code"] for o in orders[1:]]
 
 
+def test_planner_does_not_apply_atr_stop_cooldown_by_default():
+    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"159915": candidate("159915", buy_score=70)})
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["159915"],
+        trade_dates=["2019-07-01", "2019-07-02"],
+    )
+    planner.atr_stop_dates["159915"] = "2019-07-01"
+    broker = LocalBroker(initial_cash=12000.0)
+
+    orders = planner.plan_orders("2019-07-02", "2019-07-01", broker)
+
+    assert orders == [
+        {"code": "159915", "target_value": pytest.approx(1900.0), "reason": "buy_signal"},
+    ]
+
+
+def test_planner_blocks_buy_during_configured_atr_stop_cooldown():
+    from cross_signal_strategy.local_backtester import LocalBroker, OrderResult
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"159915": candidate("159915", buy_score=70)})
+    params = {
+        "max_hold": 3,
+        "base_ratio": 0.95,
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "trailing_atr_mult": 2.5,
+        "stop_floor": 0.05,
+        "stop_cap": 0.15,
+        "adx_trend_threshold": 25,
+        "atr_stop_cooldown_days": 2,
+    }
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["159915"],
+        params=params,
+        trade_dates=["2019-07-01", "2019-07-02", "2019-07-03", "2019-07-04"],
+    )
+    planner.on_orders_filled(
+        "2019-07-01",
+        [
+            OrderResult(
+                code="159915",
+                amount_delta=-1000,
+                exec_price=1.0,
+                commission=5.0,
+                side_time="2019-07-01 09:35",
+                filled=True,
+                reason="atr_stop",
+            )
+        ],
+    )
+
+    broker = LocalBroker(initial_cash=12000.0)
+
+    assert planner.plan_orders("2019-07-02", "2019-07-01", broker) == []
+    assert planner.plan_orders("2019-07-03", "2019-07-02", broker) == []
+    assert planner.plan_orders("2019-07-04", "2019-07-03", broker) == [
+        {"code": "159915", "target_value": pytest.approx(3800.0), "reason": "buy_signal"},
+    ]
+
+
 def test_planner_atr_stop_uses_etf_tick_precision_for_trigger():
     from cross_signal_strategy.local_backtester import LocalBroker, Position
     from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner

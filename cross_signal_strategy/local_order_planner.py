@@ -22,6 +22,7 @@ class LocalCrossSignalOrderPlanner:
     buy_dates: Dict[str, str] = field(default_factory=dict)
     highest_since_buy: Dict[str, float] = field(default_factory=dict)
     entry_atr: Dict[str, float] = field(default_factory=dict)
+    atr_stop_dates: Dict[str, str] = field(default_factory=dict)
     last_scores: Dict[str, dict] = field(default_factory=dict)
     trade_dates: List[str] | None = None
 
@@ -82,6 +83,7 @@ class LocalCrossSignalOrderPlanner:
         candidates = [
             item for item in strategy.filter_buy_candidates(scores, held_after_sell, self.params)
             if item["code"] not in force_stopped
+            and not self._is_in_atr_stop_cooldown(item["code"], current_date)
         ]
         bought = 0
         for score in candidates:
@@ -130,6 +132,8 @@ class LocalCrossSignalOrderPlanner:
                 if score is not None and score.get("atr") is not None:
                     self.entry_atr[code] = float(score["atr"])
             elif order.amount_delta < 0:
+                if getattr(order, "reason", "") == "atr_stop":
+                    self.atr_stop_dates[code] = current_date
                 self._clear_position_state(code)
 
     def on_after_close(self, current_date: str, marks: Mapping[str, float]) -> None:
@@ -162,3 +166,21 @@ class LocalCrossSignalOrderPlanner:
             for code, pos in broker.positions.items()
         )
         return broker.cash + position_value
+
+    def _is_in_atr_stop_cooldown(self, code: str, current_date: str) -> bool:
+        cooldown_days = int(self.params.get("atr_stop_cooldown_days", 0) or 0)
+        if cooldown_days <= 0:
+            return False
+        stop_date = self.atr_stop_dates.get(code)
+        if stop_date is None:
+            return False
+        elapsed = self._trading_days_between(stop_date, current_date)
+        return elapsed is not None and 0 <= elapsed <= cooldown_days
+
+    def _trading_days_between(self, start_date: str, end_date: str):
+        if self.trade_dates is None:
+            return None
+        try:
+            return self.trade_dates.index(str(end_date)) - self.trade_dates.index(str(start_date))
+        except ValueError:
+            return None
