@@ -1,6 +1,6 @@
 # Cross-Signal ETF Strategy Spec
 
-Status: v0.1 rules drafted, not implemented.
+Status: v0.3.1 training mainline implemented, validation not inspected.
 
 ## Hypothesis
 
@@ -20,9 +20,19 @@ This is not a pure momentum rotation strategy. Momentum can be used as context, 
 
 ## ETF Pool
 
-Use the same 12-ETF pool as the current multi-factor strategy for the first version unless a liquidity or data issue requires exclusion.
+Use the 9-ETF pool confirmed by 2019-2021 JoinQuant training for `cross-v0.3.1`:
 
-Rationale: isolate signal logic first; do not mix signal redesign with ETF-pool redesign.
+- `159915.XSHE` 创业板 ETF
+- `512100.XSHG` 中证 1000 ETF
+- `159928.XSHE` 消费 ETF
+- `513100.XSHG` 纳指 ETF
+- `513500.XSHG` 标普 500 ETF
+- `513880.XSHG` 日经 225 ETF
+- `513050.XSHG` 中概互联 ETF
+- `518880.XSHG` 黄金 ETF
+- `159985.XSHE` 豆粕 ETF
+
+Rationale: after the signal and risk structure reached `cross-v0.3.0`, training attribution and JoinQuant confirmation showed that removing `510300.XSHG`, `510880.XSHG`, and `159920.XSHE` improved return, drawdown, Sharpe, win rate, and profit/loss ratio in 2019-2021. This is a training-confirmed pool choice, not validation approval.
 
 ## Candidate Signal Groups
 

@@ -466,3 +466,14 @@ Evidence: Training-only 2019-2021 local replay: baseline returned +106.17%, annu
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`, `tests/test_cross_signal_strategy.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/docs/backtest_notes.md`
 Allowed validation influence: none; validation periods were not inspected
 Status: adopted and JoinQuant-training-confirmed
+
+### Adopt JoinQuant-Confirmed 9-ETF Pool For Cross-Signal Mainline
+
+Date: 2026-07-08
+Decision: Promote the training-confirmed ETF-pool candidate into the official cross-signal JoinQuant mainline as `cross-v0.3.1`. Remove `510300.XSHG`, `510880.XSHG`, and `159920.XSHE` from `get_default_etf_pool()`. Keep `159915.XSHE`, `512100.XSHG`, `159928.XSHE`, `513100.XSHG`, `513500.XSHG`, `513880.XSHG`, `513050.XSHG`, `518880.XSHG`, and `159985.XSHE`.
+Reason: Training attribution showed `510880` and `159920` were the clearest drag symbols in 2019-2021 and `510300` was a weak contributor under this cross-signal framework. A temporary JoinQuant candidate file confirmed that the 9-ETF pool improved the current official training result across return, annualized return, drawdown, Sharpe, Sortino, win rate, and profit/loss ratio.
+Evidence: Current official `cross-v0.3.0` JoinQuant training result after the A-share zero-volume half-size rule: +115.41% return, +30.06% annualized return, 6.93% max drawdown, Sharpe 2.022, Sortino 2.870, win rate 0.530, profit/loss ratio 3.597. Candidate `cross-v0.3.0-pool-candidate`: +120.42% return, +31.08% annualized return, 6.82% max drawdown, Sharpe 2.097, Sortino 2.960, win rate 0.552, profit/loss ratio 4.263. Log/transaction checks found no removed-symbol trades, no runtime errors, and only the known `2019-12-12 513880.XSHG` sparse-liquidity zero-volume cancellation.
+Risk: ETF-pool deletion is more exposed to training-window selection bias than a pure execution or risk-control fix. This decision is allowed only as a training-mainline promotion; it is not validation approval and must be checked on reserved periods after the rule set is frozen.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; validation periods were not inspected
+Status: adopted and JoinQuant-training-confirmed

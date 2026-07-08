@@ -14,7 +14,7 @@ import builtins as _builtins
 from jqdata import *
 
 
-STRATEGY_VERSION = "cross-v0.3.0"
+STRATEGY_VERSION = "cross-v0.3.1"
 
 
 try:
@@ -66,14 +66,11 @@ def get_default_params():
 
 def get_default_etf_pool():
     return [
-        "510300.XSHG",
         "159915.XSHE",
         "512100.XSHG",
         "159928.XSHE",
-        "510880.XSHG",
         "513100.XSHG",
         "513500.XSHG",
-        "159920.XSHE",
         "513880.XSHG",
         "513050.XSHG",
         "518880.XSHG",

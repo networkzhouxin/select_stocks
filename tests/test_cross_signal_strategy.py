@@ -576,6 +576,21 @@ def test_default_params_use_half_size_for_a_share_zero_volume_buys():
     assert params["a_share_zero_volume_buy_scale"] == 0.50
 
 
+def test_default_etf_pool_uses_joinquant_confirmed_training_candidate():
+    assert strategy.STRATEGY_VERSION == "cross-v0.3.1"
+    assert strategy.get_default_etf_pool() == [
+        "159915.XSHE",
+        "512100.XSHG",
+        "159928.XSHE",
+        "513100.XSHG",
+        "513500.XSHG",
+        "513880.XSHG",
+        "513050.XSHG",
+        "518880.XSHG",
+        "159985.XSHE",
+    ]
+
+
 def test_buy_position_scale_halves_only_a_share_zero_volume_candidates():
     params = strategy.get_default_params()
 
@@ -995,7 +1010,7 @@ def test_format_cross_flags_shows_rsi_and_kdj_detail():
 def test_format_self_check_reports_version_and_diff_cross_status():
     text = strategy.format_self_check()
 
-    assert "[cross-v0.3.0] positional-diff-cross enabled" in text
+    assert "[cross-v0.3.1] positional-diff-cross enabled" in text
     assert "diff_cross_self_check=True expected=True" in text
     assert "self_rev=12" in text
 
