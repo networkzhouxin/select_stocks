@@ -1019,7 +1019,7 @@ Log and transaction checks:
 - Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume cancellation.
 
 Half-size rule evidence:
-- A-share `volume_score=0` buys were sized at about half of the normal per-slot target. Examples: `2019-07-17 159915.XSHE target=4086` with成交额约 `4020.3`; `2020-03-05 159928.XSHE target=4692` with成交额约 `4671`; `2021-07-14 159915.XSHE target=6863` with成交额约 `6770`; `2021-07-20 510300.XSHG target=6783` with成交额约 `6718.4`.
+- A-share `volume_score=0` buys were sized at about half of the normal per-slot target. Examples: `2019-07-17 159915.XSHE target=4086` with filled value about `4020.3`; `2020-03-05 159928.XSHE target=4692` with filled value about `4671`; `2021-07-14 159915.XSHE target=6863` with filled value about `6770`; `2021-07-20 510300.XSHG target=6783` with filled value about `6718.4`.
 - Non-A-share `volume_score=0` buys were not half-sized, matching the intended boundary for QDII/cross-market and cross-asset ETFs.
 
 Comparison to prior JoinQuant training result:
@@ -1028,3 +1028,29 @@ Comparison to prior JoinQuant training result:
 
 Can this result be used to change rules? yes, training-window authority confirmation
 Reason: This confirms that the local training improvement also appears in JoinQuant, which remains the performance authority. Reserved validation periods were still not inspected; this is not validation approval.
+
+### Post-Sell Follow-Through Diagnostics
+
+Version: cross-signal after `a_share_zero_volume_buy_scale=0.50`
+Code file: `cross_signal_strategy/sell_diagnostics.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only sell-side diagnosis
+Initial capital: 20000
+
+Purpose:
+- Measure whether sells were followed by further weakness or rebound over 3, 5, 10, and 20 training trading days.
+- Separate `atr_stop` from normal `signal_sell`, because they serve different jobs.
+- Diagnose sell-fly risk before changing sell rules.
+
+Training diagnostic summary:
+- `atr_stop`: 26 available sells. Forward mean returns after sell were +0.59% at 3 days, +0.12% at 5 days, -2.78% at 10 days, and -2.63% at 20 days.
+- `signal_sell`: 73 available 3/5-day observations, 69 available 10-day observations, and 66 available 20-day observations. Forward mean returns after sell were +0.45% at 3 days, +0.68% at 5 days, +1.06% at 10 days, and +1.24% at 20 days.
+- Signal-sell positive follow-through rates were high: 68.5% at 3 days, 57.5% at 5 days, 65.2% at 10 days, and 68.2% at 20 days.
+
+Interpretation:
+- ATR stops are mostly doing risk-control work; the 10/20-day post-sell averages are negative.
+- Normal signal sells do have sell-fly risk; sold ETFs often rebound afterward.
+- However, sell-fly alone is not enough to justify weakening signal sells because signal sells also recycle capital into other candidates.
+
+Can this result be used to change rules? diagnostic only
+Reason: The diagnostic reveals a real weakness but does not include the portfolio opportunity cost of holding instead of rotating. Rule changes require full-path experiments.

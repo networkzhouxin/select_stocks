@@ -225,3 +225,13 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: The rule does reduce the 2021Q3 weak spot, but the full training-window opportunity cost is too large. The best drawdown variants lose 16-24pp total return and reduce Sharpe/Sortino, while hard blocking also worsens max drawdown. No adoption is justified.
 Can it be revisited? yes
 Conditions for revisiting: Only as part of a broader independently defined regime/ETF-type sizing model. Do not use `volume_score == 0` alone as a global position-sizing rule.
+
+Date: 2026-07-08
+Version: cross-signal after `a_share_zero_volume_buy_scale=0.50`
+Experiment: Sell-side structure variants: remove all normal signal sells, require severe break only, require MA20-or-severe break, raise sell threshold to 35, and raise sell threshold to 40.
+Hypothesis: Post-sell diagnostics showed normal `signal_sell` exits are often followed by rebounds, so weakening signal sells might reduce sell-fly damage.
+Training result: Baseline returned +109.19%, annualized +27.98%, max drawdown 7.86%, Sharpe 1.995, Sortino 3.113, 103 buys and 101 sells. Removing signal sells returned +104.35%, annualized +26.98%, max drawdown 7.35%, Sharpe 1.904, with only 40 buys and 37 sells. Severe-only signal sells returned +80.03%, max drawdown 9.30%, Sharpe 1.583. MA20-or-severe produced the identical path as baseline. Sell threshold 35 returned +84.32%, max drawdown 6.59%, Sharpe 1.701. Sell threshold 40 returned +76.65%, max drawdown 7.83%, Sharpe 1.588.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Sell-fly exists, but normal signal sells also free capital for better opportunities. Weakening or removing them reduces churn and sometimes drawdown, but the opportunity cost is larger than the saved sell-fly damage. The current sell structure remains the best full-path training result.
+Can it be revisited? yes
+Conditions for revisiting: Only with a targeted rule that identifies sell-fly states while preserving capital recycling. Do not globally remove signal sells or raise the sell threshold in the current framework.
