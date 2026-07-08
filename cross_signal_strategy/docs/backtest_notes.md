@@ -987,3 +987,44 @@ Reason for choosing 0.50 instead of the highest-training 0.25:
 
 Can this result be used to change rules? yes, training-only sizing structure
 Reason: The rule is ETF-type-specific, uses a broad half-size control, improves return and drawdown in training, and rejects the global volume rule that previously failed. It still requires JoinQuant training confirmation and reserved-period validation after the rule set is frozen.
+
+### JoinQuant Training Confirmation For A-Share Zero-Volume Half-Size Rule
+
+Version: `cross-v0.3.0` after adopting `a_share_zero_volume_buy_scale=0.50`
+Platform: JoinQuant
+Backtest period: 2019-01-01 to 2021-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: training-window authority confirmation
+
+JoinQuant headline result:
+- Strategy return: +115.41%.
+- Annualized return: +30.06%.
+- Excess return: +31.27%.
+- Max drawdown: 6.93%.
+- Sharpe ratio: 2.870.
+- Sortino ratio: 0.690.
+- Win rate: 0.530.
+- Profit/loss ratio: 3.597.
+- Alpha: 0.208.
+- Beta: 0.362.
+- Information ratio: 2.022.
+
+Log and transaction checks:
+- Strategy log contained 102 `[buy]` lines and 101 `[sell]` lines.
+- Transaction export contained 203 rows: 102 buys and 101 sells.
+- Transaction status: 202 fully filled rows, 1 canceled row.
+- The only canceled row was the known `2019-12-12 513880.XSHG` zero-volume market sell; this is the previously documented sparse-liquidity execution risk, not a new strategy issue.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume cancellation.
+
+Half-size rule evidence:
+- A-share `volume_score=0` buys were sized at about half of the normal per-slot target. Examples: `2019-07-17 159915.XSHE target=4086` with成交额约 `4020.3`; `2020-03-05 159928.XSHE target=4692` with成交额约 `4671`; `2021-07-14 159915.XSHE target=6863` with成交额约 `6770`; `2021-07-20 510300.XSHG target=6783` with成交额约 `6718.4`.
+- Non-A-share `volume_score=0` buys were not half-sized, matching the intended boundary for QDII/cross-market and cross-asset ETFs.
+
+Comparison to prior JoinQuant training result:
+- Previous JoinQuant training result before this rule: +112.22% return, +29.39% annualized return, 8.19% max drawdown.
+- Current JoinQuant training result after this rule: +115.41% return, +30.06% annualized return, 6.93% max drawdown.
+
+Can this result be used to change rules? yes, training-window authority confirmation
+Reason: This confirms that the local training improvement also appears in JoinQuant, which remains the performance authority. Reserved validation periods were still not inspected; this is not validation approval.
