@@ -328,6 +328,106 @@ def test_planner_blocks_buy_during_configured_atr_stop_cooldown():
     ]
 
 
+def test_planner_does_not_apply_portfolio_atr_stress_scale_by_default():
+    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"513100": candidate("513100", buy_score=70, volume_score=6)})
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["513100"],
+        trade_dates=["2019-07-01", "2019-07-02", "2019-07-03"],
+    )
+    planner.atr_stop_history.extend(["2019-07-01", "2019-07-02"])
+    broker = LocalBroker(initial_cash=12000.0)
+
+    orders = planner.plan_orders("2019-07-03", "2019-07-02", broker)
+
+    assert orders == [
+        {"code": "513100", "target_value": pytest.approx(3800.0), "reason": "buy_signal"},
+    ]
+
+
+def test_planner_scales_new_buys_during_configured_portfolio_atr_stress():
+    from cross_signal_strategy.local_backtester import LocalBroker, OrderResult
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"513100": candidate("513100", buy_score=70, volume_score=6)})
+    params = {
+        "max_hold": 3,
+        "base_ratio": 0.95,
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "trailing_atr_mult": 2.5,
+        "stop_floor": 0.05,
+        "stop_cap": 0.15,
+        "adx_trend_threshold": 25,
+        "portfolio_atr_stress_lookback_days": 5,
+        "portfolio_atr_stress_min_stops": 2,
+        "portfolio_atr_stress_buy_scale": 0.50,
+    }
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["513100"],
+        params=params,
+        trade_dates=["2019-07-01", "2019-07-02", "2019-07-03", "2019-07-04"],
+    )
+    planner.on_orders_filled(
+        "2019-07-01",
+        [
+            OrderResult("159915", -1000, 1.0, 5.0, "2019-07-01 09:35", True, "atr_stop"),
+            OrderResult("512100", -1000, 1.0, 5.0, "2019-07-01 09:35", True, "atr_stop"),
+        ],
+    )
+    broker = LocalBroker(initial_cash=12000.0)
+
+    orders = planner.plan_orders("2019-07-03", "2019-07-02", broker)
+
+    assert orders == [
+        {"code": "513100", "target_value": pytest.approx(1900.0), "reason": "buy_signal"},
+    ]
+
+
+def test_portfolio_atr_stress_ignores_old_stops_outside_lookback():
+    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    adapter = FakeSignalAdapter({"513100": candidate("513100", buy_score=70, volume_score=6)})
+    params = {
+        "max_hold": 3,
+        "base_ratio": 0.95,
+        "buy_threshold": 60,
+        "sell_threshold": 30,
+        "trailing_atr_mult": 2.5,
+        "stop_floor": 0.05,
+        "stop_cap": 0.15,
+        "adx_trend_threshold": 25,
+        "portfolio_atr_stress_lookback_days": 2,
+        "portfolio_atr_stress_min_stops": 2,
+        "portfolio_atr_stress_buy_scale": 0.50,
+    }
+    planner = LocalCrossSignalOrderPlanner(
+        adapter,
+        etf_pool=["513100"],
+        params=params,
+        trade_dates=[
+            "2019-07-01",
+            "2019-07-02",
+            "2019-07-03",
+            "2019-07-04",
+            "2019-07-05",
+        ],
+    )
+    planner.atr_stop_history.extend(["2019-07-01", "2019-07-02"])
+    broker = LocalBroker(initial_cash=12000.0)
+
+    orders = planner.plan_orders("2019-07-05", "2019-07-04", broker)
+
+    assert orders == [
+        {"code": "513100", "target_value": pytest.approx(3800.0), "reason": "buy_signal"},
+    ]
+
+
 def test_planner_atr_stop_uses_etf_tick_precision_for_trigger():
     from cross_signal_strategy.local_backtester import LocalBroker, Position
     from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner

@@ -23,6 +23,7 @@ class LocalCrossSignalOrderPlanner:
     highest_since_buy: Dict[str, float] = field(default_factory=dict)
     entry_atr: Dict[str, float] = field(default_factory=dict)
     atr_stop_dates: Dict[str, str] = field(default_factory=dict)
+    atr_stop_history: List[str] = field(default_factory=list)
     last_scores: Dict[str, dict] = field(default_factory=dict)
     trade_dates: List[str] | None = None
 
@@ -92,10 +93,10 @@ class LocalCrossSignalOrderPlanner:
             code = score["code"]
             orders.append({
                 "code": code,
-                "target_value": strategy.calc_buy_target_value(
+                "target_value": self._scaled_buy_target_value(
                     self._total_value(broker, current_prices or {}),
                     score,
-                    self.params,
+                    current_date,
                 ),
                 "reason": "buy_signal",
             })
@@ -134,6 +135,7 @@ class LocalCrossSignalOrderPlanner:
             elif order.amount_delta < 0:
                 if getattr(order, "reason", "") == "atr_stop":
                     self.atr_stop_dates[code] = current_date
+                    self.atr_stop_history.append(current_date)
                 self._clear_position_state(code)
 
     def on_after_close(self, current_date: str, marks: Mapping[str, float]) -> None:
@@ -184,3 +186,21 @@ class LocalCrossSignalOrderPlanner:
             return self.trade_dates.index(str(end_date)) - self.trade_dates.index(str(start_date))
         except ValueError:
             return None
+
+    def _scaled_buy_target_value(self, total_value: float, score: Mapping[str, object], current_date: str) -> float:
+        target = strategy.calc_buy_target_value(total_value, score, self.params)
+        return target * self._portfolio_atr_stress_buy_scale(current_date)
+
+    def _portfolio_atr_stress_buy_scale(self, current_date: str) -> float:
+        lookback_days = int(self.params.get("portfolio_atr_stress_lookback_days", 0) or 0)
+        min_stops = int(self.params.get("portfolio_atr_stress_min_stops", 0) or 0)
+        if lookback_days <= 0 or min_stops <= 0:
+            return 1.0
+        recent = 0
+        for stop_date in self.atr_stop_history:
+            elapsed = self._trading_days_between(stop_date, current_date)
+            if elapsed is not None and 0 <= elapsed <= lookback_days:
+                recent += 1
+        if recent < min_stops:
+            return 1.0
+        return float(self.params.get("portfolio_atr_stress_buy_scale", 1.0))

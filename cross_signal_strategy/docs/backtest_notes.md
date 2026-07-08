@@ -1296,3 +1296,51 @@ Recommendation:
 
 Can this result be used to change rules? diagnostic only
 Reason: The diagnostics identify strengths and weaknesses but do not itself test a new rule. Any follow-up change must be implemented as a separate test-first experiment.
+
+### Portfolio ATR-Stress Buy-Scale Candidate
+
+Version: `cross-v0.3.1` local experimental replay
+Candidate file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Backtest period: 2019-01-01 to 2021-12-31
+Protocol role: training-only structural risk experiment
+
+Hypothesis:
+- The max-drawdown interval showed clustered ATR stops during a crash-like regime.
+- If the whole portfolio has recently produced multiple ATR stops, new buy signals may still be valid but should initially use reduced size until the stress cluster fades.
+- This is a broad crash/regime rule, not a fine indicator threshold.
+
+Rule tested:
+- Count portfolio-level ATR stops over a recent trading-day lookback.
+- If there are enough recent ATR stops, multiply all new-buy target values by a coarse scale.
+- Existing positions and sell rules are unchanged.
+
+Training sweep:
+- Baseline: +113.44% return, +28.84% annualized return, 6.94% max drawdown, Sharpe 2.049, Sortino 3.201.
+- 5-day lookback, 2 stops, scale 0.50: +103.52%, 6.64% max drawdown, Sharpe 2.002.
+- 5-day lookback, 2 stops, scale 0.75: +108.55%, 6.79% max drawdown, Sharpe 2.032.
+- 5-day lookback, 3 stops: identical to baseline.
+- 10-day lookback, 2 stops, scale 0.50: +102.12%, 6.29% max drawdown, Sharpe 2.000.
+- 10-day lookback, 2 stops, scale 0.75: +107.93%, 6.62% max drawdown, Sharpe 2.033.
+- 10-day lookback, 3 stops, scale 0.50: +113.21%, 6.64% max drawdown, Sharpe 2.055.
+- 10-day lookback, 3 stops, scale 0.75: +113.31%, 6.79% max drawdown, Sharpe 2.053.
+- 15-day lookback, 2 stops, scale 0.50: +105.78%, 5.95% max drawdown, Sharpe 2.076.
+- 15-day lookback, 2 stops, scale 0.75: +109.50%, 6.11% max drawdown, Sharpe 2.071.
+- 15-day lookback, 3 stops, scale 0.50: +117.10%, 6.53% max drawdown, Sharpe 2.111, Sortino 3.319.
+- 15-day lookback, 3 stops, scale 0.75: +115.06%, 6.51% max drawdown, Sharpe 2.082.
+
+Candidate selected for JoinQuant training confirmation:
+- `portfolio_atr_stress_lookback_days=15`
+- `portfolio_atr_stress_min_stops=3`
+- `portfolio_atr_stress_buy_scale=0.50`
+
+Reason:
+- It is the best local training balance among the coarse structural candidates: higher return, lower drawdown, higher Sharpe and Sortino than the `v0.3.1` local baseline.
+- The parameters are broad and interpretable: about three trading weeks, three portfolio-level stop events, and a half-size risk-control response.
+- The rule only affects new buys under clustered stop stress; it does not change indicator scores, sell thresholds, ATR stop math, or ETF pool.
+
+Overfitting risk:
+- Medium. This candidate was selected from a small training-only sweep, and it directly addresses the known 2020 drawdown interval.
+- It must be confirmed in JoinQuant over 2019-2021 before any adoption and later tested on reserved validation windows after the rule set is frozen.
+
+Can this result be used to change rules? candidate only
+Reason: Local training replay supports the structure, but JoinQuant remains the performance authority. The candidate file is ready for JoinQuant 2019-2021 confirmation; it is not adopted into the official mainline.
