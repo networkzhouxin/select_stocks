@@ -1633,3 +1633,116 @@ Pass/fail/hold judgment:
 
 Next allowed action:
 - Run official `v0.3.1` and ATR-stress candidate over the stress validation window 2015-01-01 to 2018-12-31, using the same frozen protocol.
+
+### Stress Reserved Validation: Official v0.3.1 Mainline
+
+Version: `cross-v0.3.1`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Platform: JoinQuant
+Validation period: 2015-01-01 to 2018-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: stress reserved validation
+
+Important protocol note:
+- This stress window was reserved before inspection.
+- This result must not be used to tune thresholds, add indicators, remove ETFs, or search for a new validation-fitting variant.
+
+JoinQuant headline result:
+- Strategy return: +23.58%.
+- Annualized return: +5.58%.
+- Excess return: +45.05%.
+- Benchmark return: -14.80%.
+- Max drawdown: 7.49%.
+- Max drawdown interval: 2016-07-29 to 2016-11-09.
+- Sharpe ratio: 0.192.
+- Sortino ratio: 0.256.
+- Win rate: 0.443.
+- Profit/loss ratio: 1.660.
+- Alpha: 0.023.
+- Beta: 0.092.
+- Information ratio: 0.393.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 123 `[buy]` lines and 124 `[sell]` lines.
+- Shared transaction export contained 247 rows: 123 buys and 124 sells.
+- Transaction status: 245 fully filled rows and 2 canceled rows.
+- The 2 canceled rows were `159928.XSHE` zero-share sell cancellations on 2016-08-03 and 2017-03-09; both were followed by normal sells on the next trading day.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 4, matching the two zero-volume/canceled-order events above.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+- Traded expected symbols in this older window: `159928`, `159915`, `518880`, `513500`, `513100`, `512100`, and `513050`. `513880` and `159985` did not trade in this window.
+
+Interpretation:
+- Official `v0.3.1` passes the stress validation operationally: no runtime errors, no removed-symbol leakage, and warnings are explained by real zero-volume canceled sells.
+- The strategy produced positive absolute return while the benchmark was negative, which supports cross-asset defensive behavior in the 2015-2018 market regime.
+- Risk-adjusted metrics are weaker than later windows, but the max drawdown remained controlled at 7.49%.
+
+Pass/fail/hold judgment:
+- Official `cross-v0.3.1` passes the stress reserved validation as a robust baseline.
+- No rule changes are allowed from this result alone.
+
+### Stress Reserved Validation: ATR-Stress Candidate
+
+Version: `cross-v0.3.1-atr-stress-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Platform: JoinQuant
+Validation period: 2015-01-01 to 2018-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: stress reserved validation for risk-control candidate
+
+Important protocol note:
+- This result is compared only against the already recorded official `cross-v0.3.1` stress validation result.
+- No threshold, ETF-pool, or indicator change may be made from this validation result.
+
+JoinQuant headline result:
+- Strategy return: +23.58%.
+- Annualized return: +5.58%.
+- Excess return: +45.05%.
+- Benchmark return: -14.80%.
+- Max drawdown: 7.49%.
+- Max drawdown interval: 2016-07-29 to 2016-11-09.
+- Sharpe ratio: 0.192.
+- Sortino ratio: 0.256.
+- Win rate: 0.443.
+- Profit/loss ratio: 1.660.
+- Alpha: 0.023.
+- Beta: 0.092.
+- Information ratio: 0.393.
+
+Comparison to official `cross-v0.3.1` stress validation:
+- Official `cross-v0.3.1`: +23.58% return, +5.58% annualized return, 7.49% max drawdown, Sharpe 0.192, Sortino 0.256, win rate 0.443, profit/loss ratio 1.660.
+- ATR-stress candidate: identical headline metrics.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1-atr-stress-candidate]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 123 `[buy]` lines and 124 `[sell]` lines.
+- The official and candidate logs are not byte-identical because the version label differs and the candidate buy logs include the `stress` field.
+- Parsed buy/sell event sequence is identical between official and candidate logs.
+- Shared transaction export contained 247 rows: 123 buys and 124 sells.
+- Transaction status: 245 fully filled rows and 2 canceled rows.
+- The 2 canceled rows were `159928.XSHE` zero-share sell cancellations on 2016-08-03 and 2017-03-09; both were followed by normal sells on the next trading day.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 4, matching the two zero-volume/canceled-order events above.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+
+ATR-stress trigger audit:
+- Buy logs with explicit stress field: 123.
+- `stress=1.00`: 123 buys.
+- `stress=0.50`: 0 buys.
+
+Interpretation:
+- The ATR-stress candidate produced the identical stress-window trading path as official `v0.3.1` because the stress rule did not trigger.
+- This is favorable for side-effect control: the rule did not harm the 2015-2018 stress window.
+- This result does not add evidence that the rule improves this older stress window, because it was inactive.
+- One shared transaction export is sufficient evidence for both stress-window runs because the parsed buy/sell event sequence is identical and the transaction row counts, side counts, code distribution, and canceled-order events match the logs.
+
+Pass/fail/hold judgment:
+- ATR-stress candidate passes the stress reserved validation as harmless/inactive.
+- Across recorded windows, the candidate improved training and 2022-2023 slightly, was inactive in 2024-2026, and was inactive in 2015-2018.
+- It remains a viable risk-control candidate, but the low trigger count means final adoption should be decided only after completing the early out-of-sample supplement and summarizing all frozen evidence.
+
+Next allowed action:
+- Run official `v0.3.1` and ATR-stress candidate over the early out-of-sample supplement 2010-01-01 to 2014-12-31, then prepare a frozen evidence summary.
