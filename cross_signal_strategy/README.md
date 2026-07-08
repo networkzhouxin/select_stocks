@@ -23,6 +23,11 @@ Use this sequence and do not skip ahead during development:
 5. Early out-of-sample supplement: 2010-01-01 to 2014-12-31.
 6. Final summary only after rule freeze: 2015-01-01 to latest available date.
 
+Before running any reserved validation window, follow the frozen protocol in
+`docs/validation_protocol.md`. Validation results may be recorded and used for
+pass/fail/adoption judgment, but must not be used to tune thresholds, add
+indicators, remove ETFs, or search for a new validation-fitting variant.
+
 ## Research Rules
 
 - Use JoinQuant as the authority for performance validation.
@@ -61,4 +66,5 @@ These are starting defaults, not optimized parameters.
 - `docs/backtest_notes.md`: structured backtest result log.
 - `docs/decisions.md`: why each rule was added, rejected, or frozen.
 - `docs/failed_experiments.md`: failed ideas and why they should not be repeated casually.
+- `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
 - `smart_trade_joinquant_cross_signal_etf.py`: JoinQuant strategy file, to be created in this folder after the design is approved.
