@@ -1519,3 +1519,56 @@ Pass/fail/hold judgment:
 
 Next allowed action:
 - Run official `v0.3.1` and ATR-stress candidate over 2024-01-01 to the latest available date, using the same frozen protocol.
+
+### Second Reserved Validation: Official v0.3.1 Mainline
+
+Version: `cross-v0.3.1`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Platform: JoinQuant
+Validation period: 2024-01-01 to 2026-07-08
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: recent-market reserved validation
+
+Important protocol note:
+- This result is recorded after the first 2022-2023 validation pair.
+- This result must not be used to tune thresholds, add indicators, remove ETFs, or search for a new validation-fitting variant.
+
+JoinQuant headline result:
+- Strategy return: +56.99%.
+- Annualized return: +20.41%.
+- Excess return: +13.27%.
+- Benchmark return: +38.60%.
+- Max drawdown: 10.65%.
+- Max drawdown interval: 2025-11-03 to 2026-07-08.
+- Sharpe ratio: 1.276.
+- Sortino ratio: 1.800.
+- Win rate: 0.506.
+- Profit/loss ratio: 2.786.
+- Alpha: 0.132.
+- Beta: 0.313.
+- Information ratio: 0.352.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 78 `[buy]` lines and 77 `[sell]` lines.
+- Transaction export contained 155 rows: 78 buys and 77 sells.
+- Transaction status: 155 fully filled rows, 0 canceled/rejected rows.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 0.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+- Expected 9-symbol pool check: all expected symbols traded at least once; no unexpected symbols appeared in the transaction export.
+
+Interpretation:
+- Official `v0.3.1` passes the recent-market validation operationally and financially.
+- Performance is meaningfully positive in a rising but volatile recent market: +56.99% strategy return versus +38.60% benchmark return.
+- Risk-adjusted metrics are stronger than the 2022-2023 validation window and remain weaker than the 2019-2021 training window, which is a reasonable out-of-sample pattern.
+- The max drawdown of 10.65% is lower than the 2022-2023 validation drawdown and within the observed cross-signal risk range.
+
+Pass/fail/hold judgment:
+- Official `cross-v0.3.1` passes the second reserved validation window.
+- The official mainline now has two positive reserved validation periods after the 2019-2021 training window.
+- No rule changes are allowed from this result alone.
+
+Next allowed action:
+- Complete the same transaction-level record for the ATR-stress candidate over 2024-01-01 to 2026-07-08, then compare under the frozen validation protocol.
