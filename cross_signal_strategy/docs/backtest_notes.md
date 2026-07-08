@@ -1054,3 +1054,45 @@ Interpretation:
 
 Can this result be used to change rules? diagnostic only
 Reason: The diagnostic reveals a real weakness but does not include the portfolio opportunity cost of holding instead of rotating. Rule changes require full-path experiments.
+
+### ETF Attribution Diagnostics
+
+Version: cross-signal after `a_share_zero_volume_buy_scale=0.50`
+Code file: `cross_signal_strategy/attribution_diagnostics.py`
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only attribution diagnosis
+Initial capital: 20000
+
+Purpose:
+- Identify which ETFs are return engines and which ETFs are drag sources under the current rule set.
+- Measure closed-trade PnL, win rate, profit/loss ratio, average holding days, ATR-stop rate, and signal-sell rate by ETF.
+- Use this as evidence for cautious ETF-pool experiments, not as standalone proof to delete symbols.
+
+Training attribution by realized PnL:
+- `159915`: 9 trades, PnL +5935.9, win rate 66.7%, P/L 13.563, average hold 21.9 trading days.
+- `513100`: 11 trades, PnL +5280.6, win rate 54.5%, P/L 7.232, average hold 19.5.
+- `513050`: 5 trades, PnL +2942.9, win rate 60.0%, P/L 8.256, average hold 27.0.
+- `513500`: 13 trades, PnL +2487.6, win rate 69.2%, P/L 4.435, average hold 19.8.
+- `159928`: 15 trades, PnL +1666.4, win rate 46.7%, P/L 2.148, average hold 13.5.
+- `513880`: 5 trades, PnL +1488.4, win rate 60.0%, P/L 9.409, average hold 23.4.
+- `518880`: 11 trades, PnL +1252.5, win rate 72.7%, P/L 2.234, average hold 20.2.
+- `159985`: 9 trades, PnL +883.6, win rate 33.3%, P/L 1.485, average hold 13.9.
+- `512100`: 7 trades, PnL +573.8, win rate 57.1%, P/L 1.589, average hold 15.4.
+- `510300`: 6 trades, PnL +265.1, win rate 50.0%, P/L 1.318, average hold 11.2.
+- `159920`: 4 trades, PnL -190.4, win rate 25.0%, P/L 0.694, average hold 13.2.
+- `510880`: 6 trades, PnL -822.0, win rate 16.7%, P/L 0.038, average hold 10.0.
+
+Interpretation:
+- Main engines are `159915`, `513100`, `513050`, and `513500`.
+- `510880` and `159920` are the clearest drag symbols in the 2019-2021 training window.
+- `510300` is weak but not strongly negative; removing it is a larger structural choice because it is the benchmark-like A-share core.
+
+ETF-pool training experiments:
+- Baseline pool: return +109.19%, annualized +27.98%, max drawdown 7.86%, Sharpe 1.995, Sortino 3.113.
+- Remove `510880`: return +105.88%, max drawdown 8.56%, Sharpe 1.939. Rejected.
+- Remove `159920`: return +111.13%, max drawdown 7.40%, Sharpe 2.029. Candidate but small improvement.
+- Remove `510880` and `159920`: return +108.13%, max drawdown 8.03%, Sharpe 1.978. Rejected.
+- Remove `510300`, `510880`, and `159920`: return +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Candidate only.
+
+Can this result be used to change rules? candidate only
+Reason: ETF-pool deletion is highly exposed to training-window selection bias. The `510300/510880/159920` removal candidate improves local training return and drawdown, but it should be confirmed in JoinQuant training before adoption and must later face reserved validation.

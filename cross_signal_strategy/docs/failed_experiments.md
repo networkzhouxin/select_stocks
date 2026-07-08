@@ -235,3 +235,13 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: Sell-fly exists, but normal signal sells also free capital for better opportunities. Weakening or removing them reduces churn and sometimes drawdown, but the opportunity cost is larger than the saved sell-fly damage. The current sell structure remains the best full-path training result.
 Can it be revisited? yes
 Conditions for revisiting: Only with a targeted rule that identifies sell-fly states while preserving capital recycling. Do not globally remove signal sells or raise the sell threshold in the current framework.
+
+Date: 2026-07-08
+Version: cross-signal after `a_share_zero_volume_buy_scale=0.50`
+Experiment: ETF-pool deletion based on training attribution: remove `510880`, remove `159920`, remove both, or remove `510300/510880/159920`.
+Hypothesis: ETF-level attribution showed `510880` and `159920` as drag symbols and `510300` as weak contributor; removing weak symbols might improve capital allocation.
+Training result: Baseline returned +109.19%, max drawdown 7.86%, Sharpe 1.995. Removing `510880` returned +105.88%, max drawdown 8.56%, Sharpe 1.939. Removing `159920` returned +111.13%, max drawdown 7.40%, Sharpe 2.029. Removing `510880` and `159920` returned +108.13%, max drawdown 8.03%, Sharpe 1.978. Removing `510300/510880/159920` returned +113.44%, max drawdown 6.94%, Sharpe 2.049.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it was not adopted yet: The best local result comes from deleting symbols after observing training attribution, which has high selection-bias risk. It is a candidate for JoinQuant training confirmation, not an adopted strategy rule.
+Can it be revisited? yes
+Conditions for revisiting: Run the candidate in JoinQuant over the 2019-2021 training window first. If JoinQuant confirms improvement, document it as a training-confirmed candidate before any reserved validation.
