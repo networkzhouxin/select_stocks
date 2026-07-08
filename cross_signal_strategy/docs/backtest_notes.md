@@ -1344,3 +1344,60 @@ Overfitting risk:
 
 Can this result be used to change rules? candidate only
 Reason: Local training replay supports the structure, but JoinQuant remains the performance authority. The candidate file is ready for JoinQuant 2019-2021 confirmation; it is not adopted into the official mainline.
+
+### JoinQuant Training Confirmation For ATR-Stress Candidate
+
+Version: `cross-v0.3.1-atr-stress-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Platform: JoinQuant
+Backtest period: 2019-01-01 to 2021-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: training-window candidate confirmation
+
+JoinQuant headline result:
+- Strategy return: +122.47%.
+- Annualized return: +31.50%.
+- Excess return: +35.57%.
+- Benchmark return: +64.10%.
+- Max drawdown: 6.38%.
+- Sharpe ratio: 2.160.
+- Sortino ratio: 3.057.
+- Win rate: 0.552.
+- Profit/loss ratio: 4.466.
+- Alpha: 0.225.
+- Beta: 0.342.
+- Information ratio: 0.759.
+
+Comparison to official `cross-v0.3.1` JoinQuant training result:
+- Official `cross-v0.3.1`: +120.42% return, +31.08% annualized return, 6.82% max drawdown, Sharpe 2.097, Sortino 2.960, win rate 0.552, profit/loss ratio 4.263.
+- ATR-stress candidate: +122.47% return, +31.50% annualized return, 6.38% max drawdown, Sharpe 2.160, Sortino 3.057, win rate 0.552, profit/loss ratio 4.466.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1-atr-stress-candidate]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 99 `[buy]` lines and 97 `[sell]` lines.
+- Transaction export contained 196 rows: 99 buys and 97 sells.
+- Transaction status: 195 fully filled rows, 1 canceled row.
+- The only canceled row was `2019-12-12 513880.XSHG` with a `-0` share sell at `09:35`, matching the known sparse-liquidity execution issue.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume market-order cancellation.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+- Expected 9-symbol pool check: all expected symbols traded at least once; no unexpected symbols appeared in the transaction export.
+
+ATR-stress trigger audit:
+- Buy logs with explicit stress field: 99.
+- `stress=1.00`: 95 buys.
+- `stress=0.50`: 4 buys.
+- Triggered buys:
+  - 2020-03-03 `159985.XSHE`, target 4578, transaction value 4559.0.
+  - 2020-03-05 `159928.XSHE`, target 2288, transaction value 2179.8.
+  - 2020-03-06 `513050.XSHG`, target 4583, transaction value 4519.8.
+  - 2020-03-16 `159985.XSHE`, target 4513, transaction value 4448.2.
+
+Interpretation:
+- JoinQuant confirms that the ATR-stress candidate improves the official training result across return, annualized return, max drawdown, Sharpe, Sortino, and profit/loss ratio.
+- The improvement comes from only four half-size buys, all clustered in March 2020 during the COVID crash/rebound regime.
+- This concentration makes the rule more explainable as crash-regime risk control, but also materially raises overfitting risk because it mostly repairs one known training-window stress episode.
+
+Can this result be used to change rules? candidate only, do not adopt yet
+Reason: The rule has a professional risk-control rationale and JoinQuant confirms the training improvement, but the trigger audit shows only four clustered training events. Adoption requires reserved-period validation after the rule is explicitly frozen, and should be judged primarily on drawdown control and non-collapse rather than small extra return.
