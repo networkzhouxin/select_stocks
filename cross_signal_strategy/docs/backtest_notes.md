@@ -1193,3 +1193,106 @@ Interpretation:
 
 Can this result be used to change rules? already adopted, confirmation only
 Reason: This run confirms the official strategy file matches the previously confirmed candidate behavior. It adds operational confidence but does not introduce a new rule or parameter.
+
+### v0.3.1 Training Robustness Check
+
+Version: `cross-v0.3.1`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Backtest period: 2019-01-01 to 2021-12-31
+Protocol role: training-only robustness diagnosis
+Data boundary: local diagnostics used only the approved 2019-2021 training data root and 2018 warm-up buffer.
+
+Purpose:
+- Check whether the strong JoinQuant training result is structurally healthy before adding more indicators or changing parameters.
+- Split the result by year, ETF, signal flags, sell reason, transaction friction, and max-drawdown interval.
+- This is not validation; reserved validation periods remain unseen.
+
+Local replay headline result:
+- Local replay return: +113.44%.
+- Annualized return: +28.84%.
+- Max drawdown: 6.94%.
+- Sharpe ratio: 2.049.
+- Sortino ratio: 3.201.
+- Buy/sell count: 100 / 97.
+- Closed-trade win rate: 54.64%.
+- Profit/loss ratio: 3.619.
+- Average exposure: 73.55%.
+- Position-count days: 0 positions 39 days, 1 position 94 days, 2 positions 163 days, 3 positions 434 days.
+
+Yearly decomposition from local replay:
+- 2019: +35.68%, max drawdown 4.67%, 29 buys / 26 sells.
+- 2020: +48.00%, max drawdown 6.94%, 32 buys / 32 sells.
+- 2021: +6.29%, max drawdown 6.50%, 39 buys / 39 sells.
+
+Interpretation:
+- The result is not supported by a single year only. 2019 and 2020 both contribute strongly.
+- 2021 is the weak year: positive but much flatter, with more churn. Future training-only work should inspect 2021-style sideways/noisy markets, but must avoid tuning to a single weak subperiod.
+
+ETF attribution from local closed trades:
+- `513100`: 15 trades, PnL +5829.2, win rate 53.33%, P/L 6.183, average hold 17.67 days.
+- `159915`: 10 trades, PnL +5616.2, win rate 60.00%, P/L 9.844, average hold 20.20 days.
+- `159928`: 16 trades, PnL +3222.9, win rate 50.00%, P/L 5.125, average hold 14.00 days.
+- `513500`: 14 trades, PnL +2387.8, win rate 71.43%, P/L 4.575, average hold 18.79 days.
+- `513050`: 6 trades, PnL +2317.3, win rate 50.00%, P/L 3.510, average hold 23.17 days.
+- `518880`: 10 trades, PnL +1354.2, win rate 80.00%, P/L 2.590, average hold 21.40 days.
+- `513880`: 6 trades, PnL +1249.4, win rate 50.00%, P/L 4.291, average hold 19.67 days.
+- `159985`: 10 trades, PnL +573.4, win rate 30.00%, P/L 1.277, average hold 12.90 days.
+- `512100`: 10 trades, PnL +277.4, win rate 40.00%, P/L 1.216, average hold 14.10 days.
+
+Interpretation:
+- The top return engines are diversified: Nasdaq, ChiNext, consumer, S&P 500, and China internet all contribute.
+- Gold and Nikkei provide smaller but positive diversification.
+- Soymeal and CSI 1000 are weak but still positive in the current 9-ETF pool. They should not be removed based only on this diagnostic because the pool has already been selected from training attribution and further deletion would raise overfitting risk.
+
+Entry-signal flag attribution:
+- RSI6 up through RSI12 appeared in all 97 closed trades and is the core cross trigger.
+- KDJ K/J up appeared in 87 trades, PnL +22792.7, win rate 55.17%.
+- RSI6 up through RSI24 appeared in 95 trades, PnL +22469.1, win rate 54.74%.
+- Near-MA20 location appeared in 96 trades, PnL +22249.0, win rate 54.17%.
+- Non-negative MA20 slope appeared in 73 trades, PnL +21866.3, win rate 58.90%.
+- MA5 > MA10 appeared in 51 trades, PnL +20650.6, win rate 60.78%.
+- Close > MA60 appeared in 85 trades, PnL +18882.1, win rate 52.94%.
+- MA10 > MA20 appeared in 63 trades, PnL +16141.3, win rate 60.32%.
+- BOLL midline upward cross appeared in 58 trades, PnL +13218.3, win rate 56.90%.
+- Volume flags appeared in about half the trades and were positive: `vol5_gt_vol20` 52 trades, PnL +12513.6, win rate 59.62%; `volume_above_vol20_and_up` 55 trades, PnL +11814.1, win rate 58.18%.
+- MACD upward cross appeared in 29 trades, PnL +6177.6, win rate 44.83%.
+- Low-BOLL location (`close_between_boll_lower_mid`) appeared in 12 trades, PnL +1003.4, win rate 33.33%.
+
+Interpretation:
+- The strategy is still genuinely cross-signal driven: RSI/KDJ/MA-location/trend confirmation form the main structure.
+- Volume is helpful as confirmation but not universal; earlier hard volume gates failed, so this supports keeping volume as a soft component rather than a hard filter.
+- MACD and lower-BOLL entries are weaker standalone, but they are not enough evidence for removal because indicator interactions and portfolio opportunity cost matter.
+
+Sell-reason attribution:
+- ATR stops: 28 closed trades, PnL +14181.2, win rate 60.71%.
+- Signal sells: 69 closed trades, PnL +8646.6, win rate 52.17%.
+
+Interpretation:
+- ATR stops are not merely loss exits; they also lock in profitable trend trades.
+- Signal sells remain positive after the 5-day minimum hold and should not be removed globally.
+
+Friction sensitivity from local replay:
+- Base local friction: +113.44% return, +28.84% annualized return, 6.94% max drawdown, Sharpe 2.049.
+- Double commission and double slippage (`commission_rate=0.0006`, `slippage_rate=0.002`): +100.07% return, +26.09% annualized return, 7.27% max drawdown, Sharpe 1.873.
+- Stress friction (`commission_rate=0.0010`, `slippage_rate=0.003`): +85.21% return, +22.87% annualized return, 7.79% max drawdown, Sharpe 1.656.
+
+Interpretation:
+- The strategy is friction-sensitive but does not collapse under materially heavier assumed costs.
+- Trade count is moderate rather than high-frequency, so transaction friction is not the only source of training profitability.
+
+Max-drawdown interval:
+- Local max drawdown interval: 2020-02-13 to 2020-03-19, drawdown 6.94%.
+- This matches the JoinQuant max-drawdown interval directionally and corresponds to the COVID crash/rebound period.
+- Key local orders in the drawdown interval: ATR stops on `513100` at 2020-02-17, `513500` at 2020-02-19, and `518880` at 2020-03-02; new buys in `159985`, `159928`, and `513050`; then ATR/signal exits around 2020-03-10 to 2020-03-12.
+
+Interpretation:
+- The worst drawdown is not caused by a single stale position. It comes from rapid crash-period cross-asset repricing where new reversal entries were attempted before the market fully stabilized.
+- This suggests the next research direction should be crash/regime robustness, not arbitrary indicator threshold tuning.
+
+Recommendation:
+- Treat `cross-v0.3.1` as the current training-period safety point.
+- Do not delete more ETFs or tune narrow thresholds solely from these diagnostics.
+- Reasonable next training-only experiments, if continuing optimization before validation: broad crash-regime risk control, entry pacing after clustered ATR stops, or a coarse market-volatility state filter. These must be tested as structural rules and recorded, not optimized by fine thresholds.
+
+Can this result be used to change rules? diagnostic only
+Reason: The diagnostics identify strengths and weaknesses but do not itself test a new rule. Any follow-up change must be implemented as a separate test-first experiment.
