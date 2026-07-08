@@ -255,3 +255,43 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: Short cooldowns do not touch the realized path, while a one-week cooldown blocks useful re-entries and materially reduces return without improving drawdown. The max-drawdown problem is not solved by a simple per-ETF post-ATR cooldown.
 Can it be revisited? yes
 Conditions for revisiting: Only as part of a broader independently defined crash/regime model. Do not adopt a standalone ATR-stop cooldown in the current framework.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1`
+Experiment: Buy-entry confirmation sizing: weak confirmation half-size, weak confirmation 40% size, ultra-weak confirmation skip, and three-confirmation half-size.
+Hypothesis: Training attribution showed better standalone quality when entries had stronger trend or volume confirmation. Scaling down entries without trend/volume confirmation might keep the cross-signal reversal core while reducing false-reversal damage.
+Training result: Baseline returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Weak confirmation half-size returned +107.95%, max drawdown 6.96%, Sharpe 2.035. Weak confirmation 40% size returned +107.13%, max drawdown 6.98%, Sharpe 2.029. Ultra-weak skip returned +90.19%, max drawdown 6.98%, Sharpe 1.827. Three-confirmation half-size returned +78.67%, max drawdown 5.62%, Sharpe 1.963.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Weak-confirmation entries include enough large winners that simple sizing cuts reduce return more than they reduce drawdown. The drawdown improvement is too small or absent, while opportunity cost is large.
+Can it be revisited? yes
+Conditions for revisiting: Only inside a broader regime-aware model that can identify when weak confirmation is genuinely dangerous. Do not use trend/volume weakness alone as a global position-size cut.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1`
+Experiment: Buy-candidate ranking by confirmation strength: confirmation-first ranking, trend-first ranking, volume/trend-first ranking, and buy+trend+volume quality-sum ranking.
+Hypothesis: If trend and volume confirmation improve entry quality, they might be better used to choose among simultaneous candidates rather than to cut position size after selection.
+Training result: Baseline returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Confirmation-first returned +96.19%, max drawdown 6.99%, Sharpe 1.877. Trend-first returned +94.31%, max drawdown 6.98%, Sharpe 1.813. Volume/trend-first returned +89.15%, max drawdown 6.98%, Sharpe 1.782. Quality-sum returned +98.92%, max drawdown 6.93%, Sharpe 1.920.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Confirmation strength is useful context but not a better primary ranking key than the current cross-signal score. Ranking by confirmation displaces high-payoff reversal opportunities and lowers both return and risk-adjusted quality.
+Can it be revisited? yes
+Conditions for revisiting: Only after the buy-score formula is redesigned from first principles. Do not reorder candidates by trend or volume confirmation in the current framework.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1`
+Experiment: Extend normal signal-sell minimum hold from 5 trading days to 7, 10, and 15 trading days. ATR stops remain unconditional.
+Hypothesis: Post-sell diagnostics showed normal `signal_sell` exits were often followed by positive 3/5/10-day returns, so some signal sells may be too early. A longer minimum hold might reduce sell-fly behavior.
+Training result: Baseline 5-day minimum hold returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. 7 days returned +108.92%, max drawdown 8.14%, Sharpe 1.956. 10 days returned +92.13%, max drawdown 8.87%, Sharpe 1.708. 15 days returned +105.70%, max drawdown 7.95%, Sharpe 1.926.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Sell-fly exists, but delaying all normal signal sells traps capital in mediocre positions and weakens capital recycling. Higher win rate under longer holds did not compensate for lower total return and worse drawdown.
+Can it be revisited? yes
+Conditions for revisiting: Only with a targeted sell-fly detector that preserves capital recycling. Do not globally extend the normal signal-sell minimum hold in the current framework.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1`
+Experiment: Raise normal signal-sell threshold from 30 to 35, 40, and 45.
+Hypothesis: If normal signal sells are too sensitive, a coarser sell threshold might reduce premature exits while ATR stops remain as hard risk control.
+Training result: Baseline sell threshold 30 returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Threshold 35 returned +80.75%, max drawdown 6.18%, Sharpe 1.661. Threshold 40 returned +69.88%, max drawdown 6.47%, Sharpe 1.520. Threshold 45 returned +87.23%, max drawdown 7.11%, Sharpe 1.699.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The current sell threshold is load-bearing. Raising it reduces churn, but the lost capital recycling is much larger than the saved premature-exit damage.
+Can it be revisited? yes
+Conditions for revisiting: Only if sell-score components are redesigned. Do not raise `sell_threshold` as a standalone optimization.

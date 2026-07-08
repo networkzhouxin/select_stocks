@@ -1860,3 +1860,37 @@ Recommendation:
 
 Detailed summary:
 - See `cross_signal_strategy/docs/validation_summary.md`.
+
+### Training-Only Iteration: Confirmation And Sell-Timing Probes
+
+Version: `cross-v0.3.1`
+Code path: local replay only; no official strategy code changed
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: new training-only research cycle after frozen validation summary
+
+Baseline local replay:
+- Return: +113.44%.
+- Annualized return: +28.84%.
+- Max drawdown: 6.94%.
+- Sharpe: 2.049.
+- Sortino: 3.201.
+- Buy/sell count: 100 buys and 97 sells.
+- Average exposure: 73.6%.
+
+Training diagnostics:
+- `trend_score` and `volume_score` are useful context, but not sufficient standalone decision drivers.
+- Normal `signal_sell` exits are often followed by positive 3/5/10-day returns, but global sell-delay rules still damage capital recycling.
+- ATR stops remain strong contributors and should not be weakened casually.
+
+Experiments tested and rejected:
+- Weak-confirmation buy-size cuts reduced return without improving drawdown enough.
+- Confirmation-first, trend-first, volume/trend-first, and quality-sum buy ranking all underperformed the current buy-score ranking.
+- Extending normal signal-sell minimum hold from 5 to 7/10/15 days underperformed.
+- Raising `sell_threshold` from 30 to 35/40/45 underperformed.
+
+Interpretation:
+- The current buy-score ranking is more load-bearing than simple post-hoc attribution suggests.
+- The next promising research direction is not global confirmation gating or global sell-delay. It should focus on a targeted sell-fly detector or a broader structural redesign that preserves capital recycling.
+
+Can this result be used to change rules? no
+Reason: All tested variants failed on the training window. They are recorded to prevent repeated overfitting searches.
