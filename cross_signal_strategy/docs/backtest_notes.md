@@ -1746,3 +1746,117 @@ Pass/fail/hold judgment:
 
 Next allowed action:
 - Run official `v0.3.1` and ATR-stress candidate over the early out-of-sample supplement 2010-01-01 to 2014-12-31, then prepare a frozen evidence summary.
+
+### Early Out-Of-Sample Supplement: Official v0.3.1 Mainline
+
+Version: `cross-v0.3.1`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Platform: JoinQuant
+Validation period: 2010-01-01 to 2014-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: early out-of-sample supplement with incomplete ETF pool
+
+Important protocol note:
+- This window is not a normal full-pool validation window. Many ETFs in the current pool were not listed or not tradable for much of the period.
+- This result must not be used to tune thresholds, add indicators, remove ETFs, or search for a new validation-fitting variant.
+
+JoinQuant headline result:
+- Strategy return: -0.61%.
+- Annualized return: -0.13%.
+- Excess return: +0.57%.
+- Benchmark return: -1.17%.
+- Max drawdown: 5.36%.
+- Max drawdown interval: 2014-02-24 to 2014-05-16.
+- Sharpe ratio: -0.822.
+- Sortino ratio: -0.709.
+- Win rate: 0.349.
+- Profit/loss ratio: 1.075.
+- Alpha: -0.039.
+- Beta: 0.057.
+- Information ratio: 0.006.
+
+Log checks:
+- Strategy log initialized as `[cross-v0.3.1]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 44 `[buy]` lines and 43 `[sell]` lines.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 0.
+- Removed symbols check: 0 buy logs and 0 sell logs for `510300`, `510880`, or `159920`.
+- First buy log: 2012-03-12 `159915.XSHE`.
+- Last buy log: 2014-12-23 `513500.XSHG`.
+- First sell log: 2012-03-23 `159915.XSHE`.
+- Last sell log: 2014-12-31 `159928.XSHE`.
+- Actual traded symbols from the log: `159915`, `159928`, `513100`, `513500`, and `518880`.
+
+ETF-availability observation:
+- The log had long early stretches with skip summaries such as `paused=9`, `paused=8`, and `paused=4`.
+- This is consistent with an early window where many current-pool ETFs were not yet listed or not usable for signal scoring.
+
+Interpretation:
+- Official `v0.3.1` did not collapse operationally in the early supplement: no runtime errors, no warnings, and no removed-symbol trades.
+- Financial performance was flat/slightly negative, but benchmark-relative return was slightly positive.
+- The result mainly proves that the strategy can sit mostly idle and avoid severe damage when the ETF pool is incomplete. It does not prove the complete-pool strategy is weak.
+
+Can this result be used to change rules? no
+Reason: This is an early supplement with incomplete ETF availability. It is useful for robustness context only, not for parameter, indicator, or pool decisions.
+
+### Early Out-Of-Sample Supplement: ATR-Stress Candidate
+
+Version: `cross-v0.3.1-atr-stress-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Platform: JoinQuant
+Validation period: 2010-01-01 to 2014-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: early out-of-sample supplement with incomplete ETF pool
+
+Important protocol note:
+- The user provided the JoinQuant summary screenshot and confirmed it is identical to the official mainline summary.
+- A separate candidate transaction export was not required because the candidate only changes new-buy sizing when ATR-stress triggers; identical headline summary in this sparse early window is treated as same-path evidence unless contradicted by later transaction details.
+
+JoinQuant headline result:
+- Strategy return: -0.61%.
+- Annualized return: -0.13%.
+- Excess return: +0.57%.
+- Benchmark return: -1.17%.
+- Max drawdown: 5.36%.
+- Max drawdown interval: 2014-02-24 to 2014-05-16.
+- Sharpe ratio: -0.822.
+- Sortino ratio: -0.709.
+- Win rate: 0.349.
+- Profit/loss ratio: 1.075.
+- Alpha: -0.039.
+- Beta: 0.057.
+- Information ratio: 0.006.
+
+Comparison to official `cross-v0.3.1` early supplement:
+- Headline metrics are identical to the official mainline.
+- The most likely explanation is that the ATR-stress rule did not trigger in this sparse early window.
+
+Interpretation:
+- ATR-stress did not provide additional benefit in 2010-2014, but it also did not harm the result.
+- Because many pool ETFs were unavailable, this window should not be used as a strong argument for or against the candidate.
+
+Can this result be used to change rules? no
+Reason: This is an early supplement and the candidate was effectively inactive. It supports side-effect control, not parameter or rule tuning.
+
+### Frozen Cross-Period Summary
+
+Version: official `cross-v0.3.1` and `cross-v0.3.1-atr-stress-candidate`
+Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Protocol role: frozen evidence summary after training and reserved validation windows
+
+Summary table:
+- 2019-2021 training: official +120.42%, 6.82% max drawdown, Sharpe 2.097; ATR-stress +122.47%, 6.38% max drawdown, Sharpe 2.160.
+- 2022-2023 validation: official +15.49%, 13.38% max drawdown, Sharpe 0.346; ATR-stress +16.01%, 12.94% max drawdown, Sharpe 0.373.
+- 2024-2026 validation: official +56.99%, 10.65% max drawdown, Sharpe 1.276; ATR-stress identical and inactive.
+- 2015-2018 stress validation: official +23.58%, 7.49% max drawdown, Sharpe 0.192; ATR-stress identical and inactive.
+- 2010-2014 early supplement: official -0.61%, 5.36% max drawdown, Sharpe -0.822; ATR-stress identical by summary and effectively inactive.
+
+Recommendation:
+- Keep official `cross-v0.3.1` as the cross-signal baseline.
+- Keep ATR-stress as a valid low-frequency risk-control candidate, but do not automatically merge it from the current evidence alone. It improved the windows where it triggered and did not harm inactive windows, but the trigger count is small and clustered.
+- Do not tune or add indicators from validation results. Any next improvement should start as a new 2019-2021 training-only experiment with a pre-written hypothesis.
+
+Detailed summary:
+- See `cross_signal_strategy/docs/validation_summary.md`.
