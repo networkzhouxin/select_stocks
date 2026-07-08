@@ -66,6 +66,36 @@ def test_diagnostic_planner_captures_entry_score_snapshot_before_later_scores_ch
     assert planner.entry_score_snapshots[("2019-01-02", "AAA")]["buy_score"] == 70
 
 
+def test_diagnostic_planner_captures_exit_score_snapshot_for_signal_sells():
+    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf as strategy
+    from cross_signal_strategy.trade_diagnostics import DiagnosticOrderPlanner
+
+    sell_score = candidate("AAA", buy_score=40)
+    sell_score.update({
+        "sell_score": 34,
+        "close_below_ma20": True,
+    })
+    adapter = FakeSignalAdapter({"AAA": sell_score})
+    params = strategy.get_default_params()
+    params["min_signal_hold_days"] = 1
+    planner = DiagnosticOrderPlanner(
+        adapter,
+        etf_pool=["AAA"],
+        params=params,
+        trade_dates=["2019-01-02", "2019-01-08"],
+    )
+    planner.buy_dates["AAA"] = "2019-01-02"
+    broker = LocalBroker(initial_cash=20000.0)
+    broker.positions["AAA"] = Position(code="AAA", amount=100, avg_cost=10.0)
+
+    orders = planner.plan_orders("2019-01-08", "2019-01-07", broker, current_prices={"AAA": 9.5})
+
+    assert orders[0]["reason"] == "signal_sell"
+    assert planner.exit_score_snapshots[("2019-01-08", "AAA")]["sell_score"] == 34
+    assert planner.exit_score_snapshots[("2019-01-08", "AAA")]["close_below_ma20"] is True
+
+
 def test_closed_trade_diagnostics_use_entry_score_snapshot():
     from cross_signal_strategy.local_backtester import DayResult, OrderResult
     from cross_signal_strategy.trade_diagnostics import build_closed_trade_diagnostics
@@ -94,6 +124,7 @@ def test_closed_trade_diagnostics_use_entry_score_snapshot():
     trades = build_closed_trade_diagnostics(
         results,
         entry_score_snapshots={("2019-01-02", "AAA"): {"buy_score": 70, "volume_score": 6}},
+        exit_score_snapshots={("2019-01-08", "AAA"): {"sell_score": 34, "close_below_ma20": True}},
     )
 
     assert len(trades) == 1
@@ -101,3 +132,5 @@ def test_closed_trade_diagnostics_use_entry_score_snapshot():
     assert trades[0].return_pct == pytest.approx(20.0)
     assert trades[0].entry_score["buy_score"] == 70
     assert trades[0].entry_score["volume_score"] == 6
+    assert trades[0].exit_score["sell_score"] == 34
+    assert trades[0].exit_score["close_below_ma20"] is True

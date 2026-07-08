@@ -34,6 +34,30 @@ class ForwardReturnSummary:
     positive_rate: float | None
 
 
+@dataclass(frozen=True)
+class SellFlyDiagnostic:
+    code: str
+    sell_date: str
+    sell_reason: str
+    horizon: int
+    forward_return: float | None
+    missed_pnl: float | None
+    is_sell_fly: bool
+    exit_features: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class SellFlyFeatureSummary:
+    count: int
+    sell_fly_count: int
+    average_forward_return: float | None
+    average_missed_pnl: float | None
+
+    @property
+    def sell_fly_rate(self) -> float:
+        return self.sell_fly_count / self.count if self.count else 0.0
+
+
 def post_sell_returns(
     trade: ClosedTradeDiagnostic,
     loader,
@@ -93,6 +117,69 @@ def summarize_post_sell_returns(
                 mean_return=sum(values) / len(values),
                 positive_rate=sum(1 for value in values if value > 0) / len(values),
             )
+    return summary
+
+
+def sell_fly_diagnostic(
+    trade: ClosedTradeDiagnostic,
+    loader,
+    horizon: int = 5,
+    min_forward_return: float = 0.03,
+) -> SellFlyDiagnostic:
+    post_sell = post_sell_returns(trade, loader, horizons=(horizon,))
+    forward_return = post_sell.forward_returns.get(int(horizon))
+    missed_pnl = None
+    if forward_return is not None:
+        missed_pnl = float(trade.amount) * float(trade.sell_price) * float(forward_return)
+    return SellFlyDiagnostic(
+        code=str(trade.code).split(".")[0],
+        sell_date=str(trade.sell_date),
+        sell_reason=str(trade.sell_reason),
+        horizon=int(horizon),
+        forward_return=forward_return,
+        missed_pnl=missed_pnl,
+        is_sell_fly=(
+            str(trade.sell_reason) == "signal_sell" and
+            forward_return is not None and
+            forward_return >= float(min_forward_return)
+        ),
+        exit_features=dict(getattr(trade, "exit_score", {}) or {}),
+    )
+
+
+def summarize_sell_fly_by_feature(
+    diagnostics: Iterable[SellFlyDiagnostic],
+    feature_name: str,
+) -> Dict[object, SellFlyFeatureSummary]:
+    grouped: Dict[object, list[SellFlyDiagnostic]] = {}
+    for diagnostic in diagnostics:
+        key = diagnostic.exit_features.get(feature_name)
+        grouped.setdefault(key, []).append(diagnostic)
+
+    summary: Dict[object, SellFlyFeatureSummary] = {}
+    for key, items in grouped.items():
+        forward_values = [
+            float(item.forward_return)
+            for item in items
+            if item.forward_return is not None
+        ]
+        missed_values = [
+            float(item.missed_pnl)
+            for item in items
+            if item.missed_pnl is not None
+        ]
+        summary[key] = SellFlyFeatureSummary(
+            count=len(items),
+            sell_fly_count=sum(1 for item in items if item.is_sell_fly),
+            average_forward_return=(
+                sum(forward_values) / len(forward_values)
+                if forward_values else None
+            ),
+            average_missed_pnl=(
+                sum(missed_values) / len(missed_values)
+                if missed_values else None
+            ),
+        )
     return summary
 
 

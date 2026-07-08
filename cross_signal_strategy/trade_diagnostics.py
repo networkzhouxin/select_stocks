@@ -23,16 +23,19 @@ class DiagnosticOrderPlanner(LocalCrossSignalOrderPlanner):
     """Planner variant that freezes buy-score snapshots at order-planning time."""
 
     entry_score_snapshots: Dict[ScoreKey, dict] = field(default_factory=dict)
+    exit_score_snapshots: Dict[ScoreKey, dict] = field(default_factory=dict)
 
     def plan_orders(self, current_date, previous_date, broker, current_prices=None):
         orders = super().plan_orders(current_date, previous_date, broker, current_prices=current_prices)
         for order in orders:
-            if order.get("reason") != "buy_signal":
-                continue
             code = str(order["code"]).split(".")[0]
             score = self.last_scores.get(code)
-            if score is not None:
+            if score is None:
+                continue
+            if order.get("reason") == "buy_signal":
                 self.entry_score_snapshots[(str(current_date), code)] = dict(score)
+            elif order.get("reason") in {"signal_sell", "atr_stop"}:
+                self.exit_score_snapshots[(str(current_date), code)] = dict(score)
         return orders
 
 
@@ -48,6 +51,7 @@ class ClosedTradeDiagnostic:
     pnl: float
     return_pct: float
     entry_score: Mapping[str, object] = field(default_factory=dict)
+    exit_score: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,7 +66,9 @@ class _OpenTrade:
 def build_closed_trade_diagnostics(
     results: Iterable[object],
     entry_score_snapshots: Mapping[ScoreKey, Mapping[str, object]],
+    exit_score_snapshots: Mapping[ScoreKey, Mapping[str, object]] | None = None,
 ) -> List[ClosedTradeDiagnostic]:
+    exit_score_snapshots = exit_score_snapshots or {}
     open_trades: Dict[str, _OpenTrade] = {}
     closed: List[ClosedTradeDiagnostic] = []
 
@@ -101,6 +107,7 @@ def build_closed_trade_diagnostics(
                         pnl=pnl,
                         return_pct=return_pct,
                         entry_score=open_trade.entry_score,
+                        exit_score=dict(exit_score_snapshots.get((day_date, code), {})),
                     )
                 )
     return closed
@@ -116,4 +123,8 @@ def run_training_trade_diagnostics(
     planner = DiagnosticOrderPlanner(adapter, trade_dates=trade_dates)
     engine = LocalBacktestEngine(loader=loader, initial_cash=initial_cash)
     results = engine.run(trade_dates, planner.plan_orders)
-    return build_closed_trade_diagnostics(results, planner.entry_score_snapshots)
+    return build_closed_trade_diagnostics(
+        results,
+        planner.entry_score_snapshots,
+        planner.exit_score_snapshots,
+    )

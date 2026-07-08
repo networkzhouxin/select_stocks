@@ -1894,3 +1894,44 @@ Interpretation:
 
 Can this result be used to change rules? no
 Reason: All tested variants failed on the training window. They are recorded to prevent repeated overfitting searches.
+
+### Training-Only Iteration: Sell-Fly Diagnostics And ATR Multiplier Probe
+
+Version: `cross-v0.3.1`
+Code path: local replay diagnostics plus temporary ATR-2.0 JoinQuant candidate file
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only research cycle; no validation-period influence
+
+Diagnostic tooling added:
+- `trade_diagnostics` now records exit-score snapshots for closed trades.
+- `sell_diagnostics` can measure sell-fly events by forward return after signal sells and summarize them by exit-time features.
+- Tests were added before implementation.
+
+Sell-fly diagnostic observations:
+- There were 69 local `signal_sell` exits in the training replay.
+- At 5 trading days after signal sells, 68 had forward data, 14 met the `>=3%` sell-fly diagnostic threshold, average forward return was +0.70%, and estimated missed upside on flagged cases was about 7511.6 local currency units.
+- Sell-fly was more common when exit-time `volume_score` and trend context remained constructive, but simple protection rules based on those features underperformed.
+
+Rejected sell-fly protection variants:
+- Exit-time volume/trend/buy-score protections all reduced return and Sharpe.
+- Replacement-aware protection when no eligible replacement existed was close but not compelling: +113.93% return versus +113.44% baseline, same 6.94% max drawdown, but lower Sharpe 2.026 versus 2.049 and far fewer trades.
+
+ATR multiplier probe:
+- `trailing_atr_mult=2.0`: +115.87% return, +29.33% annualized return, 6.97% max drawdown, Sharpe 2.076, Sortino 3.249.
+- `trailing_atr_mult=2.5` baseline: +113.44% return, +28.84% annualized return, 6.94% max drawdown, Sharpe 2.049, Sortino 3.201.
+- `trailing_atr_mult=3.0`: +113.27% return, 7.67% max drawdown, Sharpe 2.041.
+- `trailing_atr_mult=3.5`: +96.60% return, 9.23% max drawdown, Sharpe 1.824.
+- `trailing_atr_mult=1.5` produced the same local path as 2.0 because the stop-floor clamp still dominated many stop calculations.
+
+Candidate created:
+- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr2_candidate.py`
+- Version: `cross-v0.3.1-atr2-candidate`
+- Only intended strategy change versus official mainline: `trailing_atr_mult=2.0` instead of `2.5`.
+
+Interpretation:
+- Global sell-fly protection is not ready. It is too easy to protect weak positions and damage capital recycling.
+- ATR 2.0 is the first new training-only candidate from this cycle with a small but coherent local improvement. The rationale is broad and professional: slightly tighter trailing protection after an up-cross entry may preserve gains without changing buy signals.
+- The improvement is modest and must be confirmed in JoinQuant 2019-2021 before any adoption or reserved validation.
+
+Can this result be used to change rules? candidate only
+Reason: Local training replay supports preparing a JoinQuant training candidate, but JoinQuant remains the authority. Do not merge ATR 2.0 into the official mainline unless JoinQuant training confirms the improvement.

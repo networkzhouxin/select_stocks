@@ -295,3 +295,23 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: The current sell threshold is load-bearing. Raising it reduces churn, but the lost capital recycling is much larger than the saved premature-exit damage.
 Can it be revisited? yes
 Conditions for revisiting: Only if sell-score components are redesigned. Do not raise `sell_threshold` as a standalone optimization.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1`
+Experiment: Targeted sell-fly protection using sell-time volume/trend confirmation. Variants protected normal `signal_sell` when exit-time `volume_score >= 4` and `trend_score >= 14`, `volume_score >= 4` and `buy_score >= 35`, `volume_score >= 4` and `sell_risk_score >= 10`, `trend_score >= 14` and `buy_score >= 35`, all three confirmations, or high sell score with confirmation. ATR stops remained unconditional.
+Hypothesis: Sell-fly diagnostics showed that some normal signal sells were followed by positive forward returns, especially when exit-time volume/trend context remained constructive. Protecting only those states might reduce premature exits without removing signal sells globally.
+Training result: Baseline returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201. Tested variants returned between +80.95% and +106.52%; all had lower Sharpe than baseline and most had worse drawdown. The best variant, `trend_score >= 14 and buy_score >= 35`, returned +106.52% with 7.24% max drawdown and Sharpe 1.939.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: Sell-fly exists, but exit-time trend/volume confirmation is too broad. It blocks too many necessary capital-recycling sells and keeps positions that later become mediocre.
+Can it be revisited? yes
+Conditions for revisiting: Only with a more precise replacement-aware or opportunity-cost model. Do not protect signal sells globally just because volume/trend remains positive.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1`
+Experiment: Replacement-aware signal-sell protection. Variants skipped a normal `signal_sell` only when no eligible replacement buy candidate existed, optionally requiring current buy score >=30, trend score >=14, or no downside-continuation state. ATR stops remained unconditional.
+Hypothesis: Normal signal sells are valuable mostly when they recycle capital into a better candidate. If no replacement exists, selling may only create idle cash and increase sell-fly risk.
+Training result: Baseline returned +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201. Skipping signal sells when no replacement existed returned +113.93%, annualized +28.94%, max drawdown 6.94%, Sharpe 2.026, Sortino 3.190, with 62 buys and 59 sells. Other variants returned +102.11% to +107.10% with lower Sharpe.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it was not adopted: The all-no-replacement variant was a near tie with slightly higher return but lower Sharpe and materially fewer trades. The improvement is too small for a new rule and may be path noise.
+Can it be revisited? yes
+Conditions for revisiting: If later training-only diagnostics show turnover/friction is a larger problem than currently measured, this can be reconsidered as a simplicity/turnover rule rather than a return enhancer.

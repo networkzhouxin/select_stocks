@@ -70,3 +70,61 @@ def test_summarize_post_sell_returns_groups_by_sell_reason():
     assert summary["signal_sell"][5].count == 1
     assert summary["atr_stop"][3].count == 1
     assert summary["atr_stop"][3].mean_return == pytest.approx(-0.03)
+
+
+def test_sell_fly_diagnostic_uses_exit_score_and_forward_return():
+    from cross_signal_strategy.sell_diagnostics import sell_fly_diagnostic
+    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+
+    loader = FakeLoader({
+        "AAA": pd.DataFrame({
+            "date": ["2021-01-01", "2021-01-04", "2021-01-05", "2021-01-06", "2021-01-07"],
+            "close": [9.0, 10.0, 10.2, 10.5, 10.8],
+        })
+    })
+    trade = ClosedTradeDiagnostic(
+        code="AAA",
+        buy_date="2021-01-01",
+        sell_date="2021-01-04",
+        sell_reason="signal_sell",
+        amount=100,
+        buy_price=9.0,
+        sell_price=10.0,
+        pnl=95.0,
+        return_pct=11.1,
+        exit_score={
+            "sell_score": 34,
+            "sell_reversal_score": 24,
+            "sell_risk_score": 10,
+            "close_below_ma20": True,
+            "close_below_boll_mid": False,
+        },
+    )
+
+    result = sell_fly_diagnostic(trade, loader, horizon=3, min_forward_return=0.03)
+
+    assert result.code == "AAA"
+    assert result.is_sell_fly is True
+    assert result.forward_return == pytest.approx(0.08)
+    assert result.missed_pnl == pytest.approx(80.0)
+    assert result.exit_features["close_below_ma20"] is True
+    assert result.exit_features["sell_reversal_score"] == 24
+
+
+def test_summarize_sell_fly_by_feature_counts_flagged_and_unflagged_cases():
+    from cross_signal_strategy.sell_diagnostics import SellFlyDiagnostic, summarize_sell_fly_by_feature
+
+    diagnostics = [
+        SellFlyDiagnostic("AAA", "2021-01-04", "signal_sell", 3, 0.08, 80.0, True, {"close_below_ma20": True}),
+        SellFlyDiagnostic("BBB", "2021-01-05", "signal_sell", 3, -0.02, -20.0, False, {"close_below_ma20": True}),
+        SellFlyDiagnostic("CCC", "2021-01-06", "signal_sell", 3, 0.05, 50.0, True, {"close_below_ma20": False}),
+    ]
+
+    summary = summarize_sell_fly_by_feature(diagnostics, "close_below_ma20")
+
+    assert summary[True].count == 2
+    assert summary[True].sell_fly_count == 1
+    assert summary[True].sell_fly_rate == pytest.approx(0.5)
+    assert summary[True].average_forward_return == pytest.approx(0.03)
+    assert summary[False].count == 1
+    assert summary[False].sell_fly_rate == pytest.approx(1.0)
