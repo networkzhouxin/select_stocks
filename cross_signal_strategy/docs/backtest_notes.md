@@ -1454,3 +1454,68 @@ Pass/fail/hold judgment:
 
 Next allowed action:
 - Run the frozen ATR-stress candidate over the same 2022-01-01 to 2023-12-31 validation window and compare under the pre-written validation protocol.
+
+### First Reserved Validation: ATR-Stress Candidate
+
+Version: `cross-v0.3.1-atr-stress-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Platform: JoinQuant
+Validation period: 2022-01-01 to 2023-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: first reserved weak/sideways validation for risk-control candidate
+
+Important protocol note:
+- This result is compared only against the already recorded official `cross-v0.3.1` validation result.
+- No threshold, ETF-pool, or indicator change may be made from this validation result.
+
+JoinQuant headline result:
+- Strategy return: +16.01%.
+- Annualized return: +7.97%.
+- Excess return: +67.03%.
+- Benchmark return: -30.55%.
+- Max drawdown: 12.94%.
+- Max drawdown interval: 2022-02-24 to 2022-11-22.
+- Sharpe ratio: 0.373.
+- Sortino ratio: 0.536.
+- Win rate: 0.385.
+- Profit/loss ratio: 1.512.
+- Alpha: 0.077.
+- Beta: 0.175.
+- Information ratio: 1.437.
+
+Comparison to official `cross-v0.3.1` first validation:
+- Official `cross-v0.3.1`: +15.49% return, +7.72% annualized return, 13.38% max drawdown, Sharpe 0.346, Sortino 0.499, win rate 0.385, profit/loss ratio 1.490.
+- ATR-stress candidate: +16.01% return, +7.97% annualized return, 12.94% max drawdown, Sharpe 0.373, Sortino 0.536, win rate 0.385, profit/loss ratio 1.512.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1-atr-stress-candidate]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 68 `[buy]` lines and 65 `[sell]` lines.
+- Transaction export contained 133 rows: 68 buys and 65 sells.
+- Transaction status: 133 fully filled rows, 0 canceled/rejected rows.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 0.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+- Expected 9-symbol pool check: all expected symbols traded at least once; no unexpected symbols appeared in the transaction export.
+
+ATR-stress trigger audit:
+- Buy logs with explicit stress field: 68.
+- `stress=1.00`: 65 buys.
+- `stress=0.50`: 3 buys.
+- Triggered buys:
+  - 2022-05-13 `518880.XSHG`, target 3015, transaction value 2722.3.
+  - 2022-05-17 `159985.XSHE`, target 3012, transaction value 2925.0.
+  - 2022-05-18 `513880.XSHG`, target 3011, transaction value 2940.6.
+
+Interpretation:
+- The candidate improves all key comparison metrics slightly versus official `v0.3.1`: return, annualized return, max drawdown, Sharpe, Sortino, and profit/loss ratio.
+- The validation improvement is small but directionally aligned with the training result.
+- The rule triggered 3 times in validation, clustered in May 2022, so it was not inactive. However, the improvement still depends on a small number of clustered events.
+
+Pass/fail/hold judgment:
+- ATR-stress candidate passes the first reserved validation comparison as a live candidate.
+- It should not yet be merged into the official mainline because trigger count remains small and the rule is still exposed to event-cluster overfitting.
+- It should proceed to the next reserved validation window as a frozen candidate alongside official `v0.3.1`.
+
+Next allowed action:
+- Run official `v0.3.1` and ATR-stress candidate over 2024-01-01 to the latest available date, using the same frozen protocol.
