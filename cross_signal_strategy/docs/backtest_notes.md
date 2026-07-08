@@ -1150,3 +1150,46 @@ Interpretation:
 
 Can this result be used to change rules? yes, training-window authority confirmation
 Reason: JoinQuant confirmed that the candidate pool improves the current official training result and the transaction/log path contains no unexpected removed-symbol or runtime anomalies. Reserved validation periods were still not inspected; this is not validation approval.
+
+### JoinQuant Confirmation For Official v0.3.1 Mainline
+
+Version: `cross-v0.3.1`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Platform: JoinQuant
+Backtest period: 2019-01-01 to 2021-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: official training-mainline confirmation
+
+JoinQuant headline result:
+- Strategy return: +120.42%.
+- Annualized return: +31.08%.
+- Excess return: +34.32%.
+- Benchmark return: +64.10%.
+- Max drawdown: 6.82%.
+- Sharpe ratio: 2.097.
+- Sortino ratio: 2.960.
+- Win rate: 0.552.
+- Profit/loss ratio: 4.263.
+- Alpha: 0.220.
+- Beta: 0.348.
+- Information ratio: 0.736.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 99 `[buy]` lines and 97 `[sell]` lines.
+- Transaction export contained 196 rows: 99 buys and 97 sells.
+- Transaction status: 195 fully filled rows, 1 canceled row.
+- The only canceled row was `2019-12-12 513880.XSHG` with a `-0` share sell at `09:35`, matching the known sparse-liquidity execution issue.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume market-order cancellation.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+- Expected 9-symbol pool check: all expected symbols traded at least once; no unexpected symbols appeared in the transaction export.
+
+Interpretation:
+- The official mainline now reproduces the training-confirmed candidate result exactly at the headline metric level and transaction-count level.
+- The `v0.3.1` mainline is the current 2019-2021 training-period safety point.
+- This still does not permit validation-period tuning; reserved validation periods remain unseen for rule-selection purposes.
+
+Can this result be used to change rules? already adopted, confirmation only
+Reason: This run confirms the official strategy file matches the previously confirmed candidate behavior. It adds operational confidence but does not introduce a new rule or parameter.
