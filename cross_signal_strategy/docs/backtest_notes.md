@@ -1002,13 +1002,13 @@ JoinQuant headline result:
 - Annualized return: +30.06%.
 - Excess return: +31.27%.
 - Max drawdown: 6.93%.
-- Sharpe ratio: 2.870.
-- Sortino ratio: 0.690.
+- Sharpe ratio: 2.022.
+- Sortino ratio: 2.870.
 - Win rate: 0.530.
 - Profit/loss ratio: 3.597.
 - Alpha: 0.208.
 - Beta: 0.362.
-- Information ratio: 2.022.
+- Information ratio: 0.690.
 
 Log and transaction checks:
 - Strategy log contained 102 `[buy]` lines and 101 `[sell]` lines.
@@ -1101,3 +1101,52 @@ JoinQuant candidate file:
 
 Can this result be used to change rules? candidate only
 Reason: ETF-pool deletion is highly exposed to training-window selection bias. The `510300/510880/159920` removal candidate improves local training return and drawdown, but it should be confirmed in JoinQuant training before adoption and must later face reserved validation.
+
+### JoinQuant Training Confirmation For ETF-Pool Candidate
+
+Version: `cross-v0.3.0-pool-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_pool_candidate.py`
+Platform: JoinQuant
+Backtest period: 2019-01-01 to 2021-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: training-window authority confirmation
+
+Candidate pool change:
+- Remove `510300.XSHG`, `510880.XSHG`, and `159920.XSHE` from the current cross-signal pool.
+- Keep `159915.XSHE`, `512100.XSHG`, `159928.XSHE`, `513100.XSHG`, `513500.XSHG`, `513880.XSHG`, `513050.XSHG`, `518880.XSHG`, and `159985.XSHE`.
+
+JoinQuant headline result:
+- Strategy return: +120.42%.
+- Annualized return: +31.08%.
+- Excess return: +34.32%.
+- Benchmark return: +64.10%.
+- Max drawdown: 6.82%.
+- Sharpe ratio: 2.097.
+- Sortino ratio: 2.960.
+- Win rate: 0.552.
+- Profit/loss ratio: 4.263.
+- Alpha: 0.220.
+- Beta: 0.348.
+- Information ratio: 0.736.
+
+Log and transaction checks:
+- Strategy log contained 99 `[buy]` lines and 97 `[sell]` lines.
+- Transaction export contained 196 rows: 99 buys and 97 sells.
+- Transaction status: 195 fully filled rows, 1 canceled row.
+- The only canceled row was `2019-12-12 513880.XSHG` with a `-0` share sell at `09:35`, matching the known sparse-liquidity execution issue.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume market-order cancellation.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+
+Comparison to current official JoinQuant training result:
+- Current official `cross-v0.3.0` after A-share zero-volume half-size rule: +115.41% return, +30.06% annualized return, 6.93% max drawdown, Sharpe 2.022, Sortino 2.870, win rate 0.530, profit/loss ratio 3.597.
+- Candidate `cross-v0.3.0-pool-candidate`: +120.42% return, +31.08% annualized return, 6.82% max drawdown, Sharpe 2.097, Sortino 2.960, win rate 0.552, profit/loss ratio 4.263.
+
+Interpretation:
+- JoinQuant confirms the local direction: removing `510300`, `510880`, and `159920` improves return, drawdown, Sharpe, win rate, and profit/loss ratio in the 2019-2021 training window.
+- This is still an ETF-pool deletion selected from training-period attribution, so it has higher selection-bias risk than a pure risk-control rule.
+- The candidate is eligible to be promoted into the official cross-signal training mainline, but it must be clearly marked as training-confirmed and later tested on reserved validation windows after the rule set is frozen.
+
+Can this result be used to change rules? yes, training-window authority confirmation
+Reason: JoinQuant confirmed that the candidate pool improves the current official training result and the transaction/log path contains no unexpected removed-symbol or runtime anomalies. Reserved validation periods were still not inspected; this is not validation approval.
