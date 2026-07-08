@@ -1572,3 +1572,64 @@ Pass/fail/hold judgment:
 
 Next allowed action:
 - Complete the same transaction-level record for the ATR-stress candidate over 2024-01-01 to 2026-07-08, then compare under the frozen validation protocol.
+
+### Second Reserved Validation: ATR-Stress Candidate
+
+Version: `cross-v0.3.1-atr-stress-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Platform: JoinQuant
+Validation period: 2024-01-01 to 2026-07-08
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: recent-market reserved validation for risk-control candidate
+
+Important protocol note:
+- This result is compared only against the already recorded official `cross-v0.3.1` recent-market validation result.
+- No threshold, ETF-pool, or indicator change may be made from this validation result.
+
+JoinQuant headline result:
+- Strategy return: +56.99%.
+- Annualized return: +20.41%.
+- Excess return: +13.27%.
+- Benchmark return: +38.60%.
+- Max drawdown: 10.65%.
+- Max drawdown interval: 2025-11-03 to 2026-07-08.
+- Sharpe ratio: 1.276.
+- Sortino ratio: 1.800.
+- Win rate: 0.506.
+- Profit/loss ratio: 2.786.
+- Alpha: 0.132.
+- Beta: 0.313.
+- Information ratio: 0.352.
+
+Comparison to official `cross-v0.3.1` recent-market validation:
+- Official `cross-v0.3.1`: +56.99% return, +20.41% annualized return, 10.65% max drawdown, Sharpe 1.276, Sortino 1.800, win rate 0.506, profit/loss ratio 2.786.
+- ATR-stress candidate: identical headline metrics.
+
+Log and transaction checks:
+- Strategy log initialized as `[cross-v0.3.1-atr-stress-candidate]` with `max_hold=3`, `base_ratio=0.95`, and `min_signal_hold=5`.
+- Strategy log contained 78 `[buy]` lines and 77 `[sell]` lines.
+- Transaction export contained 155 rows: 78 buys and 77 sells.
+- Transaction status: 155 fully filled rows, 0 canceled/rejected rows.
+- Log errors: `ERROR=0`, `Traceback=0`, `Exception=0`.
+- Warnings: 0.
+- Removed symbols check: 0 buy logs, 0 sell logs, and 0 transaction rows for `510300`, `510880`, or `159920`.
+- Expected 9-symbol pool check: all expected symbols traded at least once; no unexpected symbols appeared in the transaction export.
+
+ATR-stress trigger audit:
+- Buy logs with explicit stress field: 78.
+- `stress=1.00`: 78 buys.
+- `stress=0.50`: 0 buys.
+
+Interpretation:
+- The ATR-stress candidate produced the identical recent-market path as official `v0.3.1` because the stress rule did not trigger.
+- This is favorable for side-effect control: the rule did not suppress upside in the recent rising/volatile market.
+- This result does not add new evidence that the rule improves drawdown under stress, because it was inactive in this validation window.
+
+Pass/fail/hold judgment:
+- ATR-stress candidate passes the second reserved validation as harmless/inactive.
+- Across validation so far, it improved 2022-2023 slightly and was inactive in 2024-2026.
+- It remains a viable risk-control candidate, but final adoption should still wait for the next reserved stress window because the rule has low trigger count.
+
+Next allowed action:
+- Run official `v0.3.1` and ATR-stress candidate over the stress validation window 2015-01-01 to 2018-12-31, using the same frozen protocol.
