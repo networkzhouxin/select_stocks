@@ -1094,5 +1094,10 @@ ETF-pool training experiments:
 - Remove `510880` and `159920`: return +108.13%, max drawdown 8.03%, Sharpe 1.978. Rejected.
 - Remove `510300`, `510880`, and `159920`: return +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Candidate only.
 
+JoinQuant candidate file:
+- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_pool_candidate.py` was created as a temporary training-confirmation file.
+- It only changes `STRATEGY_VERSION` and removes `510300.XSHG`, `510880.XSHG`, and `159920.XSHE` from `get_default_etf_pool()`.
+- It is not the official adopted strategy until JoinQuant 2019-2021 training confirms the improvement and logs/transactions are reviewed.
+
 Can this result be used to change rules? candidate only
 Reason: ETF-pool deletion is highly exposed to training-window selection bias. The `510300/510880/159920` removal candidate improves local training return and drawdown, but it should be confirmed in JoinQuant training before adoption and must later face reserved validation.
