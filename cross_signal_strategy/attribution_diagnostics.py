@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Sequence
+from typing import Dict, Iterable, Mapping, Sequence
 
 import pandas as pd
 
@@ -52,6 +52,29 @@ class EtfAttributionReport:
     total_realized_pnl: float = 0.0
 
 
+@dataclass(frozen=True)
+class EntrySignalComboStats:
+    combo_key: str
+    closed_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    realized_pnl: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.closed_trades if self.closed_trades else 0.0
+
+    @property
+    def profit_loss_ratio(self) -> float | None:
+        return self.gross_profit / self.gross_loss if self.gross_loss > 0 else None
+
+    @property
+    def average_pnl(self) -> float:
+        return self.realized_pnl / self.closed_trades if self.closed_trades else 0.0
+
+
 @dataclass
 class _MutableStats:
     code: str
@@ -96,6 +119,85 @@ class _MutableStats:
             atr_stop_count=self.atr_stop_count,
             signal_sell_count=self.signal_sell_count,
         )
+
+
+@dataclass
+class _MutableComboStats:
+    combo_key: str
+    closed_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    realized_pnl: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+
+    def add(self, trade: ClosedTradeDiagnostic) -> None:
+        pnl = float(trade.pnl)
+        self.closed_trades += 1
+        self.realized_pnl += pnl
+        if pnl > 0:
+            self.wins += 1
+            self.gross_profit += pnl
+        elif pnl < 0:
+            self.losses += 1
+            self.gross_loss += abs(pnl)
+
+    def freeze(self) -> EntrySignalComboStats:
+        return EntrySignalComboStats(
+            combo_key=self.combo_key,
+            closed_trades=self.closed_trades,
+            wins=self.wins,
+            losses=self.losses,
+            realized_pnl=self.realized_pnl,
+            gross_profit=self.gross_profit,
+            gross_loss=self.gross_loss,
+        )
+
+
+def entry_signal_tags(entry_score: Mapping[str, object]) -> tuple[str, ...]:
+    tags = []
+    if entry_score.get("rsi6_cross_rsi12_up") or entry_score.get("rsi6_cross_rsi24_up"):
+        tags.append("rsi_up")
+    if entry_score.get("macd_cross_up"):
+        tags.append("macd_up")
+    if entry_score.get("kdj_k_cross_up") or entry_score.get("kdj_j_cross_up"):
+        tags.append("kdj_up")
+    if _numeric(entry_score.get("location_score")) == 17:
+        tags.append("low_location")
+    if _numeric(entry_score.get("trend_score")) >= 20:
+        tags.append("strong_trend")
+    elif _numeric(entry_score.get("trend_score")) > 0:
+        tags.append("trend_support")
+    if _numeric(entry_score.get("volume_score")) > 0:
+        tags.append("volume_confirmed")
+    return tuple(sorted(tags)) if tags else ("unclassified",)
+
+
+def entry_combo_key(entry_score: Mapping[str, object]) -> str:
+    return "+".join(entry_signal_tags(entry_score))
+
+
+def summarize_entry_signal_combos(
+    trades: Iterable[ClosedTradeDiagnostic],
+) -> Dict[str, EntrySignalComboStats]:
+    mutable: Dict[str, _MutableComboStats] = {}
+    for trade in trades:
+        key = entry_combo_key(trade.entry_score)
+        mutable.setdefault(key, _MutableComboStats(combo_key=key)).add(trade)
+    return {
+        key: item.freeze()
+        for key, item in sorted(
+            mutable.items(),
+            key=lambda entry: (-entry[1].realized_pnl, entry[0]),
+        )
+    }
+
+
+def _numeric(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def build_etf_attribution(

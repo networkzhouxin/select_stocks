@@ -2014,3 +2014,45 @@ Interpretation:
 
 Can this result be used to change rules? no
 Reason: The candidate failed on the training authority check. Do not run validation for this candidate and do not remove `512100.XSHG` from the official mainline.
+
+### Training-Only Iteration: Entry Combo Attribution And MACD-RSI Filter Candidate
+
+Version: `cross-v0.3.1`
+Code path: local replay diagnostics plus temporary combo-filter JoinQuant candidate file
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only research cycle; no validation-period influence
+
+Diagnostic tooling added:
+- `attribution_diagnostics` can label buy-entry score snapshots into stable signal-source combo keys.
+- Combo labels currently include RSI up-cross, MACD up-cross, KDJ up-cross, low-location entry, trend support/strong trend, and volume confirmation.
+- Tests were added before implementation.
+
+Entry-combo attribution observations:
+- Closed local training trades: 97.
+- Distinct entry combos: 14.
+- Strongest combos by realized PnL:
+  - `kdj_up+rsi_up+strong_trend+volume_confirmed`: n=10, PnL +5477.9, win rate 0.700, profit/loss ratio 9.583.
+  - `kdj_up+macd_up+rsi_up+strong_trend+volume_confirmed`: n=4, PnL +4610.1, win rate 1.000.
+  - `kdj_up+rsi_up+strong_trend`: n=6, PnL +4552.8, win rate 0.667, profit/loss ratio 13.258.
+- Weakest combos by realized PnL:
+  - `macd_up+rsi_up+trend_support+volume_confirmed`: n=5, PnL -1415.1, win rate 0.200, profit/loss ratio 0.060.
+  - `kdj_up+macd_up+rsi_up+trend_support`: n=4, PnL -666.9, win rate 0.250, profit/loss ratio 0.044.
+  - `kdj_up+low_location+rsi_up+trend_support+volume_confirmed`: n=8, PnL -431.6, win rate 0.250, profit/loss ratio 0.712.
+
+Local pressure tests:
+- Baseline: +113.44% return, +28.84% annualized, 6.94% max drawdown, Sharpe 2.049, Sortino 3.201, 100 buys, average exposure 0.736.
+- Block only `macd_up+rsi_up+trend_support+volume_confirmed`: +118.75% return, +29.90% annualized, 6.81% max drawdown, Sharpe 2.117, Sortino 3.327, 99 buys, average exposure 0.732.
+- Block three negative-looking combos together: +116.34% return, +29.42% annualized, 7.19% max drawdown, Sharpe 2.097, Sortino 3.298, 94 buys, average exposure 0.704.
+
+Candidate created:
+- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+- Version: `cross-v0.3.1-combo-candidate`
+- Only intended strategy change versus official mainline: skip new buy entries when RSI and MACD are up, volume is confirmed, trend is supportive but not strong, and KDJ has not crossed up.
+
+Interpretation:
+- KDJ appears to be an important timing confirmation for this cross-signal framework. RSI+MACD without KDJ in a merely supportive trend looks like a weak rebound/chop pattern in the training replay.
+- Expanding the block list was worse than the single narrow filter, so the candidate intentionally remains minimal.
+- This is still a selection-bias-prone training-only candidate because it is derived from entry-combo attribution. JoinQuant 2019-2021 must confirm it before any merge or validation.
+
+Can this result be used to change rules? candidate only
+Reason: Local training replay supports preparing a JoinQuant training candidate, but JoinQuant remains the authority. Do not merge into official mainline unless JoinQuant training confirms improvement against `cross-v0.3.1`.
