@@ -2139,6 +2139,35 @@ Interpretation:
 Can this result be used to change rules? no direct rule change
 Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
 
+### Sell Confirmation Candidate Prepared: Raise Normal Signal Sell Threshold To 35
+
+Version: `cross-v0.3.2-sell35-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
+Backtest period for next required check: 2019-01-01 to 2021-12-31 only
+Initial capital for next required check: 20000
+Execution schedule: daily `09:35`
+Protocol role: training-only candidate; validation windows must not be inspected unless this candidate is frozen after JoinQuant training confirmation
+
+Hypothesis:
+- Post-sell diagnostics on the 2019-2021 JoinQuant training log suggest that normal signal sells around `sell_score 32-34` may be too weak as forced exits.
+- ATR stops remain productive and must stay unconditional.
+- Candidate change: raise only the normal signal `sell_threshold` from `30` to `35`; keep buy logic, ETF pool, ATR stop, position sizing, and indicator parameters unchanged.
+
+Training-log diagnostic snapshot that motivated the candidate:
+- Parsed filled JoinQuant training events from the recorded `cross-v0.3.1-combo-candidate` log: 98 buys, 95 sells, 95 closed lots.
+- Normal signal sells: 68 lots, realized PnL about +9311.1, win rate 0.529.
+- ATR stops: 27 lots, realized PnL about +15990.8, win rate 0.630.
+- Normal signal sells had positive post-sell drift: 10-trading-day mean forward return about +0.89%, with 19 of 64 available samples above +3%.
+- The weak score buckets were most suspicious: `sell_score 33` had negative realized PnL and +3.00% average 10-day forward return; `sell_score 34` had slightly negative realized PnL and +0.60% average 10-day forward return.
+
+Implementation checks:
+- Added tests before implementation for version, unchanged parameters except `sell_threshold`, unchanged ETF pool, ATR stop remaining unconditional, and weak `sell_score 34` normal sell being blocked.
+- `python -m pytest tests/test_cross_signal_sell35_candidate_strategy.py tests/test_cross_signal_strategy.py -q` passed.
+- `python -m py_compile cross_signal_strategy\smart_trade_joinquant_cross_signal_etf_sell35_candidate.py cross_signal_strategy\smart_trade_joinquant_cross_signal_etf.py` passed.
+
+Can this result be used to change rules? not yet
+Reason: This is only a prepared training candidate. It needs JoinQuant 2019-2021 training confirmation before any adoption or reserved-period validation.
+
 ### JoinQuant Early Supplemental Validation Check: Entry Combo Filter Candidate 2010-2014
 
 Version: `cross-v0.3.1-combo-candidate`
