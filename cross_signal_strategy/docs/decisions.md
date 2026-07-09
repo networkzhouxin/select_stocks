@@ -488,3 +488,14 @@ Risk: This is a learned entry-quality filter, so it carries more overfitting ris
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/validation_summary.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: validation periods were used only for adoption judgment after the rule was frozen; no retuning or expansion from validation results
 Status: adopted after frozen training and reserved validation checks
+
+### Prepare Low-Bounce Entry Filter Candidate
+
+Date: 2026-07-10
+Decision: Create a JoinQuant candidate file `cross-v0.3.2-low-bounce-candidate` that keeps the official `cross-v0.3.2` logic unchanged except for one additional entry filter. The candidate blocks new buys where RSI and KDJ cross up, MACD does not cross up, the price is in the BOLL lower-to-middle/near-MA20 repair zone, volume confirmation is positive, and trend score is positive but below strong-trend level (`0 < trend_score < 20`).
+Reason: Training-only buy attribution on `cross-v0.3.2` showed the weakest repeatable entry combo was `kdj_up+low_location+rsi_up+trend_support+volume_confirmed`, with 8 closed trades, -431.60 local realized PnL, 25% win rate, and 0.71 profit/loss ratio. This pattern has a plausible market interpretation: a low-position volume bounce with RSI/KDJ timing, but without MACD confirmation and without strong trend support, can be a false rebound.
+Evidence: Local 2019-2021 same-mouth replay improved from official mainline +118.75% return, 6.81% max drawdown, 99 buys, 96 sells, end value 43749.40 to candidate +122.49% return, 7.20% max drawdown, 95 buys, 92 sells, end value 44498.60.
+Risk: This is an entry-quality filter learned from training attribution and therefore has overfitting risk. The local improvement comes with higher drawdown and fewer trades, so it must be treated as a candidate only. JoinQuant training confirmation is required before any reserved validation or adoption discussion.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_low_bounce_candidate.py`, `tests/test_cross_signal_low_bounce_candidate.py`, `cross_signal_strategy/attribution_diagnostics.py`, `tests/test_cross_signal_attribution_diagnostics.py`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; validation periods must not be inspected unless the candidate is first frozen after JoinQuant training confirmation
+Status: proposed, local-training-only candidate

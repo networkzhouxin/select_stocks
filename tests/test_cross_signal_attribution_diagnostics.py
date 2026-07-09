@@ -141,3 +141,72 @@ def test_entry_signal_combo_summary_aggregates_closed_trade_quality():
     assert macd_trend.closed_trades == 1
     assert macd_trend.realized_pnl == pytest.approx(40.0)
     assert macd_trend.average_pnl == pytest.approx(40.0)
+
+
+def test_entry_bucket_labels_group_buy_context():
+    from cross_signal_strategy.attribution_diagnostics import entry_bucket_labels
+
+    labels = entry_bucket_labels(
+        closed_trade(
+            "159915",
+            "2021-01-01",
+            "2021-01-06",
+            "signal_sell",
+            10.0,
+            entry_score={
+                "buy_score": 73,
+                "sell_score": 12,
+                "rsi6": 81,
+                "location_score": 17,
+                "trend_score": 9,
+                "volume_score": 0,
+                "close": 12.0,
+                "ma20": 10.0,
+                "upper": 12.8,
+                "middle": 10.0,
+                "lower": 7.2,
+            },
+        )
+    )
+
+    assert labels["etf_class"] == "a_share"
+    assert labels["buy_score_band"] == "70+"
+    assert labels["rsi6_band"] == "overheated"
+    assert labels["location_bucket"] == "low_or_mid"
+    assert labels["trend_bucket"] == "mild_trend"
+    assert labels["volume_bucket"] == "no_volume"
+    assert labels["sell_conflict"] == "no_sell_conflict"
+    assert labels["ma20_distance"] == "far_above_ma20"
+    assert labels["boll_position"] == "upper_half"
+
+
+def test_entry_bucket_summary_aggregates_each_dimension():
+    from cross_signal_strategy.attribution_diagnostics import summarize_entry_buckets
+
+    trades = [
+        closed_trade(
+            "159915",
+            "2021-01-01",
+            "2021-01-06",
+            "signal_sell",
+            100.0,
+            entry_score={"buy_score": 72, "trend_score": 20, "volume_score": 4},
+        ),
+        closed_trade(
+            "513100",
+            "2021-01-04",
+            "2021-01-08",
+            "atr_stop",
+            -30.0,
+            entry_score={"buy_score": 58, "trend_score": -9, "volume_score": 0},
+        ),
+    ]
+
+    summary = summarize_entry_buckets(trades)
+
+    assert summary["buy_score_band"]["70+"].closed_trades == 1
+    assert summary["buy_score_band"]["70+"].realized_pnl == pytest.approx(100.0)
+    assert summary["buy_score_band"]["below_60"].realized_pnl == pytest.approx(-30.0)
+    assert summary["etf_class"]["a_share"].closed_trades == 1
+    assert summary["etf_class"]["cross_market"].closed_trades == 1
+    assert summary["volume_bucket"]["no_volume"].losses == 1

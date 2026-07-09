@@ -75,6 +75,30 @@ class EntrySignalComboStats:
         return self.realized_pnl / self.closed_trades if self.closed_trades else 0.0
 
 
+@dataclass(frozen=True)
+class EntryBucketStats:
+    dimension: str
+    bucket: str
+    closed_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    realized_pnl: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+
+    @property
+    def win_rate(self) -> float:
+        return self.wins / self.closed_trades if self.closed_trades else 0.0
+
+    @property
+    def average_pnl(self) -> float:
+        return self.realized_pnl / self.closed_trades if self.closed_trades else 0.0
+
+    @property
+    def profit_loss_ratio(self) -> float | None:
+        return self.gross_profit / self.gross_loss if self.gross_loss > 0 else None
+
+
 @dataclass
 class _MutableStats:
     code: str
@@ -154,6 +178,41 @@ class _MutableComboStats:
         )
 
 
+@dataclass
+class _MutableBucketStats:
+    dimension: str
+    bucket: str
+    closed_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    realized_pnl: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+
+    def add(self, trade: ClosedTradeDiagnostic) -> None:
+        pnl = float(trade.pnl)
+        self.closed_trades += 1
+        self.realized_pnl += pnl
+        if pnl > 0:
+            self.wins += 1
+            self.gross_profit += pnl
+        elif pnl < 0:
+            self.losses += 1
+            self.gross_loss += abs(pnl)
+
+    def freeze(self) -> EntryBucketStats:
+        return EntryBucketStats(
+            dimension=self.dimension,
+            bucket=self.bucket,
+            closed_trades=self.closed_trades,
+            wins=self.wins,
+            losses=self.losses,
+            realized_pnl=self.realized_pnl,
+            gross_profit=self.gross_profit,
+            gross_loss=self.gross_loss,
+        )
+
+
 def entry_signal_tags(entry_score: Mapping[str, object]) -> tuple[str, ...]:
     tags = []
     if entry_score.get("rsi6_cross_rsi12_up") or entry_score.get("rsi6_cross_rsi24_up"):
@@ -193,11 +252,149 @@ def summarize_entry_signal_combos(
     }
 
 
+def entry_bucket_labels(trade: ClosedTradeDiagnostic) -> Dict[str, str]:
+    score = trade.entry_score
+    return {
+        "etf_class": etf_class(str(trade.code)),
+        "buy_score_band": _score_band(_numeric(score.get("buy_score"))),
+        "rsi6_band": _rsi_band(_numeric_or_none(score.get("rsi6"))),
+        "location_bucket": _location_bucket(_numeric(score.get("location_score"))),
+        "trend_bucket": _trend_bucket(_numeric(score.get("trend_score"))),
+        "volume_bucket": "volume_confirmed" if _numeric(score.get("volume_score")) > 0 else "no_volume",
+        "sell_conflict": (
+            "sell_conflict"
+            if _numeric(score.get("sell_score")) >= 30
+            else "no_sell_conflict"
+        ),
+        "ma20_distance": _ma20_distance_bucket(score),
+        "boll_position": _boll_position_bucket(score),
+    }
+
+
+def summarize_entry_buckets(
+    trades: Iterable[ClosedTradeDiagnostic],
+) -> Dict[str, Dict[str, EntryBucketStats]]:
+    mutable: Dict[str, Dict[str, _MutableBucketStats]] = {}
+    for trade in trades:
+        for dimension, bucket in entry_bucket_labels(trade).items():
+            dimension_stats = mutable.setdefault(dimension, {})
+            dimension_stats.setdefault(
+                bucket,
+                _MutableBucketStats(dimension=dimension, bucket=bucket),
+            ).add(trade)
+
+    return {
+        dimension: {
+            bucket: item.freeze()
+            for bucket, item in sorted(
+                buckets.items(),
+                key=lambda entry: (entry[1].realized_pnl, entry[0]),
+            )
+        }
+        for dimension, buckets in sorted(mutable.items())
+    }
+
+
+def etf_class(code: str) -> str:
+    normalized = str(code).split(".")[0]
+    if normalized in {"510300", "159915", "512100", "159928", "510880"}:
+        return "a_share"
+    if normalized in {"513100", "513500", "513880", "513050", "159920"}:
+        return "cross_market"
+    if normalized in {"518880", "159985", "511010"}:
+        return "cross_asset"
+    return "other"
+
+
 def _numeric(value: object) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _numeric_or_none(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_band(score: float) -> str:
+    if score >= 70:
+        return "70+"
+    if score >= 60:
+        return "60_69"
+    return "below_60"
+
+
+def _rsi_band(rsi: float | None) -> str:
+    if rsi is None:
+        return "unknown"
+    if rsi >= 75:
+        return "overheated"
+    if rsi >= 55:
+        return "warm"
+    if rsi >= 35:
+        return "neutral"
+    return "oversold"
+
+
+def _location_bucket(location_score: float) -> str:
+    if location_score >= 15:
+        return "low_or_mid"
+    if location_score >= 7:
+        return "middle_repair"
+    return "high_or_extended"
+
+
+def _trend_bucket(trend_score: float) -> str:
+    if trend_score >= 20:
+        return "strong_trend"
+    if trend_score > 0:
+        return "mild_trend"
+    if trend_score < 0:
+        return "weak_trend"
+    return "flat_trend"
+
+
+def _ma20_distance_bucket(score: Mapping[str, object]) -> str:
+    close = _numeric_or_none(score.get("close"))
+    ma20 = _numeric_or_none(score.get("ma20"))
+    if close is None or ma20 is None or ma20 <= 0:
+        return "unknown"
+    distance = close / ma20 - 1.0
+    if distance >= 0.10:
+        return "far_above_ma20"
+    if distance >= 0.03:
+        return "above_ma20"
+    if distance >= -0.03:
+        return "near_ma20"
+    return "below_ma20"
+
+
+def _boll_position_bucket(score: Mapping[str, object]) -> str:
+    close = _numeric_or_none(score.get("close"))
+    upper = _first_numeric(score, "boll_upper", "upper")
+    middle = _first_numeric(score, "boll_mid", "middle")
+    lower = _first_numeric(score, "boll_lower", "lower")
+    if close is None or upper is None or middle is None or lower is None:
+        return "unknown"
+    if close >= upper:
+        return "above_upper"
+    if close >= middle:
+        return "upper_half"
+    if close >= lower:
+        return "lower_half"
+    return "below_lower"
+
+
+def _first_numeric(score: Mapping[str, object], *keys: str) -> float | None:
+    for key in keys:
+        value = _numeric_or_none(score.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def build_etf_attribution(
