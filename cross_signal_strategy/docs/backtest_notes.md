@@ -2056,3 +2056,44 @@ Interpretation:
 
 Can this result be used to change rules? candidate only
 Reason: Local training replay supports preparing a JoinQuant training candidate, but JoinQuant remains the authority. Do not merge into official mainline unless JoinQuant training confirms improvement against `cross-v0.3.1`.
+
+### JoinQuant Training Check: Entry Combo Filter Candidate
+
+Version: `cross-v0.3.1-combo-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Backtest period: 2019-01-01 to 2021-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: JoinQuant training authority check for local entry-combo candidate
+
+JoinQuant headline result:
+- Strategy return: +125.82%.
+- Annualized return: +32.18%.
+- Excess return: +37.61%.
+- Benchmark return: +64.10%.
+- Alpha: 0.232.
+- Beta: 0.347.
+- Sharpe: 3.109.
+- Sortino: 0.799.
+- Max drawdown: 6.70%.
+- Win rate: 0.558.
+- Profit/loss ratio: 4.845.
+- Trades shown by JoinQuant summary: 53 wins, 42 losses.
+
+Operational checks:
+- Version log confirmed `cross-v0.3.1-combo-candidate`.
+- ERROR-level log count: 0.
+- Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume market-order cancellation.
+
+Comparison with official mainline:
+- Official `cross-v0.3.1` training return was +122.47%, annualized +31.50%, max drawdown 6.38%, Sharpe 3.057, Sortino 0.759, win rate 0.552, profit/loss ratio 4.466.
+- The combo candidate improves return, annualized return, Sharpe, Sortino, win rate, and profit/loss ratio.
+- The only headline deterioration is max drawdown, from 6.38% to 6.70%.
+
+Interpretation:
+- The local entry-combo hypothesis survived the JoinQuant training authority check.
+- The improvement is coherent but modest, and the candidate was derived from training-period attribution, so overfitting risk remains.
+- Freeze this rule before validation. Do not use validation results to retune the combo filter.
+
+Can this result be used to change rules? candidate ready for validation
+Reason: JoinQuant training confirms the local candidate, but validation periods must now be run unchanged before any mainline merge.
