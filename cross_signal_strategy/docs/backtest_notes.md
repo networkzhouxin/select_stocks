@@ -2139,6 +2139,48 @@ Interpretation:
 Can this result be used to change rules? no direct rule change
 Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
 
+### JoinQuant Stress Validation Check: Entry Combo Filter Candidate 2015-2018
+
+Version: `cross-v0.3.1-combo-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Backtest period: 2015-01-01 to 2018-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: frozen-rule stress validation; no tuning allowed from this result
+
+JoinQuant headline result:
+- Strategy return: +23.21%.
+- Annualized return: +5.50%.
+- Excess return: +44.61%.
+- Benchmark return: -14.80%.
+- Alpha: 0.022.
+- Beta: 0.087.
+- Sharpe: 0.247.
+- Sortino: 0.389.
+- Max drawdown: 7.38%.
+- Win rate: 0.444.
+- Profit/loss ratio: 1.674.
+- Trades shown by JoinQuant summary: 52 wins, 65 losses.
+
+Operational checks:
+- Version log confirmed `cross-v0.3.1-combo-candidate`.
+- ERROR-level log count: 0.
+- WARNING-level log count: 6.
+- WARNING details: three 159928.XSHE 09:35 zero-volume market-order events, each paired with an unfilled/cancelled market-order warning: 2016-08-03 close order, 2017-03-09 close order, and 2017-08-02 open order. Treat these as JoinQuant execution facts for the stress window, not strategy-code errors.
+
+Comparison with official mainline:
+- Official `cross-v0.3.1` 2015-2018 result was +23.58% return, +5.58% annualized, 7.49% max drawdown, Sharpe 0.256, Sortino 0.393, win rate 0.443, profit/loss ratio 1.660, with 54 wins and 68 losses.
+- The combo candidate slightly worsens total return, annualized return, Sharpe, and Sortino.
+- The combo candidate slightly improves max drawdown, win rate, profit/loss ratio, and reduces trade count.
+
+Interpretation:
+- This stress validation is broadly neutral to slightly mixed, not a failure.
+- The candidate does not collapse in 2015-2018, but its edge is weaker here than in 2022-2023 and 2024-2026.
+- Since this is a frozen validation window, do not tune the filter from this result. The adoption decision should weigh all reserved periods together.
+
+Can this result be used to change rules? no direct rule change
+Reason: This is stress-validation evidence for the already-frozen candidate. It may affect adoption judgment, but must not be used for retuning.
+
 ### JoinQuant Validation Check: Entry Combo Filter Candidate 2024-2026
 
 Version: `cross-v0.3.1-combo-candidate`
