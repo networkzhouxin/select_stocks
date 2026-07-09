@@ -348,3 +348,14 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it failed: The broad threshold increase reduces drawdown, but it damages return and risk-adjusted quality too much. The low-threshold signal sell remains load-bearing for capital recycling even though some individual weak-score exits sell early.
 Can it be revisited? no as a standalone threshold raise
 Conditions for revisiting: Only study narrower sell-quality rules that preserve capital recycling; do not raise global `sell_threshold` again without a new structural reason.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2-weak-replacement-candidate`
+Experiment: Protect weak normal signal sells on top of `cross-v0.3.2`: when `sell_score` is between the normal threshold and 35, current `buy_score >= 35`, and selling would leave no eligible replacement buy candidate, skip the signal sell. ATR stops remain unconditional.
+Hypothesis: A replacement-aware rule might reduce sell-fly and idle-cash damage without weakening high-conviction risk exits or broadening the global sell threshold.
+Local training result: Mainline-equivalent local replay with `sell_threshold=30` returned +118.75%, annualized +29.90%, max drawdown 6.81%, Sharpe 2.117, Sortino 3.327, 99 buys, 96 sells, closed-trade win rate 0.552, profit/loss ratio 4.034. The adopted local candidate variant returned +119.82%, annualized +30.12%, max drawdown 6.86%, Sharpe 2.120, Sortino 3.335, 99 buys, 96 sells, closed-trade win rate 0.552, profit/loss ratio 4.107, and protected only 2 sells.
+JoinQuant training result: JoinQuant 2019-2021 was run with the candidate version and produced the same headline result as official `cross-v0.3.2`: +125.82% return, +32.18% annualized, 6.70% max drawdown, Sharpe 3.109, Sortino 0.799, win rate 0.558, profit/loss ratio 4.845. Log audit confirmed the candidate initialized, but the candidate-specific protection log `[hold] ... weak sell_score ... no replacement, skip signal sell` appeared 0 times.
+Validation result: Not run. Per protocol, validation periods were not inspected for this no-effect training candidate.
+Why it failed: The local improvement was too small and did not translate into an actual JoinQuant path change. Under the JoinQuant authority path, the rule never triggered, so it adds complexity without measurable effect.
+Can it be revisited? no as currently defined
+Conditions for revisiting: Only revisit replacement-aware selling if future training-only diagnostics show a materially larger set of weak signal sells with no replacement. Any revised rule must include explicit trigger-count logging before JoinQuant testing.
