@@ -2097,3 +2097,44 @@ Interpretation:
 
 Can this result be used to change rules? candidate ready for validation
 Reason: JoinQuant training confirms the local candidate, but validation periods must now be run unchanged before any mainline merge.
+
+### JoinQuant Validation Check: Entry Combo Filter Candidate 2022-2023
+
+Version: `cross-v0.3.1-combo-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Backtest period: 2022-01-01 to 2023-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: frozen-rule out-of-sample validation; no tuning allowed from this result
+
+JoinQuant headline result:
+- Strategy return: +17.36%.
+- Annualized return: +8.62%.
+- Excess return: +68.99%.
+- Benchmark return: -30.55%.
+- Alpha: 0.084.
+- Beta: 0.178.
+- Sharpe: 0.432.
+- Sortino: 0.622.
+- Max drawdown: 11.63%.
+- Win rate: 0.385.
+- Profit/loss ratio: 1.560.
+- Trades shown by JoinQuant summary: 25 wins, 40 losses.
+
+Operational checks:
+- Version log confirmed `cross-v0.3.1-combo-candidate`.
+- ERROR-level log count: 0.
+- WARNING-level log count: 0.
+
+Comparison with official mainline:
+- Official `cross-v0.3.1` 2022-2023 result was +15.49% return, +7.72% annualized, 13.38% max drawdown, Sharpe 0.346, Sortino 0.499, win rate 0.385, profit/loss ratio 1.490.
+- The combo candidate improves return, annualized return, max drawdown, Sharpe, Sortino, and profit/loss ratio.
+- Win rate is unchanged at 0.385.
+
+Interpretation:
+- This is the first frozen-rule validation period, and it supports the entry-combo filter.
+- Improvement is especially meaningful because 2022-2023 is a weak/sideways period where the strategy is meant to avoid bad rebound entries.
+- Do not adjust or expand the combo filter from this result. Continue with the next reserved validation periods unchanged.
+
+Can this result be used to change rules? no direct rule change
+Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
