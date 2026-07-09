@@ -2138,3 +2138,43 @@ Interpretation:
 
 Can this result be used to change rules? no direct rule change
 Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
+
+### JoinQuant Validation Check: Entry Combo Filter Candidate 2024-2026
+
+Version: `cross-v0.3.1-combo-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Backtest period: 2024-01-01 to 2026-07-08
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: frozen-rule recent-market validation; no tuning allowed from this result
+
+JoinQuant headline result:
+- Strategy return: +58.17%.
+- Annualized return: +20.78%.
+- Excess return: +14.12%.
+- Benchmark return: +38.60%.
+- Alpha: 0.136.
+- Beta: 0.311.
+- Sharpe: 1.842.
+- Sortino: 0.374.
+- Max drawdown: 9.98%.
+- Win rate: 0.513.
+- Profit/loss ratio: 2.877.
+- Trades shown by JoinQuant summary: 39 wins, 37 losses.
+
+Operational checks:
+- Version log confirmed `cross-v0.3.1-combo-candidate`.
+- ERROR-level log count: 0.
+- WARNING-level log count: 0.
+
+Comparison with official mainline:
+- Official `cross-v0.3.1` 2024-2026 result was +56.99% return, +20.41% annualized, 10.65% max drawdown, Sharpe 1.800, Sortino 0.352, win rate 0.506, profit/loss ratio 2.786.
+- The combo candidate improves return, annualized return, max drawdown, Sharpe, Sortino, win rate, and profit/loss ratio.
+
+Interpretation:
+- This is the second frozen-rule validation period, and it also supports the entry-combo filter.
+- The improvement is modest but directionally broad: higher return and lower drawdown at the same time.
+- Together with the 2022-2023 validation, the candidate now has two out-of-sample periods supporting it. Continue with stress validation unchanged.
+
+Can this result be used to change rules? no direct rule change
+Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
