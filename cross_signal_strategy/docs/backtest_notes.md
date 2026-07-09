@@ -1975,3 +1975,42 @@ Interpretation:
 
 Can this result be used to change rules? candidate only
 Reason: Local training replay supports preparing a JoinQuant training candidate, but the effect is modest and pool deletion has selection-bias risk. Do not merge into official mainline unless JoinQuant training confirms a meaningful improvement.
+
+### JoinQuant Training Check: No-512100 Pool Candidate
+
+Version: `cross-v0.3.1-no-512100-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_no_512100_candidate.py`
+Backtest period: 2019-01-01 to 2021-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: JoinQuant training authority check for local pool candidate
+
+JoinQuant headline result:
+- Strategy return: +119.31%.
+- Annualized return: +30.86%.
+- Excess return: +33.65%.
+- Benchmark return: +64.10%.
+- Alpha: 0.221.
+- Beta: 0.330.
+- Sharpe: 2.977.
+- Sortino: 0.711.
+- Max drawdown: 6.82%.
+- Win rate: 0.548.
+- Profit/loss ratio: 4.399.
+- Trades shown by JoinQuant summary: 51 wins, 42 losses.
+
+Operational checks:
+- Version log confirmed `cross-v0.3.1-no-512100-candidate`.
+- ERROR-level log count: 0.
+- Warnings: 2, both from the known `2019-12-12 513880.XSHG` zero-volume market-order cancellation.
+
+Comparison with official mainline:
+- Official `cross-v0.3.1` training return was +122.47%, annualized +31.50%, max drawdown 6.38%, Sharpe 3.057, Sortino 0.759, win rate 0.552, profit/loss ratio 4.466.
+- The no-512100 candidate is worse on return, annualized return, max drawdown, Sharpe, Sortino, win rate, and profit/loss ratio.
+
+Interpretation:
+- The local replay edge did not survive the JoinQuant training authority check.
+- This reinforces the previous pool-design caution: deleting a weak-looking ETF from one attribution view can damage the actual JoinQuant path.
+
+Can this result be used to change rules? no
+Reason: The candidate failed on the training authority check. Do not run validation for this candidate and do not remove `512100.XSHG` from the official mainline.

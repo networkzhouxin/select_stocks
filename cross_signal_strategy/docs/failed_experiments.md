@@ -326,3 +326,14 @@ Validation result: Not run. Per protocol, validation periods were not used to tu
 Why it failed: The local improvement did not survive the JoinQuant training authority check. JoinQuant showed lower return, worse drawdown, lower Sharpe/Sortino, and lower profit/loss ratio; the slightly higher win rate was not worth the risk-adjusted deterioration.
 Can it be revisited? no
 Conditions for revisiting: Do not revisit simple ATR multiplier tightening unless a later, independent structural change creates a new stop-loss failure mode. Avoid further fine-grained ATR multiplier searching because it would become parameter mining.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1-no-512100-candidate`
+Experiment: Remove `512100.XSHG` from the official `cross-v0.3.1` ETF pool while keeping every signal, risk, sizing, and execution rule unchanged.
+Hypothesis: `512100` was the weakest local realized contributor and overlaps with A-share broad-base exposure. Removing it might simplify the pool and reduce weak capital allocation without changing the strategy family.
+Local training result: Local replay over 2019-2021 improved slightly from +113.44% to +114.57%, max drawdown moved from 6.94% to 6.99%, Sharpe improved from 2.049 to 2.094, and Sortino improved from 3.201 to 3.285.
+JoinQuant training result: JoinQuant over 2019-2021 returned +119.31%, annualized +30.86%, max drawdown 6.82%, Sharpe 2.977, Sortino 0.711, win rate 0.548, profit/loss ratio 4.399, versus official mainline +122.47%, annualized +31.50%, max drawdown 6.38%, Sharpe 3.057, Sortino 0.759, win rate 0.552, profit/loss ratio 4.466.
+Validation result: Not run. Per protocol, validation periods were not used to tune or decide this candidate.
+Why it failed: The small local improvement did not survive the JoinQuant training authority check. The candidate was worse on return, annualized return, max drawdown, Sharpe, Sortino, win rate, and profit/loss ratio.
+Can it be revisited? no
+Conditions for revisiting: Do not remove `512100` based on standalone attribution or local replay alone. Pool deletion has high selection-bias risk and must be justified by broader pool-design logic, not one training-window contributor ranking.
