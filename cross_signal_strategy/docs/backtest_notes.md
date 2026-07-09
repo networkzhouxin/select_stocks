@@ -1935,3 +1935,43 @@ Interpretation:
 
 Can this result be used to change rules? candidate only
 Reason: Local training replay supports preparing a JoinQuant training candidate, but JoinQuant remains the authority. Do not merge ATR 2.0 into the official mainline unless JoinQuant training confirms the improvement.
+
+### Training-Only Iteration: Pool And Entry-Quality Structure Scan
+
+Version: `cross-v0.3.1`
+Code path: local replay with cached training scores; no validation-period data used
+Backtest period: 2019-01-02 to 2021-12-31
+Protocol role: training-only structural scan after ATR-2.0 rejection
+
+Baseline local replay:
+- Return +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201.
+- Buy count 100, sell count 97, average exposure 73.6%, empty days 39, full-position days 434.
+
+ETF attribution observations:
+- Strongest realized contributors: `513100` +5829.2, `159915` +5616.2, `159928` +3222.9, `513500` +2387.8, `513050` +2317.3.
+- Weakest realized contributors: `159985` +573.4 and `512100` +277.4.
+- `159985` looked weak as a standalone realized contributor, but deleting it reduced local return and worsened drawdown, which suggests it may still provide useful path diversification.
+
+Variant scan:
+- Remove `159985`: +108.97% return, 9.64% max drawdown, Sharpe 2.017.
+- Remove `512100`: +114.57% return, 6.99% max drawdown, Sharpe 2.094.
+- Remove both `159985` and `512100`: +109.74% return, 8.42% max drawdown, Sharpe 2.073.
+- Require `buy_score >= 70`: +85.05% return, 11.56% max drawdown, Sharpe 1.661.
+- Require `buy_score >= 80`: +51.41% return, 5.17% max drawdown, Sharpe 1.593.
+- Remove `location_score == 17` buys: +88.02% return, 7.31% max drawdown, Sharpe 1.808.
+- Require `trend_score >= 8`: +108.39% return, 7.32% max drawdown, Sharpe 1.984.
+- Require `trend_score >= 9`: +88.31% return, 7.38% max drawdown, Sharpe 1.794.
+- Composite entry-quality filter: +50.37% return, 10.13% max drawdown, Sharpe 1.230.
+
+Candidate created:
+- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_no_512100_candidate.py`
+- Version: `cross-v0.3.1-no-512100-candidate`
+- Only intended strategy change versus official mainline: remove `512100.XSHG` from `get_default_etf_pool()`.
+
+Interpretation:
+- Broad entry-quality filters were harmful because they reduced capital utilization and blocked useful rebound entries.
+- Simple training-attribution deletion is dangerous. `159985` is the clearest warning: it looks weak in realized PnL but worsens the path when removed.
+- Removing only `512100` is a small, low-complexity candidate because it modestly improves local return and Sharpe while simplifying A-share exposure. The local edge is small and must be confirmed in JoinQuant 2019-2021 before any adoption.
+
+Can this result be used to change rules? candidate only
+Reason: Local training replay supports preparing a JoinQuant training candidate, but the effect is modest and pool deletion has selection-bias risk. Do not merge into official mainline unless JoinQuant training confirms a meaningful improvement.

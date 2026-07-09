@@ -315,3 +315,14 @@ Validation result: Not run. Per protocol, validation periods were not inspected.
 Why it was not adopted: The all-no-replacement variant was a near tie with slightly higher return but lower Sharpe and materially fewer trades. The improvement is too small for a new rule and may be path noise.
 Can it be revisited? yes
 Conditions for revisiting: If later training-only diagnostics show turnover/friction is a larger problem than currently measured, this can be reconsidered as a simplicity/turnover rule rather than a return enhancer.
+
+Date: 2026-07-09
+Version: `cross-v0.3.1-atr2-candidate`
+Experiment: Tighten ATR trailing stop multiplier from 2.5 to 2.0 while keeping `stop_floor=0.05`, `stop_cap=0.15`, buy/sell signals, position sizing, and minimum signal hold unchanged.
+Hypothesis: A slightly tighter trailing stop might preserve gains after cross-signal entries without changing the signal model. This is a broad risk-control idea, not a precise threshold fit.
+Local training result: Local replay over 2019-2021 returned +115.87%, annualized +29.33%, max drawdown 6.97%, Sharpe 2.076, Sortino 3.249, versus local baseline +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201.
+JoinQuant training result: JoinQuant over 2019-2021 returned +121.37%, annualized +31.28%, max drawdown 6.85%, Sharpe 2.990, Sortino 0.746, win rate 0.563, profit/loss ratio 4.298, versus official mainline +122.47%, annualized +31.50%, max drawdown 6.38%, Sharpe 3.057, Sortino 0.759, win rate 0.552, profit/loss ratio 4.466.
+Validation result: Not run. Per protocol, validation periods were not used to tune or decide this candidate.
+Why it failed: The local improvement did not survive the JoinQuant training authority check. JoinQuant showed lower return, worse drawdown, lower Sharpe/Sortino, and lower profit/loss ratio; the slightly higher win rate was not worth the risk-adjusted deterioration.
+Can it be revisited? no
+Conditions for revisiting: Do not revisit simple ATR multiplier tightening unless a later, independent structural change creates a new stop-loss failure mode. Avoid further fine-grained ATR multiplier searching because it would become parameter mining.
