@@ -14,7 +14,7 @@ import builtins as _builtins
 from jqdata import *
 
 
-STRATEGY_VERSION = "cross-v0.3.1"
+STRATEGY_VERSION = "cross-v0.3.2"
 
 
 try:
@@ -494,8 +494,28 @@ def filter_buy_candidates(scores, held_codes, params=None):
         and s.get("buy_score", 0) >= p["buy_threshold"]
         and s.get("sell_score", 0) < p["sell_threshold"]
         and has_new_buy_position(s, p)
+        and not is_blocked_entry_combo(s)
         and s.get("code") not in held
     ]
+
+
+def is_blocked_entry_combo(score):
+    rsi_up = score.get("rsi6_cross_rsi12_up") or score.get("rsi6_cross_rsi24_up")
+    kdj_up = score.get("kdj_k_cross_up") or score.get("kdj_j_cross_up")
+    return (
+        bool(rsi_up)
+        and bool(score.get("macd_cross_up"))
+        and not bool(kdj_up)
+        and _numeric_score(score.get("volume_score")) > 0
+        and 0 < _numeric_score(score.get("trend_score")) < 20
+    )
+
+
+def _numeric_score(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def summarize_cross_signal_candidates(scores, limit=5):

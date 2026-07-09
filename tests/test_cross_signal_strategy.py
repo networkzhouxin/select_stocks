@@ -577,7 +577,7 @@ def test_default_params_use_half_size_for_a_share_zero_volume_buys():
 
 
 def test_default_etf_pool_uses_joinquant_confirmed_training_candidate():
-    assert strategy.STRATEGY_VERSION == "cross-v0.3.1"
+    assert strategy.STRATEGY_VERSION == "cross-v0.3.2"
     assert strategy.get_default_etf_pool() == [
         "159915.XSHE",
         "512100.XSHG",
@@ -687,6 +687,63 @@ def test_buy_candidates_accept_ma20_repair_position_for_new_entries():
     candidates = strategy.filter_buy_candidates(scores, held_codes=[], params=strategy.get_default_params())
 
     assert [c["code"] for c in candidates] == ["MA20_REPAIR"]
+
+
+def test_buy_candidates_block_validated_macd_rsi_volume_combo_without_kdj():
+    scores = [
+        {
+            "code": "BLOCKED_COMBO",
+            "buy_allowed": True,
+            "buy_score": 70,
+            "sell_score": 0,
+            "close_between_boll_lower_mid": True,
+            "close_cross_boll_mid_up": False,
+            "close_near_ma20": False,
+            "close_far_above_ma20": False,
+            "rsi6_cross_rsi12_up": True,
+            "rsi6_cross_rsi24_up": False,
+            "macd_cross_up": True,
+            "kdj_k_cross_up": False,
+            "kdj_j_cross_up": False,
+            "trend_score": 12,
+            "volume_score": 6,
+        },
+    ]
+
+    candidates = strategy.filter_buy_candidates(scores, held_codes=[], params=strategy.get_default_params())
+
+    assert candidates == []
+    assert strategy.is_blocked_entry_combo(scores[0])
+
+
+def test_buy_candidates_keep_validated_combo_when_kdj_or_strong_trend_confirms():
+    with_kdj = {
+        "code": "WITH_KDJ",
+        "buy_allowed": True,
+        "buy_score": 70,
+        "sell_score": 0,
+        "close_between_boll_lower_mid": True,
+        "close_cross_boll_mid_up": False,
+        "close_near_ma20": False,
+        "close_far_above_ma20": False,
+        "rsi6_cross_rsi12_up": True,
+        "macd_cross_up": True,
+        "kdj_k_cross_up": True,
+        "kdj_j_cross_up": False,
+        "trend_score": 12,
+        "volume_score": 6,
+    }
+    strong_trend = dict(with_kdj, code="STRONG_TREND", kdj_k_cross_up=False, trend_score=20)
+
+    candidates = strategy.filter_buy_candidates(
+        [with_kdj, strong_trend],
+        held_codes=[],
+        params=strategy.get_default_params(),
+    )
+
+    assert [c["code"] for c in candidates] == ["WITH_KDJ", "STRONG_TREND"]
+    assert not strategy.is_blocked_entry_combo(with_kdj)
+    assert not strategy.is_blocked_entry_combo(strong_trend)
 
 
 def test_archived_weak_buy_candidate_does_not_relax_buy_threshold():
@@ -1010,7 +1067,7 @@ def test_format_cross_flags_shows_rsi_and_kdj_detail():
 def test_format_self_check_reports_version_and_diff_cross_status():
     text = strategy.format_self_check()
 
-    assert "[cross-v0.3.1] positional-diff-cross enabled" in text
+    assert "[cross-v0.3.2] positional-diff-cross enabled" in text
     assert "diff_cross_self_check=True expected=True" in text
     assert "self_rev=12" in text
 
@@ -1046,6 +1103,8 @@ if __name__ == "__main__":
         test_buy_candidates_exclude_force_sell_conflicts,
         test_buy_candidates_require_low_position_for_new_entries,
         test_buy_candidates_accept_ma20_repair_position_for_new_entries,
+        test_buy_candidates_block_validated_macd_rsi_volume_combo_without_kdj,
+        test_buy_candidates_keep_validated_combo_when_kdj_or_strong_trend_confirms,
         test_archived_weak_buy_candidate_does_not_relax_buy_threshold,
         test_weak_buy_candidate_rejects_high_position_low_reversal_and_sell_conflict,
         test_archived_adx_buy_uptrend_rule_does_not_relax_entry_position,

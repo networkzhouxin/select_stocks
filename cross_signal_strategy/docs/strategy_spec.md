@@ -1,6 +1,6 @@
 # Cross-Signal ETF Strategy Spec
 
-Status: v0.3.1 training mainline implemented, validation not inspected.
+Status: v0.3.2 mainline implemented after frozen training and reserved validation checks.
 
 ## Hypothesis
 
@@ -20,7 +20,7 @@ This is not a pure momentum rotation strategy. Momentum can be used as context, 
 
 ## ETF Pool
 
-Use the 9-ETF pool confirmed by 2019-2021 JoinQuant training for `cross-v0.3.1`:
+Use the 9-ETF pool confirmed by 2019-2021 JoinQuant training for `cross-v0.3.1` and carried forward into `cross-v0.3.2`:
 
 - `159915.XSHE` 创业板 ETF
 - `512100.XSHG` 中证 1000 ETF
@@ -58,6 +58,18 @@ Signals may be counted within a short recent window rather than requiring same-d
 
 - Volume expansion can confirm reversal quality.
 - Volume should not dominate because ETF volume, especially cross-market ETF volume, can be noisy.
+
+### Entry-Combo Filter
+
+Version `cross-v0.3.2` blocks one validated weak entry pattern:
+
+- RSI6 crosses above RSI12 or RSI24.
+- MACD DIF crosses above DEA.
+- KDJ K and J do not cross above D.
+- Volume score is positive.
+- Trend score is positive but below strong-trend level (`0 < trend_score < 20`).
+
+Rationale: this pattern looks like a confirmed rebound at first glance, but training attribution and frozen JoinQuant validation showed it was often a weak repair bounce without enough timing or trend confirmation. The filter is deliberately narrow and does not add new indicators.
 
 ### Risk Control
 

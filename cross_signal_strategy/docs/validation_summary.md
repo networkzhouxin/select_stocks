@@ -1,17 +1,40 @@
 # Cross-Signal Frozen Validation Summary
 
 Date: 2026-07-09
+Updated: 2026-07-10
 
 This file summarizes the frozen validation evidence for the official cross-signal mainline and the ATR-stress candidate. It is a decision record, not a parameter-search notebook. Do not use these reserved-period results to tune thresholds, add indicators, remove ETFs, or choose a new validation-fitting variant.
+
+## Current Adoption Update
+
+Current official mainline after frozen validation:
+- File: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+- Version: `cross-v0.3.2`
+- Adopted rule: the validated entry-combo filter from `cross-v0.3.1-combo-candidate`.
+- Adoption reason: the candidate improved training and three reserved windows, while the 2015-2018 stress window was only slightly mixed and did not collapse.
+
+`cross-v0.3.1` remains the historical baseline for the tables below. Do not rewrite those historical results as `v0.3.2`; they are comparison evidence.
+
+## Entry-Combo Candidate Evidence
+
+| Period | Role | v0.3.1 Return | Combo Return | v0.3.1 Max DD | Combo Max DD | v0.3.1 Sharpe | Combo Sharpe | Judgment |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 2019-2021 | training | +122.47% | +125.82% | 6.38% | 6.70% | 3.057 | 3.109 | better return and quality, slightly higher drawdown |
+| 2022-2023 | validation | +15.49% | +17.36% | 13.38% | 11.63% | 0.346 | 0.432 | better |
+| 2024-2026 | recent validation | +56.99% | +58.17% | 10.65% | 9.98% | 1.800 | 1.842 | better |
+| 2015-2018 | stress validation | +23.58% | +23.21% | 7.49% | 7.38% | 0.256 | 0.247 | mixed but not failed |
+| 2010-2014 | early supplement | -0.61% | +1.20% | 5.36% | 5.23% | -0.709 | -0.672 | better, limited pool |
+
+Adoption conclusion: promote the combo filter as `cross-v0.3.2`. The validation evidence is broad enough for adoption, but it should not be used to expand or retune the filter.
 
 ## Strategy Family
 
 The cross-signal strategy is a daily ETF strategy built around reversal/cross signals. Its goal is to avoid the "buy high, sell low" behavior that can happen in pure momentum rotation during choppy markets, while still letting profitable trends run through ATR-based risk control.
 
-Official mainline:
+Historical official mainline before the 2026-07-10 adoption update:
 - File: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
 - Version: `cross-v0.3.1`
-- Role: official training-confirmed mainline.
+- Role: historical training-confirmed baseline for the comparisons below.
 
 ATR-stress candidate:
 - File: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
@@ -67,7 +90,7 @@ What the evidence does not prove:
 ## Adoption Recommendation
 
 Official mainline:
-- Keep `cross-v0.3.1` as the official cross-signal baseline.
+- Promote the entry-combo filter into the official cross-signal mainline as `cross-v0.3.2`.
 - It has passed the training window and multiple reserved windows without collapse.
 - It is still a research strategy, not yet a production replacement for the existing deployed strategies.
 

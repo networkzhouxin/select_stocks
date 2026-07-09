@@ -477,3 +477,14 @@ Risk: ETF-pool deletion is more exposed to training-window selection bias than a
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; validation periods were not inspected
 Status: adopted and JoinQuant-training-confirmed
+
+### Promote Entry-Combo Filter Candidate To Cross-Signal Mainline
+
+Date: 2026-07-10
+Decision: Promote the frozen `cross-v0.3.1-combo-candidate` entry filter into the official cross-signal JoinQuant mainline as `cross-v0.3.2`. The rule blocks new buys where RSI crosses up and MACD crosses up, KDJ does not cross up, volume confirmation is positive, and trend score is positive but below strong-trend level (`0 < trend_score < 20`).
+Reason: Training attribution identified this combination as a weak repair-bounce entry pattern: it has some reversal and volume confirmation, but lacks KDJ timing confirmation and is not a strong trend continuation. The rule is intentionally narrow and uses existing signal fields rather than introducing new indicators or fine-grained thresholds.
+Evidence: JoinQuant training 2019-2021 improved from official `cross-v0.3.1` +122.47% return, +31.50% annualized, 6.38% max drawdown, Sharpe 3.057, Sortino 0.759, win rate 0.552, profit/loss ratio 4.466 to combo candidate +125.82% return, +32.18% annualized, 6.70% max drawdown, Sharpe 3.109, Sortino 0.799, win rate 0.558, profit/loss ratio 4.845. Reserved validation supported the candidate in 2022-2023 (+17.36% vs +15.49%, max drawdown 11.63% vs 13.38%), 2024-2026 (+58.17% vs +56.99%, max drawdown 9.98% vs 10.65%), and 2010-2014 (+1.20% vs -0.61%, limited-pool supplement). The 2015-2018 stress window was mixed but not failed: +23.21% vs +23.58%, with slightly better max drawdown, win rate, profit/loss ratio, and fewer trades.
+Risk: This is a learned entry-quality filter, so it carries more overfitting risk than execution bug fixes. Mitigations: the candidate was frozen before reserved validation, was checked across multiple distinct windows, and is narrow enough to avoid reshaping the whole strategy.
+Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `tests/test_cross_signal_strategy.py`, `cross_signal_strategy/docs/strategy_spec.md`, `cross_signal_strategy/docs/validation_summary.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: validation periods were used only for adoption judgment after the rule was frozen; no retuning or expansion from validation results
+Status: adopted after frozen training and reserved validation checks
