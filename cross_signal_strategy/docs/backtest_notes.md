@@ -2188,6 +2188,39 @@ Interpretation:
 Can this result be used to change rules? no
 Reason: The training-only local check failed. Record as a failed broad-threshold experiment; do not inspect validation windows.
 
+### Weak Replacement-Aware Signal-Sell Candidate Prepared
+
+Version: `cross-v0.3.2-weak-replacement-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py`
+Backtest period for next required JoinQuant check: 2019-01-01 to 2021-12-31 only
+Initial capital for next required JoinQuant check: 20000
+Execution schedule: daily `09:35`
+Protocol role: training-only candidate; validation windows must not be inspected unless this candidate is frozen after JoinQuant training confirmation
+
+Hypothesis:
+- Broadly raising `sell_threshold` to 35 failed because normal signal sells are load-bearing for capital recycling.
+- A narrower rule may help: protect only weak normal signal sells (`sell_threshold <= sell_score < 35`) when the current holding still has `buy_score >= 35` and selling it would not free a slot for any eligible replacement buy.
+- ATR stops remain unconditional.
+
+Local training probe:
+- Mainline equivalent baseline: +118.75% return, +29.90% annualized, 6.81% max drawdown, Sharpe 2.117, Sortino 3.327, 99 buys, 96 sells, trade win rate 0.552, profit/loss ratio 4.034.
+- Broad no-replacement protection for all weak sells: +108.24% return, 7.67% max drawdown, Sharpe 1.973, protected 9 sells. Rejected.
+- Weak no-replacement with `buy_score >= 35`: +119.82% return, +30.12% annualized, 6.86% max drawdown, Sharpe 2.120, Sortino 3.335, 99 buys, 96 sells, trade win rate 0.552, profit/loss ratio 4.107, protected 2 sells.
+- Other no-replacement variants were worse than baseline.
+
+Implementation checks:
+- Added tests before implementation for version, weak sell protection without replacement, no protection when replacement exists, no protection for stronger sells, and no protection when `buy_score < 35`.
+- `python -m pytest tests/test_cross_signal_weak_replacement_candidate.py tests/test_cross_signal_strategy.py -q` passed.
+- `python -m py_compile cross_signal_strategy\smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py cross_signal_strategy\smart_trade_joinquant_cross_signal_etf.py` passed.
+
+Interpretation:
+- The local edge is small and protects only two sells, so this candidate has path-noise risk.
+- It is nevertheless narrower and more economically coherent than a global threshold increase: keep weak-sell positions only when they still have some buy support and there is no replacement opportunity.
+- Requires JoinQuant training confirmation before any adoption or reserved validation.
+
+Can this result be used to change rules? not yet
+Reason: This is only a prepared training candidate. It needs JoinQuant 2019-2021 training confirmation before adoption or validation.
+
 ### JoinQuant Early Supplemental Validation Check: Entry Combo Filter Candidate 2010-2014
 
 Version: `cross-v0.3.1-combo-candidate`
