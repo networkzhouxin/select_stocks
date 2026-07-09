@@ -2168,6 +2168,26 @@ Implementation checks:
 Can this result be used to change rules? not yet
 Reason: This is only a prepared training candidate. It needs JoinQuant 2019-2021 training confirmation before any adoption or reserved-period validation.
 
+### Local Training Check: Sell35 Candidate
+
+Version: `cross-v0.3.2-sell35-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
+Backtest period: 2019-01-02 to 2021-12-31 local training replay
+Initial capital: 20000
+Protocol role: training-only local direction check; JoinQuant remains performance authority
+
+Local replay result:
+- Mainline equivalent `sell_threshold=30`: +118.75% return, +29.90% annualized, 6.81% max drawdown, Sharpe 2.117, Sortino 3.327, daily win rate 0.526, 99 buys, 96 sells, 96 closed trades, trade win rate 0.552, profit/loss ratio 4.034.
+- Candidate `sell_threshold=35`: +86.08% return, +23.07% annualized, 5.97% max drawdown, Sharpe 1.757, Sortino 2.713, daily win rate 0.533, 92 buys, 89 sells, 89 closed trades, trade win rate 0.528, profit/loss ratio 3.303.
+
+Interpretation:
+- Raising the normal signal sell threshold from 30 to 35 reduces drawdown, but it materially damages return, Sharpe, Sortino, trade win rate, and profit/loss ratio in the local training replay.
+- This suggests that the weak sell buckets are not safe to remove wholesale. Some `sell_score 32-34` exits may sell early, but the low-threshold sell mechanism still appears useful for capital recycling and risk release.
+- Do not send this candidate to JoinQuant unless a narrower training-only hypothesis is developed. The broad `sell_threshold=35` candidate is rejected at the local direction-check stage.
+
+Can this result be used to change rules? no
+Reason: The training-only local check failed. Record as a failed broad-threshold experiment; do not inspect validation windows.
+
 ### JoinQuant Early Supplemental Validation Check: Entry Combo Filter Candidate 2010-2014
 
 Version: `cross-v0.3.1-combo-candidate`

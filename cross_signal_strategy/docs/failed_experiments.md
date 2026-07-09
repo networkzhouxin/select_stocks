@@ -337,3 +337,14 @@ Validation result: Not run. Per protocol, validation periods were not used to tu
 Why it failed: The small local improvement did not survive the JoinQuant training authority check. The candidate was worse on return, annualized return, max drawdown, Sharpe, Sortino, win rate, and profit/loss ratio.
 Can it be revisited? no
 Conditions for revisiting: Do not remove `512100` based on standalone attribution or local replay alone. Pool deletion has high selection-bias risk and must be justified by broader pool-design logic, not one training-window contributor ranking.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2-sell35-candidate`
+Experiment: Raise the normal signal-sell threshold from 30 to 35 on top of the adopted `cross-v0.3.2` mainline, while keeping ATR stops unconditional and all buy logic unchanged.
+Hypothesis: Fresh post-sell diagnostics on the `v0.3.2`/combo training log showed some `sell_score 32-34` signal sells were followed by positive 10-day forward returns, so a higher forced-sell threshold might reduce premature exits.
+Local training result: Mainline-equivalent local replay with `sell_threshold=30` returned +118.75%, annualized +29.90%, max drawdown 6.81%, Sharpe 2.117, Sortino 3.327, 99 buys, 96 sells, closed-trade win rate 0.552, profit/loss ratio 4.034. Candidate `sell_threshold=35` returned +86.08%, annualized +23.07%, max drawdown 5.97%, Sharpe 1.757, Sortino 2.713, 92 buys, 89 sells, closed-trade win rate 0.528, profit/loss ratio 3.303.
+JoinQuant training result: Not run because the local direction check materially failed.
+Validation result: Not run. Per protocol, validation periods were not inspected.
+Why it failed: The broad threshold increase reduces drawdown, but it damages return and risk-adjusted quality too much. The low-threshold signal sell remains load-bearing for capital recycling even though some individual weak-score exits sell early.
+Can it be revisited? no as a standalone threshold raise
+Conditions for revisiting: Only study narrower sell-quality rules that preserve capital recycling; do not raise global `sell_threshold` again without a new structural reason.
