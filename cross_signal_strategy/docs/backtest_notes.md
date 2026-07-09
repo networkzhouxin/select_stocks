@@ -2139,6 +2139,47 @@ Interpretation:
 Can this result be used to change rules? no direct rule change
 Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
 
+### JoinQuant Early Supplemental Validation Check: Entry Combo Filter Candidate 2010-2014
+
+Version: `cross-v0.3.1-combo-candidate`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Backtest period: 2010-01-01 to 2014-12-31
+Initial capital: 20000
+Execution schedule: daily `09:35`
+Protocol role: frozen-rule early supplemental validation; no tuning allowed from this result
+
+JoinQuant headline result:
+- Strategy return: +1.20%.
+- Annualized return: +0.25%.
+- Excess return: +2.40%.
+- Benchmark return: -1.17%.
+- Alpha: -0.035.
+- Beta: 0.057.
+- Sharpe: -0.672.
+- Sortino: -0.763.
+- Max drawdown: 5.23%.
+- Win rate: 0.366.
+- Profit/loss ratio: 1.172.
+- Trades shown by JoinQuant summary: 15 wins, 26 losses.
+
+Operational checks:
+- Version log confirmed `cross-v0.3.1-combo-candidate`.
+- ERROR-level log count: 0.
+- WARNING-level log count: 0.
+- Early-window availability note: the log starts with many `paused=9` days because most ETFs in the current pool were not yet listed or tradable in 2010. Treat this as a limited-pool supplemental check, not a full-pool performance test.
+
+Comparison with official mainline:
+- Official `cross-v0.3.1` 2010-2014 result was -0.61% return, -0.13% annualized, 5.36% max drawdown, Sharpe -0.709, Sortino -0.822, win rate 0.349, profit/loss ratio 1.075, with 15 wins and 28 losses.
+- The combo candidate improves return, annualized return, max drawdown, Sharpe, Sortino, win rate, profit/loss ratio, and reduces loss count.
+
+Interpretation:
+- This early supplemental validation supports the candidate directionally, but the period has limited ETF availability and low trade count.
+- The useful evidence is that the filter does not damage early-period behavior and slightly improves the main quality metrics.
+- Together with 2022-2023 and 2024-2026, this strengthens the case for adoption; 2015-2018 remains the only mixed window.
+
+Can this result be used to change rules? no direct rule change
+Reason: This is supplemental validation evidence for the already-frozen candidate. It supports adoption judgment, not retuning.
+
 ### JoinQuant Stress Validation Check: Entry Combo Filter Candidate 2015-2018
 
 Version: `cross-v0.3.1-combo-candidate`
