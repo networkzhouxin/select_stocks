@@ -2620,6 +2620,42 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-10 BOLL(20,2) BandWidth Direction Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` trading path with observation-only BandWidth fields
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Preserve the existing standard BOLL period and multiplier: `20` and `2.0`.
+- Calculate `BandWidth = (upper - lower) / middle` from the adjusted daily close series ending on the frozen T-1 signal date.
+- Compare only one-day direction: rising versus non-rising. Do not search absolute width thresholds, alternate periods, or multi-day slopes.
+- If supported, require rising BandWidth only for mild-trend entries (`0 < trend_score < 20`). Strong-trend entries remain unchanged.
+- Create one candidate only if mild rising and mild non-rising groups both have at least 15 trades, each has at least 3 trades in every training year, and rising width improves both average return and win rate in every year.
+
+Safety checks:
+- The adapter verifies that the BandWidth frame ends exactly on the base signal date and rejects any row after T-1.
+- It returns defensive score copies and attaches BandWidth only to diagnostic snapshots.
+- BandWidth never enters the official score, buy filter, candidate ranking, position sizing, or sell logic.
+
+Overall attribution:
+- Declining width: 49 trades, +9607.20 PnL, +2.23% average return, 57.14% win rate, 3.660 profit/loss ratio.
+- Rising width: 47 trades, +14282.20 PnL, +3.47% average return, 53.19% win rate, 4.351 profit/loss ratio.
+- Mild trend, declining: 38 trades, +1317.00 PnL, +0.19% average return, 50.00% win rate, 1.393 profit/loss ratio.
+- Mild trend, rising: 31 trades, +7939.40 PnL, +3.05% average return, 51.61% win rate, 4.040 profit/loss ratio.
+
+Pre-registered mild-trend annual comparison:
+- 2019 declining: 12 trades, -776.90 PnL, -1.01% average return, 33.33% win rate. Rising: 7 trades, +2651.60 PnL, +5.85% average return, 57.14% win rate.
+- 2020 declining: 12 trades, +882.70 PnL, +0.76% average return, 50.00% win rate. Rising: 7 trades, +4637.80 PnL, +6.78% average return, 71.43% win rate.
+- 2021 declining: 14 trades, +1211.20 PnL, +0.72% average return, 64.29% win rate. Rising: 17 trades, +650.00 PnL, +0.36% average return, 41.18% win rate.
+
+Decision:
+- Reject the mild-trend rising-BandWidth confirmation before candidate creation.
+- The relationship is strong in 2019 and 2020 but reverses in 2021 on a non-trivial sample. A single fixed BandWidth-direction rule is therefore regime-dependent rather than stable.
+- Do not change BOLL(20,2), search width thresholds, replace one-day direction with a tuned slope, or add a post-hoc 2021 regime exception.
+- Keep BandWidth observation-only and official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
 ## 2026-07-10 09:35 ATR-Normalized Gap Observation Gate
 
 Period: 2019-01-01 to 2021-12-31

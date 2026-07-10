@@ -583,3 +583,15 @@ Risk: T-day 09:35 is permissible only as an explicit execution-time filter. Late
 Affected files: `cross_signal_strategy/gap_execution_diagnostics.py`, `tests/test_cross_signal_gap_execution_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: diagnostic adopted; gap-filter candidate rejected before implementation
+
+### Keep BOLL BandWidth Observation-Only
+
+Date: 2026-07-10
+Decision: Add a T-1-safe standard BOLL(20,2) BandWidth diagnostic, but do not create the pre-registered candidate that would require rising BandWidth for mild-trend entries. Official `cross-v0.3.2` remains unchanged.
+Reason: The strategy already uses BOLL location and middle/upper-band events, but not volatility expansion or contraction. BandWidth direction was tested as one independent extension without changing the established BOLL parameters.
+Evidence: Mild-trend rising width strongly outperformed declining width in 2019 and 2020. In 2021 the relationship reversed: rising width had 17 trades, +0.36% average return, and 41.18% win rate, versus 14 declining-width trades with +0.72% average return and 64.29% win rate. The pre-registered annual consistency gate failed.
+Interpretation: BandWidth contains descriptive information, but its direction is regime-dependent. Adding it as a universal mild-trend confirmation would fit 2019-2020 behavior and damage the distinct 2021 regime.
+Risk: Searching an absolute width, alternate BOLL parameters, multi-day slope, or a special 2021 exception after seeing the annual split would be post-hoc parameter mining. BandWidth must remain diagnostic-only in this experiment.
+Affected files: `cross_signal_strategy/boll_width_diagnostics.py`, `tests/test_cross_signal_boll_width_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic adopted; BandWidth strategy candidate rejected before implementation

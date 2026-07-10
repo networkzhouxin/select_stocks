@@ -418,3 +418,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: Large positive gaps were rare strong-trend continuation events rather than a stable source of chase losses. A broad `>1 ATR` block would remove some of the training path's highest-quality entries.
 Can it be revisited? no as a broad `>1 ATR` entry filter
 Conditions for revisiting: Do not search smaller ATR thresholds or add the post-hoc mild-trend interaction seen in this attribution. A future execution filter requires a new independent market-structure hypothesis.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2` observation-only BOLL BandWidth gate
+Experiment: Keep standard BOLL(20,2), calculate T-1 `BandWidth = (upper-lower)/middle`, and compare rising versus non-rising direction for mild-trend entries. Create a candidate only if rising width improves average return and win rate in every training year with adequate samples.
+Hypothesis: Rising BandWidth might distinguish a mild-trend reversal that is expanding into a genuine move from one that remains compressed and noisy.
+Training diagnostic result: Across mild-trend trades, rising width produced 31 trades, +7939.40 PnL, +3.05% average return, 51.61% win rate, and 4.040 profit/loss ratio, versus 38 declining-width trades with +1317.00 PnL, +0.19% average return, 50.00% win rate, and 1.393 profit/loss ratio. However, 2021 reversed the relationship: rising width returned +0.36% with 41.18% win rate, while declining width returned +0.72% with 64.29% win rate.
+Candidate result: Not implemented because the annual consistency gate failed.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: BandWidth direction was useful in 2019-2020 but unstable in the 2021 regime. The aggregate improvement conceals a meaningful annual reversal, so it is not a robust universal confirmation.
+Can it be revisited? no as a one-day rising-width mild-trend gate
+Conditions for revisiting: Do not tune BOLL periods, width thresholds, or slope windows from these results. A future volatility-regime experiment must use a separately motivated dimension rather than repackaging this failed split.
