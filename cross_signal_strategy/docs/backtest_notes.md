@@ -2382,3 +2382,61 @@ Decision:
 - Reject the candidate and keep official `cross-v0.3.2` unchanged.
 - Do not run reserved validation. The candidate failed the JoinQuant training gate because return and annualized return fell while max drawdown and Sortino worsened.
 - The higher win rate and profit/loss ratio show that the filter removed some losing entries, but it also removed higher-value opportunity. This is not a favorable trade under the strategy's primary objective.
+
+## 2026-07-10 Cross-v0.3.2 Training Stability Diagnostic
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2`
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Baseline:
+- Total return: +118.75%.
+- Max drawdown: 6.81%.
+- Average exposure: 0.732.
+- Filled buy/sell events: 99/96.
+
+Annual stability:
+- 2019: +35.68% return, 4.67% max drawdown, 0.711 average exposure, +5763.90 closed-trade PnL, 15 wins and 11 losses.
+- 2020: +48.45% return, 6.81% max drawdown, 0.761 average exposure, +12481.40 closed-trade PnL, 18 wins and 14 losses.
+- 2021: +8.60% return, 4.97% max drawdown, 0.722 average exposure, +5644.10 closed-trade PnL, 20 wins and 18 losses.
+
+Contribution concentration:
+- Largest winning trade / gross profit: 8.32%.
+- Top three winning trades / gross profit: 23.51%.
+- Largest ETF positive contribution / gross profit: 22.00%.
+- Interpretation: performance is not dependent on one trade or one ETF, although 2020 is the strongest calendar-year contributor.
+
+Exit quality:
+- ATR stop: 28 trades, 17 wins and 11 losses, +14831.10 realized PnL, 5.85 profit/loss ratio, 18.89 average trading-day hold.
+- Signal sell: 68 trades, 36 wins and 32 losses, +9058.30 realized PnL, 2.88 profit/loss ratio, 17.07 average trading-day hold.
+- Interpretation: ATR exits are the higher-payoff exit path, but signal sells also add positive PnL and remain necessary for capital recycling.
+
+Holding periods:
+- Average: 17.60 trading days.
+- Median: 13 trading days.
+- Buckets: 3 trades at 0-4 days, 29 at 5-9, 33 at 10-19, and 31 at 20+.
+
+T-1 entry trend groups:
+- Strong up (`trend_score >= 20`): 26 trades, 18 wins and 8 losses, +14847.60 realized PnL, 24.50 average trading-day hold.
+- Mild up (`0 < trend_score < 20`): 69 trades, 35 wins and 34 losses, +9256.40 realized PnL, 15.19 average trading-day hold.
+- Sideways (`trend_score == 0`): 1 losing trade, -214.60 realized PnL.
+- Down (`trend_score < 0`): 0 closed trades.
+- Interpretation: trend participation is the principal payoff engine even though reversal crosses provide entry timing.
+
+Descriptive volatility split:
+- Median entry normalized ATR (`ATR / close`): 1.3812%.
+- Above-median group: 48 trades, 25 wins and 23 losses, +15363.90 realized PnL.
+- At/below-median group: 48 trades, 28 wins and 20 losses, +8525.50 realized PnL.
+- This median is a balanced ex-post diagnostic split, not a strategy parameter or candidate threshold.
+
+Doubled-friction replay:
+- Stress definition: double commission rate, minimum commission, and slippage, then rerun the complete path.
+- Total return: +100.33%, down 18.42 percentage points from baseline.
+- Max drawdown: 7.34%, versus 6.81% baseline.
+- Interpretation: the strategy remains profitable under the local stress model, but small-capital performance is materially friction-sensitive.
+
+Decision:
+- Keep official `cross-v0.3.2` unchanged.
+- Do not add a new indicator from this report alone.
+- Use the report to design at most one broad, training-only structural hypothesis at a time. Any candidate still requires tests first and JoinQuant 2019-2021 confirmation before reserved validation.
