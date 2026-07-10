@@ -643,3 +643,15 @@ Risk: The local data has no explicit `paused` field or order-book quotes. A liqu
 Affected files: `cross_signal_strategy/local_backtester.py`, `cross_signal_strategy/local_order_planner.py`, `tests/test_cross_signal_local_backtester.py`, `tests/test_cross_signal_local_order_planner.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2019-2021 training minute/daily data and approved 2018 warm-up data were read
 Status: adopted as local execution-correctness infrastructure; official `cross-v0.3.2` JoinQuant strategy logic unchanged
+
+### Keep Historical IOPV Diagnostic-Only
+
+Date: 2026-07-11
+Decision: Add a read-only training-data IOPV quality audit, but do not create a premium-filter strategy candidate or modify official `cross-v0.3.2`.
+Reason: QDII secondary-market prices can carry economically meaningful premium risk, but the local IOPV field must be complete, point-in-time safe, and reproducible on JoinQuant before it can influence a 09:35 order.
+Evidence: The audit inspected 2,029,422 minute rows across the frozen 12-ETF pool. There were no duplicate minute keys, non-positive IOPV values, or infinite values. Valid IOPV covered 89.06% of all rows and 89.24% of represented 09:35 observations. The 09:35 coverage was 78.45% in 2019, 88.37% in 2020, and 99.69% in 2021. Ten full-year 2019 ETFs shared the same 50 missing dates, and all twelve 2020 ETFs shared the same 27 missing dates, proving material cross-sectional source-level gaps. Local `513100` close/IOPV pairs on 2020-02-07 and 2020-09-21 reproduced official 8.10% and 22.5% premium announcements to rounding. Of 216,447 no-trade minutes, 20,576 still had changing IOPV, confirming that a moving IOPV does not make a stale secondary-market price executable.
+Interpretation: Local IOPV is correctly scaled and captures genuine historical premium episodes, but incomplete 2019-2020 coverage prevents unbiased threshold research. The source metadata also does not prove whether a row labelled 09:35 was available at 09:35:00, so using it as a decision input could create same-minute look-ahead.
+Risk: Daily NAV cannot backfill the missing morning IOPV without leakage. QDII IOPV remains indicative rather than guaranteed realizable NAV. A future implementation requires a point-in-time source/platform probe and must define conservative behavior for missing IOPV without selecting that behavior from validation results.
+Affected files: `cross_signal_strategy/iopv_quality_diagnostics.py`, `tests/test_cross_signal_iopv_quality.py`, `cross_signal_strategy/docs/iopv_data_quality.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2019-2021 training minute data and contemporaneous public fund-manager announcements were used
+Status: audit infrastructure adopted; premium factor not opened for strategy experimentation

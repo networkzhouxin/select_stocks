@@ -77,6 +77,8 @@ These are starting defaults, not optimized parameters.
 - `cmf_diagnostics.py`: observation-only CMF(20) attribution using adjusted T-1 signal frames; it does not alter strategy scores or orders.
 - `strong_trend_capacity_diagnostics.py`: training-only strong-trend entry, idle-slot, cash-headroom, and close-path excursion diagnostics; it never changes order targets.
 - `gap_execution_diagnostics.py`: training-only attribution of T-day 09:35 execution gaps normalized by frozen T-1 ATR; it does not filter orders.
+- `iopv_quality_diagnostics.py`: read-only 2019-2021 minute-data audit for IOPV completeness, 09:35 point coverage, executable premium distributions, and zero-trade IOPV movement; it does not alter signals or orders.
+- `docs/iopv_data_quality.md`: evidence and usage boundary for local historical IOPV; the data is diagnostic-only until exact point-in-time availability is proved.
 - `boll_width_diagnostics.py`: observation-only standard BOLL(20,2) BandWidth direction attribution on frozen T-1 signal frames.
 - `sequence_diagnostics.py`: observation-only timing attribution for active RSI/KDJ/MACD crosses inside the existing three-day window.
 - `ranking_candidate.py`: rejected local A/B experiment that compared official total-score-first ranking with reversal-score-first ranking on identical cached T-1 signals.
