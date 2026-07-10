@@ -430,3 +430,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: BandWidth direction was useful in 2019-2020 but unstable in the 2021 regime. The aggregate improvement conceals a meaningful annual reversal, so it is not a robust universal confirmation.
 Can it be revisited? no as a one-day rising-width mild-trend gate
 Conditions for revisiting: Do not tune BOLL periods, width thresholds, or slope windows from these results. A future volatility-regime experiment must use a separately motivated dimension rather than repackaging this failed split.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2` observation-only cross-sequence gate
+Experiment: Preserve the official three-day cross window, record the latest active RSI/KDJ/MACD upward-cross offsets, and compare mild-trend oscillator-leading with MACD-leading sequences. Create a candidate only if both clean sequence groups are adequately sampled and oscillator-leading is better in every training year.
+Hypothesis: Fast RSI/KDJ upward crosses followed by slower MACD confirmation may be higher quality than a MACD cross followed by late oscillator confirmation.
+Training diagnostic result: No `macd_leads_oscillators` closed trade occurred. Oscillator-leading had 11 trades overall and only 7 mild-trend trades, with annual mild counts 2/3/2. The 2021 mild oscillator-leading group lost 218.00. Seventy trades had no active MACD upward confirmation and produced +16316.10 PnL.
+Candidate result: Not implemented because the comparison group was empty and the oscillator-leading group failed sample-size and annual-stability gates.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The strategy's actual closed-trade path does not contain the proposed MACD-first sequence and is dominated by early oscillator entries without active MACD confirmation. There is no robust sample for the intended filter.
+Can it be revisited? no as a MACD-leading mild-trend filter
+Conditions for revisiting: Do not widen the cross window, change indicator periods, or promote the post-hoc same-day/mixed groups from this result. A future timing experiment needs a new independently specified mechanism.

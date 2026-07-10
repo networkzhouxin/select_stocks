@@ -2656,6 +2656,45 @@ Decision:
 - Do not change BOLL(20,2), search width thresholds, replace one-day direction with a tuned slope, or add a post-hoc 2021 regime exception.
 - Keep BandWidth observation-only and official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-10 Active Cross-Sequence Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` trading path with observation-only cross-event offsets
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Reuse the official three-trading-day cross window and latest-direction semantics. Do not change indicator periods or the cross window.
+- Record how many trading days before T-1 each active RSI6/RSI12, RSI6/RSI24, KDJ K/D, KDJ J/D, and MACD DIF/DEA cross occurred.
+- `oscillators_lead_macd` requires every currently active RSI/KDJ upward cross to occur earlier than the active MACD upward cross.
+- `macd_leads_oscillators` requires every active RSI/KDJ upward cross to occur later than MACD. Same-day, mixed, no-MACD, and MACD-only states remain separate.
+- If supported, block only mild-trend `macd_leads_oscillators` entries. Create a candidate only if both clean order groups have at least 10 trades, at least 3 per training year, and oscillator-leading improves both average return and win rate every year.
+
+Safety checks:
+- The adapter recomputes indicators from the adjusted frame ending on the frozen T-1 signal date and rejects any later row.
+- Cross-event detection matches the mainline difference rule and keeps only the latest direction inside the window.
+- Sequence fields are attached to defensive diagnostic snapshots and never affect the official scores, ranking, or orders.
+
+Overall closed-trade attribution:
+- No active MACD confirmation: 70 trades, +16316.10 PnL, +2.60% average return, 57.14% win rate, 3.896 profit/loss ratio.
+- Oscillators lead MACD: 11 trades, +3244.80 PnL, +3.32% average return, 45.45% win rate, 4.903 profit/loss ratio.
+- Same day: 10 trades, +4617.50 PnL, +5.65% average return, 60.00% win rate, 7.041 profit/loss ratio.
+- Mixed timing: 5 trades, -289.00 PnL, -0.57% average return, 40.00% win rate, 0.551 profit/loss ratio.
+- No `macd_leads_oscillators` closed trade was observed.
+
+Mild-trend evidence:
+- No active MACD confirmation: 51 trades, +5981.40 PnL, +1.06% average return, 52.94% win rate.
+- Oscillators lead MACD: 7 trades, +1744.80 PnL, +2.94% average return, 28.57% win rate.
+- Same day: 7 trades, +1609.20 PnL, +3.82% average return, 57.14% win rate.
+- Mixed: 4 trades, -79.00 PnL, +0.03% average return, 50.00% win rate.
+- Mild oscillator-leading counts were only 2/3/2 in 2019/2020/2021. The two 2021 trades both lost, for -218.00 PnL.
+
+Decision:
+- Reject the proposed sequence candidate before implementation because the pre-registered MACD-leading comparison group has zero closed trades and the oscillator-leading group is too small and unstable.
+- The observed strategy path is primarily early RSI/KDJ reversal participation without an active MACD upward cross, not a repeatable two-stage MACD confirmation process.
+- Do not convert the post-hoc mixed or same-day groups into filters. Same-day was strong overall but negative in 2021; mixed was weak but contained only five trades.
+- Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
 ## 2026-07-10 09:35 ATR-Normalized Gap Observation Gate
 
 Period: 2019-01-01 to 2021-12-31

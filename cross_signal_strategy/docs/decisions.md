@@ -595,3 +595,15 @@ Risk: Searching an absolute width, alternate BOLL parameters, multi-day slope, o
 Affected files: `cross_signal_strategy/boll_width_diagnostics.py`, `tests/test_cross_signal_boll_width_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: diagnostic adopted; BandWidth strategy candidate rejected before implementation
+
+### Reject Cross-Sequence Filtering Before Candidate Creation
+
+Date: 2026-07-10
+Decision: Add T-1-safe cross-event timing diagnostics, but do not create the pre-registered candidate that would block mild-trend entries where MACD crosses up before all active RSI/KDJ upward crosses. Official `cross-v0.3.2` remains unchanged.
+Reason: The existing three-day window records resonance but not event order. A clean fast-oscillator-then-MACD sequence could theoretically distinguish early reversal plus later confirmation from delayed oscillator chasing.
+Evidence: Among 96 closed trades, no `macd_leads_oscillators` trade occurred. Only 11 trades had oscillators lead MACD, including 7 mild-trend trades with yearly counts 2/3/2. The two 2021 mild oscillator-leading trades both lost. Most trades, 70, had no currently active MACD upward confirmation and still generated +16316.10 PnL.
+Interpretation: There is no executable training sample for the proposed MACD-leading block. The strategy's edge mainly comes from early oscillator reversal signals rather than a stable MACD confirmation sequence, so forcing a sequence state machine would misdescribe the actual strategy.
+Risk: Reframing the post-hoc same-day or mixed groups as candidates would be a new experiment selected after seeing outcomes. The current samples are also too small for sequence-specific rules.
+Affected files: `cross_signal_strategy/sequence_diagnostics.py`, `tests/test_cross_signal_sequence_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic adopted; sequence candidate rejected before implementation
