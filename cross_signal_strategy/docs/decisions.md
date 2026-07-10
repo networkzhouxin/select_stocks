@@ -559,3 +559,15 @@ Risk: CMF is computed from corrected/adjusted daily bars ending at the frozen si
 Affected files: `cross_signal_strategy/cmf_diagnostics.py`, `tests/test_cross_signal_cmf_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: diagnostic adopted; CMF strategy candidate rejected before implementation
+
+### Reject Strong-Trend Idle-Slot Sizing Before Candidate Creation
+
+Date: 2026-07-10
+Decision: Add a training-only strong-trend capacity diagnostic, but do not create the proposed candidate that would let the highest-ranked strong-trend buy consume one otherwise unused slot. Official `cross-v0.3.2` remains unchanged.
+Reason: Strong-trend entries were highly profitable in aggregate, but additional sizing is relevant only when all official same-day candidates have been allocated and a complete extra slot remains fundable without using the official cash reserve. This narrower executable subset must be stable on its own.
+Evidence: The official local path contained 27 filled strong-trend buys and 26 closed trades with +14847.60 PnL. Only 5 trades were capacity eligible. They produced +1371.00 PnL and a 4.249 profit/loss ratio, but the yearly counts were only 2/2/1 for 2019/2020/2021, the 2021 trade lost 44.80, and one ETF contributed 60.31% of capacity-subset gross profit. The pre-registered minimum sample, yearly profitability, and concentration gates all failed.
+Interpretation: Strong-trend quality does not imply that concentration should be increased. Most strong entries have no full unused slot after other valid candidates are allocated, and the few remaining opportunities are too sparse and concentrated to support a robust sizing rule.
+Risk: MFE/MAE and realized trade outcomes use future training prices only for ex-post diagnostics. They never enter strategy code. Turning five selected trades into a sizing rule would be a high-risk form of small-sample overfitting.
+Affected files: `cross_signal_strategy/strong_trend_capacity_diagnostics.py`, `tests/test_cross_signal_strong_trend_capacity.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic adopted; sizing candidate rejected before implementation

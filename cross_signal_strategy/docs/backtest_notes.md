@@ -2584,3 +2584,38 @@ Decision:
 - Keep CMF observation-only and retain official `cross-v0.3.2` unchanged.
 - Do not reinterpret the strong-trend subgroup as a new rule in the same experiment; that would be post-hoc selection from a small six-trade comparison group.
 - Do not run JoinQuant or reserved validation for this failed observation gate.
+
+## 2026-07-10 Strong-Trend Idle-Capacity Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` trading path with observation-only capacity snapshots
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Preserve the official buy gate, ranking, ATR logic, and normal per-slot target.
+- A strong-trend buy is `trend_score >= 20`, using the existing strategy classification rather than a new threshold.
+- Capacity exists only when all same-day official buy candidates have been allocated, at least one portfolio slot remains unused, and estimated cash above the official reserve can fund another copy of the selected buy target.
+- If multiple strong buys occur on the same day, only the highest-ranked one can claim one unused slot.
+- Create one fixed candidate only if the capacity subset has at least 10 closed trades, at least 3 profitable trades in each training year, favorable close excursion dominates adverse excursion, and neither one trade nor one ETF contributes more than half of gross profit.
+
+Safety and measurement:
+- Capacity snapshots are taken from the official order plan before execution and cannot change target values.
+- Only actually filled strong-trend buys enter the trade-quality report.
+- MFE/MAE use daily closes from the filled buy date through the sell date, consistent with the strategy's closing-price trailing-high convention.
+- Future closes are used only for ex-post attribution and are never visible to the strategy.
+- Commissions are deliberately excluded from the cash-headroom estimate because this experiment tests strategy allocation capacity, not fee optimization. The existing local replay still charges its normal modeled costs.
+
+Results:
+- All strong-trend entries: 27 filled buys, 26 closed trades, 1 open at the training boundary, +14847.60 realized PnL, 69.23% win rate, average MFE +11.54%, average MAE -1.15%.
+- Capacity-eligible subset: 5 entries/5 closed trades, +1371.00 PnL, 60.00% win rate, 4.249 profit/loss ratio, average MFE +8.49%, average MAE -1.07%.
+- 2019 capacity subset: 2 trades, +1081.40 PnL, 100.00% win rate.
+- 2020 capacity subset: 2 trades, +334.40 PnL, 50.00% win rate.
+- 2021 capacity subset: 1 trade, -44.80 PnL, 0.00% win rate.
+- Largest winning trade contributed 39.69% of capacity gross profit; the largest ETF contributed 60.31%.
+
+Decision:
+- The observation gate fails. Do not create a strong-trend idle-slot sizing candidate.
+- The aggregate strong-trend edge is real in this training replay, but it usually occurs when no complete extra slot remains after official candidates are allocated.
+- Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
+- Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.

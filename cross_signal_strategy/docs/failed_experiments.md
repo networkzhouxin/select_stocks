@@ -394,3 +394,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: CMF sign does not provide the intended mild-trend quality separation. Negative/non-positive money flow can be natural near a low-position reversal, and filtering it would remove profitable early entries.
 Can it be revisited? no as a mild-trend zero-line gate
 Conditions for revisiting: Do not tune CMF periods or thresholds. A future CMF experiment would require a new independent market-structure rationale and must not be inferred from the six non-positive strong-trend trades in this same training attribution.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2` observation-only strong-trend capacity gate
+Experiment: Before changing position sizing, identify filled `trend_score >= 20` buys where all same-day official candidates were already allocated, at least one slot remained unused, and cash above the official reserve could fund one additional copy of the planned target. Only the highest-ranked strong buy could qualify per day.
+Hypothesis: Strong-trend entries might use otherwise idle capital without loosening the buy gate or displacing another valid signal.
+Training diagnostic result: All strong-trend entries produced 26 closed trades and +14847.60 PnL. The executable capacity subset contained only 5 closed trades and +1371.00 PnL. Year counts were 2/2/1, the single 2021 trade lost 44.80, and one ETF contributed 60.31% of capacity gross profit.
+Candidate result: Not implemented because the pre-registered sample-size, yearly-profitability, and concentration gates failed.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The profitable strong-trend population and the actually scalable idle-capacity population are different. Most strong buys did not leave a complete unused slot after other official candidates, and the remaining five trades are too sparse and concentrated for a defensible concentration rule.
+Can it be revisited? no as a one-extra-slot strong-trend rule
+Conditions for revisiting: Do not search smaller multipliers or relax the cash/slot definition. Revisit sizing only after an independent strategy change creates a materially larger executable strong-signal capacity sample.
