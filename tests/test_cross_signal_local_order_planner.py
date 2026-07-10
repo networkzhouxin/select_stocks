@@ -94,6 +94,46 @@ def test_planner_sells_existing_position_before_buying_new_slots():
     assert [o["code"] for o in orders[1:]] == ["159915", "512100", "159928"]
 
 
+def test_planner_preserves_position_state_until_sell_is_actually_filled():
+    from cross_signal_strategy.local_backtester import LocalBroker, OrderResult, Position
+    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+
+    held_sell = candidate("510300", buy_score=20, sell_score=40)
+    held_sell.update({"close_below_ma20": True})
+    planner = LocalCrossSignalOrderPlanner(
+        FakeSignalAdapter({"510300": held_sell}),
+        etf_pool=["510300"],
+        buy_dates={"510300": "2019-06-20"},
+    )
+    planner.highest_since_buy["510300"] = 3.5
+    planner.entry_atr["510300"] = 0.1
+    broker = LocalBroker(initial_cash=12000.0)
+    broker.positions["510300"] = Position("510300", 1000, 3.0)
+
+    orders = planner.plan_orders("2019-07-01", "2019-06-28", broker)
+
+    assert orders[0] == {"code": "510300", "target_value": 0.0, "reason": "signal_sell"}
+    assert planner.buy_dates["510300"] == "2019-06-20"
+    assert planner.highest_since_buy["510300"] == pytest.approx(3.5)
+    assert planner.entry_atr["510300"] == pytest.approx(0.1)
+
+    planner.on_orders_filled(
+        "2019-07-01",
+        [OrderResult("510300", 0, 3.0, 0.0, "2019-07-01 09:35", False, "no trade")],
+    )
+    assert "510300" in planner.buy_dates
+    assert "510300" in planner.highest_since_buy
+    assert "510300" in planner.entry_atr
+
+    planner.on_orders_filled(
+        "2019-07-02",
+        [OrderResult("510300", -1000, 3.0, 5.0, "2019-07-02 09:35", True, "signal_sell")],
+    )
+    assert "510300" not in planner.buy_dates
+    assert "510300" not in planner.highest_since_buy
+    assert "510300" not in planner.entry_atr
+
+
 def test_planner_does_not_sell_position_bought_today_by_signal():
     from cross_signal_strategy.local_backtester import LocalBroker, Position
     from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner

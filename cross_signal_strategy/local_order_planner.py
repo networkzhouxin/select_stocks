@@ -53,7 +53,6 @@ class LocalCrossSignalOrderPlanner:
         force_stopped = set(sold_codes)
         for code in sorted(sold_codes):
             orders.append({"code": code, "target_value": 0.0, "reason": "atr_stop"})
-            self._clear_position_state(code)
 
         for code in list(broker.positions.keys()):
             if code in sold_codes:
@@ -71,7 +70,6 @@ class LocalCrossSignalOrderPlanner:
             if strategy.should_force_sell(score, atr_stop_triggered=False, params=self.params):
                 orders.append({"code": code, "target_value": 0.0, "reason": "signal_sell"})
                 sold_codes.add(code)
-                self._clear_position_state(code)
 
         held_after_sell = [
             code for code in broker.positions.keys()

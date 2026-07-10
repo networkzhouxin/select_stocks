@@ -124,3 +124,118 @@ def test_engine_passes_previous_training_trade_date_to_order_plan():
     engine.run(["2019-01-02", "2019-01-03"], order_plan)
 
     assert seen == [("2019-01-02", None), ("2019-01-03", "2019-01-02")]
+
+
+def test_engine_does_not_fill_at_stale_0935_bar_with_no_trades():
+    from cross_signal_strategy.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    bar = loader.get_minute_bar("159915", "2021-02-09", "09:35")
+    assert float(bar["volume"]) == 0.0
+    assert float(bar["num_trades"]) == 0.0
+    engine = LocalBacktestEngine(loader=loader, initial_cash=20000.0)
+
+    def order_plan(current_date, previous_date, broker):
+        return [{"code": "159915", "target_value": 5000.0, "reason": "buy_signal"}]
+
+    results = engine.run(["2021-02-09"], order_plan)
+
+    order = results[0].orders[0]
+    assert order.filled is False
+    assert order.amount_delta == 0
+    assert order.reason == "no executable trade at 09:35"
+    assert results[0].cash == pytest.approx(20000.0)
+    assert results[0].positions == {}
+
+
+def test_engine_records_missing_0935_bar_as_unfilled_instead_of_crashing():
+    from cross_signal_strategy.local_backtester import LocalBacktestEngine
+
+    class MissingBarLoader:
+        def get_minute_bar(self, code, current_date, trade_time):
+            raise KeyError("missing minute")
+
+    engine = LocalBacktestEngine(loader=MissingBarLoader(), initial_cash=20000.0)
+
+    def order_plan(current_date, previous_date, broker):
+        return [{"code": "MISSING", "target_value": 5000.0, "reason": "buy_signal"}]
+
+    results = engine.run(["2019-01-02"], order_plan)
+
+    order = results[0].orders[0]
+    assert order.filled is False
+    assert order.amount_delta == 0
+    assert order.reason == "missing execution bar at 09:35"
+    assert results[0].cash == pytest.approx(20000.0)
+    assert results[0].positions == {}
+
+
+@pytest.mark.parametrize("buy_reason", ["buy_signal", "backup_buy_signal"])
+def test_engine_does_not_exceed_max_hold_when_planned_sell_is_unfilled(buy_reason):
+    from cross_signal_strategy.local_backtester import (
+        LocalBacktestEngine,
+        Position,
+    )
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+
+    class SellThenBuyPlan:
+        params = {"max_hold": 3}
+
+        def plan_orders(self, current_date, previous_date, broker, current_prices=None):
+            return [
+                {"code": "159915", "target_value": 0.0, "reason": "signal_sell"},
+                {"code": "510300", "target_value": 5000.0, "reason": buy_reason},
+            ]
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    engine = LocalBacktestEngine(loader=loader, initial_cash=5000.0)
+    engine.broker.positions = {
+        "159915": Position("159915", 1000, 3.0),
+        "513100": Position("513100", 1000, 4.0),
+        "513500": Position("513500", 1000, 3.0),
+    }
+
+    results = engine.run(["2021-02-09"], SellThenBuyPlan().plan_orders)
+
+    sell, buy = results[0].orders
+    assert sell.filled is False
+    assert sell.reason == "no executable trade at 09:35"
+    assert buy.filled is False
+    assert buy.reason == "no available holding slot after execution"
+    assert sorted(results[0].positions) == ["159915", "513100", "513500"]
+    assert len(results[0].positions) == 3
+
+
+def test_engine_uses_slot_released_by_a_filled_sell_for_later_buy():
+    from cross_signal_strategy.local_backtester import (
+        LocalBacktestEngine,
+        Position,
+    )
+    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+
+    class SellThenBuyPlan:
+        params = {"max_hold": 3}
+
+        def plan_orders(self, current_date, previous_date, broker, current_prices=None):
+            return [
+                {"code": "159915", "target_value": 0.0, "reason": "signal_sell"},
+                {"code": "510300", "target_value": 5000.0, "reason": "buy_signal"},
+            ]
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    engine = LocalBacktestEngine(loader=loader, initial_cash=5000.0)
+    engine.broker.positions = {
+        "159915": Position("159915", 1000, 3.0),
+        "513100": Position("513100", 1000, 4.0),
+        "513500": Position("513500", 1000, 3.0),
+    }
+
+    results = engine.run(["2021-02-10"], SellThenBuyPlan().plan_orders)
+
+    sell, buy = results[0].orders
+    assert sell.filled is True
+    assert buy.filled is True
+    assert "159915" not in results[0].positions
+    assert "510300" in results[0].positions
+    assert len(results[0].positions) == 3

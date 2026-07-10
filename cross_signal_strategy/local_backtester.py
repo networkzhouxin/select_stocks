@@ -182,18 +182,58 @@ class LocalBacktestEngine:
         for current_date in ordered_dates:
             current_prices = self._current_prices(current_date)
             planned_orders = self._call_order_plan(order_plan, current_date, previous_date, current_prices)
+            owner = getattr(order_plan, "__self__", None)
+            max_holdings = _planner_max_holdings(owner)
             orders: List[OrderResult] = []
             for plan in planned_orders:
                 code = str(plan["code"])
                 target_value = float(plan["target_value"])
                 plan_reason = str(plan.get("reason", ""))
-                price = current_prices.get(code)
-                if price is None:
-                    price = self.loader.get_minute_bar(code, current_date, "09:35")["close"]
+                if (
+                    target_value > 0.0
+                    and code not in self.broker.positions
+                    and max_holdings is not None
+                    and len(self.broker.positions) >= max_holdings
+                ):
+                    orders.append(OrderResult(
+                        code=code,
+                        amount_delta=0,
+                        exec_price=0.0,
+                        commission=0.0,
+                        side_time=f"{current_date} 09:35",
+                        filled=False,
+                        reason="no available holding slot after execution",
+                    ))
+                    continue
+                try:
+                    execution_bar = self.loader.get_minute_bar(code, current_date, "09:35")
+                except (FileNotFoundError, KeyError):
+                    orders.append(OrderResult(
+                        code=code,
+                        amount_delta=0,
+                        exec_price=0.0,
+                        commission=0.0,
+                        side_time=f"{current_date} 09:35",
+                        filled=False,
+                        reason="missing execution bar at 09:35",
+                    ))
+                    continue
+                price = float(execution_bar["close"])
+                if not _bar_has_executable_trade(execution_bar):
+                    orders.append(OrderResult(
+                        code=code,
+                        amount_delta=0,
+                        exec_price=price,
+                        commission=0.0,
+                        side_time=f"{current_date} 09:35",
+                        filled=False,
+                        reason="no executable trade at 09:35",
+                    ))
+                    continue
                 order = self.broker.order_target_value(
                     code=code,
                     target_value=target_value,
-                    price=float(price),
+                    price=price,
                     side_time=f"{current_date} 09:35",
                 )
                 if order.filled and plan_reason:
@@ -201,7 +241,6 @@ class LocalBacktestEngine:
                 orders.append(order)
 
             marks = self._close_marks(current_date)
-            owner = getattr(order_plan, "__self__", None)
             if owner is not None and hasattr(owner, "on_orders_filled"):
                 owner.on_orders_filled(current_date, orders)
             if owner is not None and hasattr(owner, "on_after_close"):
@@ -253,3 +292,24 @@ class LocalBacktestEngine:
                 raise KeyError(f"No daily close for {code} {current_date}")
             marks[code] = float(rows.iloc[0]["close"])
         return marks
+
+
+def _bar_has_executable_trade(bar: Mapping[str, object]) -> bool:
+    def numeric(field: str) -> float:
+        try:
+            return float(bar.get(field, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return numeric("volume") > 0.0 or numeric("num_trades") > 0.0
+
+
+def _planner_max_holdings(owner) -> int | None:
+    params = getattr(owner, "params", None)
+    if not isinstance(params, Mapping):
+        return None
+    try:
+        value = int(params.get("max_hold", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None

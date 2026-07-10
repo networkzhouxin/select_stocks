@@ -2620,6 +2620,38 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-11 Local Zero-Trade And Unfilled-Sell Correctness Replay
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` signal path with corrected local execution semantics
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Correctness changes:
+- A missing 09:35 minute bar now produces an unfilled order instead of terminating the replay.
+- A 09:35 bar with both zero volume and zero trade count now produces an unfilled order instead of filling at a stale close.
+- Planned sells no longer clear buy date, entry ATR, or highest-close state before fill confirmation.
+- New buys are checked against the broker's actual post-execution holdings, preventing an unfilled sell from creating a phantom slot.
+- No 10:35 retry, premium filter, or signal change was introduced.
+
+Source evidence:
+- `159915` on 2020-12-16 and 2021-02-09 had zero volume and zero trades from the open through 10:30, with the first positive minute at 10:31.
+- `159915` on 2021-02-08 had zero volume and zero trades for the full session.
+- `513880` on 2019-12-12 had zero volume at 09:35 but first traded at 09:38, proving that one zero-volume minute is insufficient to label the legal cause as suspension.
+
+Corrected replay summary:
+- End value: 44122.30.
+- Total return: +120.61%.
+- Maximum drawdown: 7.47%.
+- Filled buys/sells: 92/89.
+- Maximum actual holdings: 3.
+- Unfilled plans: 17 total, comprising 15 zero-trade execution rejections and 2 buys rejected because a preceding unfilled sell did not release a slot.
+
+Interpretation:
+- The changed local return is a consequence of more realistic execution, not a strategy improvement and not a basis for parameter tuning.
+- The local engine can now represent the non-tradable interval visible in minute data without pretending that it knows the formal suspension reason.
+- Exact legal halt status still requires an exchange/broker status source. The current minute data supports conservative fill/no-fill simulation only.
+
 ## 2026-07-11 Reversal-First Candidate Ranking Comparison
 
 Period: 2019-01-01 to 2021-12-31
