@@ -490,3 +490,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: Breadth below 50% is not uniformly hostile to low-position reversal entries. In 2021 it identified the narrower early leaders that this strategy is designed to catch, so a broad market confirmation would delay or block valid reversals.
 Can it be revisited? no as an MA20/50% mild-trend gate
 Conditions for revisiting: Do not search MA10/MA60, alternate breadth thresholds, smoothing windows, or A-share-only subsets from this result. Revisit only after a new independently justified breadth objective is pre-registered outside the exhausted indicator-search family.
+
+Date: 2026-07-11
+Version: `cross-v0.3.2` observation-only US-QDII previous-NAV premium gate
+Experiment: For actual closed `513100/513500` mainline buys, calculate the T-day 09:35 market-price premium over the point-in-time reference proxy, preserve fixed economic groups `<=2%`, `2-5%`, `5-10%`, and `>10%`, and consider a candidate only if the above-5% subset passes coverage, sample-size, cross-year, and cross-code gates.
+Hypothesis: A technically valid cross-signal entry in a US-market QDII ETF may still be structurally unattractive when quota or secondary-market demand pushes its A-share price materially above the T-1 reference value.
+Training diagnostic result: There were 28 closed `513100/513500` trades, of which 27 had usable 09:35 reference data (96.43% coverage). Twenty-four trades were at or below 2% premium and produced +6509.90 PnL, +2.79% average return, 62.50% win rate, and 5.884 profit/loss ratio. One 2-5% trade produced +1105.10 and +12.88%. Only two trades exceeded 5%; both were `513100` trades in 2020, averaged 8.16% premium and +2.55% return, and together produced +388.80 with 50.00% win rate. No `513500` above-5% trade existed and no trade exceeded 10%.
+Candidate result: Not implemented because the above-5% subset had only two trades, appeared in only one year, and came from only one ETF. All pre-registered sample, annual, and cross-code gates failed.
+JoinQuant training result: No strategy candidate was run. Two no-order capability probes only established that T-1 unit NAV is available at 09:35, same-day NAV is blocked until after 15:00, and standard JoinQuant market APIs do not expose IOPV.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The official strategy almost never bought these ETFs during elevated-premium episodes. There is no repeated cross-year or cross-code evidence that a premium veto would improve the trading path, while the two observed elevated trades were profitable in aggregate.
+Can it be revisited? no as a `513100/513500` previous-NAV premium entry filter
+Conditions for revisiting: Do not lower 5%, search nearby bands, add `513050`, or extend the stale previous-NAV proxy to dynamic-IOPV products such as `159920` or `513880`. A future reopening requires a genuinely new point-in-time market mechanism and a new governance approval, not a re-slice of these outcomes.

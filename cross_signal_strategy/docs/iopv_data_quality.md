@@ -131,3 +131,19 @@ episodes. It is not strong enough to tune or adopt a premium threshold because:
 The next legitimate step is a platform/data-source capability probe, not a
 premium-factor backtest. No strategy experiment or research threshold is opened
 by this audit.
+
+## JoinQuant Capability Follow-Up
+
+Two no-order probes on 2020-02-07 and 2020-09-21 established that:
+
+- `get_current_data()` has no IOPV attribute and `get_price()` rejects `iopv`.
+- T-1 `unit_net_value` is available at 09:35.
+- Same-day `unit_net_value` raises `FutureDataError` before 15:00 and becomes
+  available after the close.
+- For the sampled `513100` dates, T-1 unit NAV was 3.430 and 3.810 while local
+  IOPV was 3.431 and 3.810, supporting a narrow US-QDII reference proxy.
+
+The single pre-registered `513100/513500` closed-trade attribution then found
+only two above-5% buys, both in `513100` during 2020 and profitable in aggregate.
+The candidate gate failed. The microstructure research family is therefore
+exhausted, and this audit must not be used to search lower premium thresholds.

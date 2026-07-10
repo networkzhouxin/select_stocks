@@ -2620,6 +2620,33 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-11 US-QDII Previous-NAV Premium Observation
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` closed-trade path with observation-only `513100/513500` premium attribution
+Engine: local replay plus no-order JoinQuant capability probes; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked design before attribution:
+- Use only actual closed mainline buys in `513100` and `513500`.
+- Calculate premium from the raw T-day 09:35 market price and point-in-time reference proxy; never use same-day end-of-day NAV.
+- Keep fixed groups `<=2%`, `2-5%`, `5-10%`, and `>10%`.
+- Treat `>5%` as the sole elevated group. Do not move this boundary after results.
+- Require at least 80% reference coverage, at least 10 elevated trades, at least two years with 3 elevated trades, underperformance in qualifying years, and at least 3 elevated trades in each ETF before a candidate can exist.
+
+Results:
+- Targeted closed trades: 28; covered: 27; missing: 1; coverage: 96.43%.
+- `<=2%`: 24 trades, +6509.90 PnL, +2.79% average return, 62.50% win rate, 5.884 profit/loss ratio.
+- `2-5%`: 1 trade, +1105.10 PnL, +12.88% return.
+- `5-10%`: 2 trades, +388.80 PnL, +2.55% average return, 50.00% win rate, 3.046 profit/loss ratio, 8.16% average premium.
+- `>10%`: no actual closed mainline buy.
+- Both elevated trades occurred in `513100` during 2020; `513500` had none.
+
+Decision:
+- Reject candidate creation. Sample-size, cross-year, and cross-code gates all failed.
+- Do not lower the 5% boundary, add nearby bands, or extend the proxy to dynamic-IOPV ETFs after seeing this result.
+- Official `cross-v0.3.2` remains unchanged and no reserved validation run is permitted for this failed observation.
+
 ## 2026-07-11 Local Zero-Trade And Unfilled-Sell Correctness Replay
 
 Period: 2019-01-01 to 2021-12-31

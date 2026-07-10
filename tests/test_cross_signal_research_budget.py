@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 45
-    assert report.expected_failed_experiment_count == 45
+    assert report.failed_experiment_count == 46
+    assert report.expected_failed_experiment_count == 46
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -70,12 +70,12 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["training_period_pool_selection"].status == "exhausted"
     assert families["portfolio_dependence"].status == "exhausted"
     assert families["market_breadth"].status == "exhausted"
-    assert families["etf_microstructure"].status == "open"
-    assert families["etf_microstructure"].max_new_experiments == 1
-    assert "513100/513500" in families["etf_microstructure"].planned_experiment
+    assert families["etf_microstructure"].status == "exhausted"
+    assert families["etf_microstructure"].max_new_experiments == 0
+    assert families["etf_microstructure"].planned_experiment is None
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert [family.key for family in open_families] == ["etf_microstructure"]
+    assert open_families == []
     assert all(family.max_new_experiments == 1 for family in open_families)
     assert all(family.planned_experiment for family in open_families)
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
@@ -162,10 +162,10 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
 
 
-def test_etf_microstructure_budget_allows_only_one_registered_observation():
+def test_etf_microstructure_budget_is_closed_after_registered_observation():
     from cross_signal_strategy.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -184,7 +184,8 @@ def test_etf_microstructure_budget_allows_only_one_registered_observation():
         planned_variants=2,
     )
 
-    assert allowed.allowed is True
+    assert allowed.allowed is False
+    assert "exhausted" in allowed.reason
     assert rejected.allowed is False
 
 
@@ -192,7 +193,7 @@ def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 
     assert "research_budget.json" in text
-    assert "45" in text
+    assert "46" in text
     assert "cross-v0.3.2" in text
     assert "portfolio_dependence" in text
     assert "market_breadth" in text

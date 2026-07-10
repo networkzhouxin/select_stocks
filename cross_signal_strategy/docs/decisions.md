@@ -655,3 +655,15 @@ Risk: Daily NAV cannot backfill the missing morning IOPV without leakage. QDII I
 Affected files: `cross_signal_strategy/iopv_quality_diagnostics.py`, `tests/test_cross_signal_iopv_quality.py`, `cross_signal_strategy/docs/iopv_data_quality.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2019-2021 training minute data and contemporaneous public fund-manager announcements were used
 Status: audit infrastructure adopted; premium factor not opened for strategy experimentation
+
+### Reject The US-QDII Previous-NAV Premium Filter
+
+Date: 2026-07-11
+Decision: Keep the JoinQuant capability probe and training-only attribution, but reject a `513100/513500` premium-filter candidate and leave official `cross-v0.3.2` unchanged.
+Reason: JoinQuant proved T-1 unit NAV is available at 09:35 without future leakage, which justified one market-structure observation. The candidate still required enough elevated-premium buys across years and both ETFs before any order rule could exist.
+Evidence: Of 28 closed target trades, 27 had usable reference data. Only two exceeded the fixed 5% elevated-premium boundary; both were `513100` trades in 2020, averaged 8.16% premium, and together earned +388.80 with +2.55% average return. `513500` had no elevated-premium trade, no trade exceeded 10%, and the normal at-or-below-2% group remained strongly profitable with 24 trades and +6509.90 PnL.
+Interpretation: The strategy's existing signal and ranking path already avoided nearly all severe premium episodes. A new veto would add platform-specific complexity for two profitable historical entries and has no cross-year or cross-code support.
+Risk: Lowering the boundary after seeing only two observations would be direct parameter mining. Applying T-1 NAV to `159920` or `513880` would also misrepresent their demonstrably dynamic intraday IOPV.
+Affected files: `cross_signal_strategy/us_qdii_premium_diagnostics.py`, `tests/test_cross_signal_us_qdii_premium_diagnostics.py`, `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, `tests/test_cross_signal_research_budget.py`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
+Allowed validation influence: none; only approved 2019-2021 training data and no-order JoinQuant capability probes on two training dates were used
+Status: diagnostic adopted; candidate rejected before implementation; microstructure budget exhausted

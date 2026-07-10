@@ -7,11 +7,11 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 45 real ledger entries.
+- Recorded failed or non-adopted experiments: 46 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: one observation-only ETF microstructure attribution, justified by the JoinQuant point-in-time NAV probe.
+- New open budget: none. The single ETF microstructure attribution has been consumed and closed.
 
 ## Frozen Families
 
@@ -28,7 +28,7 @@ it does not change any score, order, position, or risk rule.
 | `execution_gap_and_timing` | exhausted | Do not search smaller post-hoc gap thresholds. |
 | `portfolio_dependence` | exhausted | The fixed 20-day/0.80 observation had only 9 high-dependence trades, and high dependence strongly outperformed in 2020. |
 | `market_breadth` | exhausted | The fixed MA20/50% observation reversed in 2021; low breadth was then the better early-reversal environment. |
-| `etf_microstructure` | open | One `513100/513500` 09:35 price versus T-1 unit-NAV attribution is pre-registered; it cannot alter orders or search thresholds. |
+| `etf_microstructure` | exhausted | Only two above-5% buys existed, both in 2020 and `513100`; do not lower the threshold or widen the QDII scope post hoc. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -36,11 +36,10 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-`etf_microstructure` has exactly one observation-only experiment. It is limited
-to actual mainline buys in `513100/513500`, uses T-day 09:35 market price and
-T-1 unit NAV, and must report missingness and annual behavior. It may not alter
-orders, search thresholds, expand to dynamic-IOPV products, or use validation
-periods. Every other research family remains closed.
+None. The current research budget is exhausted. The consumed microstructure
+experiment cannot be repeated with a lower premium threshold, additional QDII
+codes, or a different proxy after seeing its result. Every research family is
+closed, and validation periods remain unavailable for tuning.
 
 ## Mandatory Sequence
 
