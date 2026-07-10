@@ -2540,3 +2540,47 @@ Decision:
 - Reject locally. Do not prepare a JoinQuant candidate and do not run reserved validation.
 - Keep official `cross-v0.3.2` unchanged.
 - Do not revisit score-only backup filling or global buy-threshold loosening without a new independent signal dimension.
+
+## 2026-07-10 CMF(20) Observation-Only Training Attribution
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` trading path with observation-only CMF
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Calculate standard CMF(20) from adjusted OHLCV ending on the frozen T-1 signal date.
+- Use only the standard zero line; do not search periods or thresholds.
+- If supported, require `CMF > 0` only for mild-trend entries (`0 < trend_score < 20`).
+- Leave strong-trend entries (`trend_score >= 20`) unchanged.
+
+Formula and safety checks:
+- Money-flow multiplier: `(2 * close - high - low) / (high - low)`.
+- Flat daily ranges contribute zero multiplier.
+- Rolling zero volume produces a missing CMF value rather than division by zero.
+- The diagnostic adapter verifies `cmf_data_date == signal_date` and rejects any frame containing data after the signal date.
+- CMF is attached only to frozen diagnostic snapshots and does not affect ranking, sizing, or orders.
+
+Overall attribution:
+- `CMF <= 0`: 23 trades, +3482.50 PnL, 65.22% win rate, 2.859 profit/loss ratio, 17.39% ATR-stop rate.
+- `CMF > 0`: 73 trades, +20406.90 PnL, 52.05% win rate, 4.401 profit/loss ratio, 32.88% ATR-stop rate.
+- The aggregate positive-CMF advantage must not be read without the trend split.
+
+Trend split:
+- Mild trend, `CMF <= 0`: 17 trades, +3412.60 PnL, 64.71% win rate, 3.924 profit/loss ratio.
+- Mild trend, `CMF > 0`: 52 trades, +5843.80 PnL, 46.15% win rate, 2.218 profit/loss ratio.
+- Strong trend, `CMF <= 0`: 6 trades, +69.90 PnL, 66.67% win rate, 1.099 profit/loss ratio.
+- Strong trend, `CMF > 0`: 20 trades, +14777.70 PnL, 70.00% win rate, 15.931 profit/loss ratio.
+- Sideways, `CMF > 0`: 1 losing trade, -214.60 PnL.
+
+Entry-year split:
+- 2019 `CMF <= 0`: 9 trades, +2855.80 PnL; `CMF > 0`: 20 trades, +4359.00 PnL.
+- 2020 `CMF <= 0`: 8 trades, +685.60 PnL; `CMF > 0`: 24 trades, +13551.70 PnL.
+- 2021 `CMF <= 0`: 6 trades, -58.90 PnL; `CMF > 0`: 29 trades, +2496.20 PnL.
+- Quality direction varies materially by year and does not support a stable mild-trend zero-line filter.
+
+Decision:
+- Do not implement the mild-trend CMF candidate.
+- Keep CMF observation-only and retain official `cross-v0.3.2` unchanged.
+- Do not reinterpret the strong-trend subgroup as a new rule in the same experiment; that would be post-hoc selection from a small six-trade comparison group.
+- Do not run JoinQuant or reserved validation for this failed observation gate.

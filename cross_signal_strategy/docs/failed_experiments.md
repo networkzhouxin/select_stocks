@@ -382,3 +382,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: Fixed-horizon shadow returns did not model portfolio opportunity cost. Backup positions consumed slots and cash that later stronger primary signals needed, while the existing ATR and signal exits realized a much worse path than the isolated 5/10/20-day snapshots suggested.
 Can it be revisited? no as a score-only backup fill
 Conditions for revisiting: Do not lower the buy threshold or mechanically fill idle slots based on fixed-horizon shadow returns. Revisit only if a new independent signal dimension can identify backup candidates without relying on the existing buy score alone.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2` observation-only CMF gate
+Experiment: Pre-register a standard CMF(20) zero-line confirmation for mild-trend entries (`0 < trend_score < 20`) while leaving strong-trend entries unchanged. Run attribution first; implement a candidate only if the mild-trend relationship is consistent across training years.
+Hypothesis: Positive CMF might distinguish genuine accumulation from false low-position reversal crosses in mild trends without interfering with proven strong-trend entries.
+Training diagnostic result: Mild-trend `CMF <= 0` had 17 trades, +3412.60 PnL, 64.71% win rate, and 3.924 profit/loss ratio. Mild-trend `CMF > 0` had 52 trades, +5843.80 PnL, 46.15% win rate, and 2.218 profit/loss ratio. Year-level CMF direction was inconsistent. The aggregate positive-CMF advantage came mainly from strong-trend trades, not the pre-specified mild-trend target.
+Candidate result: Not implemented because the observation gate failed.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: CMF sign does not provide the intended mild-trend quality separation. Negative/non-positive money flow can be natural near a low-position reversal, and filtering it would remove profitable early entries.
+Can it be revisited? no as a mild-trend zero-line gate
+Conditions for revisiting: Do not tune CMF periods or thresholds. A future CMF experiment would require a new independent market-structure rationale and must not be inferred from the six non-positive strong-trend trades in this same training attribution.

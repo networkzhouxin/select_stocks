@@ -547,3 +547,15 @@ Risk: This is a local direction check rather than JoinQuant authority performanc
 Affected files: `cross_signal_strategy/backup_fill_candidate.py`, `tests/test_cross_signal_backup_fill_candidate.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; validation periods were not inspected
 Status: rejected locally; do not run on JoinQuant or reserved validation
+
+### Keep CMF(20) Observation-Only
+
+Date: 2026-07-10
+Decision: Add a T-1-safe CMF(20) diagnostic, but do not create the pre-specified candidate that would require `CMF > 0` for mild-trend entries. Official `cross-v0.3.2` remains unchanged.
+Reason: CMF was selected as one independent price-volume dimension because the existing volume score measures volume expansion but not where the close occurs inside the daily range. The rule was locked before attribution: strong-trend entries would remain unchanged, while mild-trend entries would require CMF above the standard zero line.
+Evidence: Among mild-trend entries, `CMF <= 0` produced 17 closed trades, +3412.60 realized PnL, 64.71% win rate, and 3.924 profit/loss ratio. `CMF > 0` produced 52 trades, +5843.80 PnL, 46.15% win rate, and 2.218 profit/loss ratio. The sign relationship was not consistent by year: non-positive CMF was especially strong in 2019, positive CMF dominated in 2020, and both were weaker in 2021. Overall positive-CMF PnL was concentrated in strong-trend entries, where 20 trades produced +14777.70 and a 15.931 profit/loss ratio.
+Interpretation: Requiring positive CMF in mild trends would remove many profitable low-position reversals, exactly the behavior the cross-signal strategy is designed to capture. The strong-trend positive-CMF result is descriptive but cannot be converted into a new rule in the same experiment; the non-positive strong-trend sample contains only six trades and was not the pre-registered hypothesis.
+Risk: CMF is computed from corrected/adjusted daily bars ending at the frozen signal date and is never called from production order logic. Overall CMF attribution is confounded by trend regime, so using the aggregate result alone would be a selection error.
+Affected files: `cross_signal_strategy/cmf_diagnostics.py`, `tests/test_cross_signal_cmf_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic adopted; CMF strategy candidate rejected before implementation

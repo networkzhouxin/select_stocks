@@ -72,3 +72,4 @@ These are starting defaults, not optimized parameters.
 - `friction_diagnostics.py`: cached-signal training replay that isolates commission-rate, minimum-commission, and slippage sensitivity.
 - `capital_utilization_diagnostics.py`: training-only occupied-slot, vacant-slot reason, and de-duplicated shadow-candidate diagnostics.
 - `backup_fill_candidate.py`: rejected local candidate that tested 50-59 score backup fills without changing the main buy threshold.
+- `cmf_diagnostics.py`: observation-only CMF(20) attribution using adjusted T-1 signal frames; it does not alter strategy scores or orders.
