@@ -454,3 +454,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The entire improvement came from one selection four trading days before the training boundary. There were no changed decisions in 2019 or 2020 and no repeated ranking evidence.
 Can it be revisited? no as a global reversal-first ordering
 Conditions for revisiting: Do not search weighted ranking combinations from this event. A future ranking change requires a new independent information dimension that changes a materially larger set of decisions.
+
+Date: 2026-07-11
+Version: `cross-v0.3.2` observation-only Kaufman ER gate
+Experiment: Calculate standard T-1 Kaufman ER(10), compare one-day rising versus non-rising direction for mild-trend entries, and create a candidate only if rising ER improves average return and win rate in every training year with adequate samples.
+Hypothesis: Increasing directional efficiency might distinguish mild-trend reversals developing into clean moves from noisy back-and-forth price paths.
+Training diagnostic result: Mild rising ER had 30 trades, +2812.30 PnL, +1.12% average return, 50.00% win rate, and 2.059 profit/loss ratio. Mild declining ER had 38 trades, +6597.10 PnL, +1.89% average return, 52.63% win rate, and 3.092 profit/loss ratio. Rising ER failed 2019 average-return/win-rate comparisons, 2020 win rate, and 2021 average return.
+Candidate result: Not implemented because the annual consistency gate failed.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Rising ER is not a stable mild-trend confirmation. Its aggregate descriptive advantage came from strong-trend entries, which were outside the locked hypothesis and overlap existing trend context.
+Can it be revisited? no as a mild-trend rising-ER gate
+Conditions for revisiting: Do not search ER thresholds, alternate periods, or slope windows from this result. A future regime experiment must use a separately specified mechanism.

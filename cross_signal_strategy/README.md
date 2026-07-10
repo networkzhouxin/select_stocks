@@ -78,3 +78,4 @@ These are starting defaults, not optimized parameters.
 - `boll_width_diagnostics.py`: observation-only standard BOLL(20,2) BandWidth direction attribution on frozen T-1 signal frames.
 - `sequence_diagnostics.py`: observation-only timing attribution for active RSI/KDJ/MACD crosses inside the existing three-day window.
 - `ranking_candidate.py`: rejected local A/B experiment that compared official total-score-first ranking with reversal-score-first ranking on identical cached T-1 signals.
+- `efficiency_ratio_diagnostics.py`: observation-only standard Kaufman ER(10) direction attribution on frozen T-1 signal frames.

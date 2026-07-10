@@ -619,3 +619,15 @@ Risk: Promoting a rule from one late-boundary event would be severe small-sample
 Affected files: `cross_signal_strategy/ranking_candidate.py`, `tests/test_cross_signal_ranking_candidate.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: rejected locally; official ranking unchanged
+
+### Keep Kaufman ER(10) Observation-Only
+
+Date: 2026-07-11
+Decision: Add a T-1-safe standard Kaufman ER(10) diagnostic, but do not create the pre-registered candidate that would require rising ER for mild-trend entries. Official `cross-v0.3.2` remains unchanged.
+Reason: ER measures directional path efficiency rather than oscillator level, volume, or volatility, making it a genuinely independent market-state dimension worth one standard-parameter test.
+Evidence: Mild rising ER produced 30 trades, +2812.30 PnL, +1.12% average return, 50.00% win rate, and 2.059 profit/loss ratio, versus declining ER with 38 trades, +6597.10 PnL, +1.89% average return, 52.63% win rate, and 3.092 profit/loss ratio. Annual comparisons failed in 2019, 2020, and 2021 on at least one locked metric.
+Interpretation: ER direction adds descriptive context but does not robustly improve mild-trend entries. Its apparent strength in strong-trend trades overlaps a state already captured by the strategy and was not the pre-registered target.
+Risk: Searching ER levels, periods, multi-day slopes, or a strong-trend exception after seeing these results would be post-hoc parameter mining.
+Affected files: `cross_signal_strategy/efficiency_ratio_diagnostics.py`, `tests/test_cross_signal_efficiency_ratio_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic adopted; ER strategy candidate rejected before implementation

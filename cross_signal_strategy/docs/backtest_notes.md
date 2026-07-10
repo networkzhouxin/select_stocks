@@ -2653,6 +2653,43 @@ Decision:
 - Preserve official `buy_score -> reversal_score -> code` ordering and do not tune ranking weights from this event.
 - Do not inspect reserved validation periods for this failed local candidate.
 
+## 2026-07-11 Kaufman ER(10) Direction Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` trading path with observation-only ER fields
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Use standard Kaufman Efficiency Ratio with period 10: `abs(C_t-C_t-10) / sum(abs(delta C), 10)`.
+- A complete zero-movement window has ER 0; incomplete windows remain missing.
+- Compare only one-day ER direction: rising versus non-rising. Do not search ER levels or alternate periods.
+- If supported, require rising ER only for mild-trend entries (`0 < trend_score < 20`). Strong-trend entries remain unchanged.
+- Create one candidate only if mild rising and non-rising groups both have at least 15 trades, each has at least 3 trades in every training year, and rising ER improves both average return and win rate in every year.
+
+Safety checks:
+- ER is calculated from the adjusted close series ending exactly on the frozen T-1 signal date.
+- The adapter rejects any row after the signal date and returns defensive score copies.
+- ER fields never enter official scoring, filtering, ranking, sizing, or order logic.
+
+Overall attribution:
+- Declining ER: 51 trades, +10478.90 PnL, +2.65% average return, 54.90% win rate, 3.420 profit/loss ratio.
+- Rising ER: 44 trades, +13563.50 PnL, +3.20% average return, 56.82% win rate, 5.000 profit/loss ratio.
+- Mild trend, declining ER: 38 trades, +6597.10 PnL, +1.89% average return, 52.63% win rate, 3.092 profit/loss ratio.
+- Mild trend, rising ER: 30 trades, +2812.30 PnL, +1.12% average return, 50.00% win rate, 2.059 profit/loss ratio.
+- Strong trend, rising ER was strong descriptively, but that subgroup was not the locked mild-trend hypothesis and the existing strategy already identifies strong trends.
+
+Pre-registered mild-trend annual comparison:
+- 2019 declining: 13 trades, +1944.80 PnL, +2.37% average return, 46.15% win rate. Rising: 5 trades, +82.90 PnL, +0.34% average return, 40.00% win rate.
+- 2020 declining: 11 trades, +2420.00 PnL, +2.08% average return, 63.64% win rate. Rising: 8 trades, +3100.50 PnL, +4.21% average return, 50.00% win rate.
+- 2021 declining: 14 trades, +2232.30 PnL, +1.28% average return, 50.00% win rate. Rising: 17 trades, -371.10 PnL, -0.10% average return, 52.94% win rate.
+
+Decision:
+- Reject the mild-trend rising-ER confirmation before candidate creation.
+- Rising path efficiency is not a stable mild-trend quality signal: it underperformed on both average return and win rate in 2019, lost the win-rate comparison in 2020, and had negative average return in 2021.
+- Do not tune ER thresholds or periods, and do not promote the post-hoc strong-trend subgroup.
+- Keep ER observation-only and official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
 ## 2026-07-10 BOLL(20,2) BandWidth Direction Observation Gate
 
 Period: 2019-01-01 to 2021-12-31
