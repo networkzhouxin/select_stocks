@@ -80,23 +80,46 @@ def probe_iopv_capability(context):
     try:
         trade_days = get_trade_days(end_date=context.current_dt.date(), count=2)
         previous_date = trade_days[-2] if len(trade_days) >= 2 else context.previous_date
-        nav = get_extras(
+        previous_nav = get_extras(
             "unit_net_value",
             [PROBE_CODE],
             start_date=previous_date,
+            end_date=previous_date,
+            df=True,
+        )
+        log.info(
+            "[iopv-probe-prev-nav] dt=%s code=%s previous_date=%s data=%s",
+            context.current_dt,
+            PROBE_CODE,
+            previous_date,
+            _format_frame(previous_nav),
+        )
+    except Exception as exc:
+        log.info(
+            "[iopv-probe-prev-nav-error] dt=%s code=%s type=%s error=%s",
+            context.current_dt,
+            PROBE_CODE,
+            exc.__class__.__name__,
+            exc,
+        )
+
+    try:
+        same_day_nav = get_extras(
+            "unit_net_value",
+            [PROBE_CODE],
+            start_date=context.current_dt.date(),
             end_date=context.current_dt.date(),
             df=True,
         )
         log.info(
-            "[iopv-probe-nav] dt=%s code=%s previous_date=%s data=%s",
+            "[iopv-probe-same-day-nav] dt=%s code=%s data=%s",
             context.current_dt,
             PROBE_CODE,
-            previous_date,
-            _format_frame(nav),
+            _format_frame(same_day_nav),
         )
     except Exception as exc:
         log.info(
-            "[iopv-probe-nav-error] dt=%s code=%s type=%s error=%s",
+            "[iopv-probe-same-day-nav-error] dt=%s code=%s type=%s error=%s",
             context.current_dt,
             PROBE_CODE,
             exc.__class__.__name__,
@@ -138,6 +161,7 @@ def initialize(context):
     run_daily(probe_iopv_capability, time="09:34")
     run_daily(probe_iopv_capability, time="09:35")
     run_daily(probe_iopv_capability, time="09:36")
+    run_daily(probe_iopv_capability, time="15:30")
 
     log.info(
         "[iopv-probe-init] code=%s target_dates=%s orders_disabled=True",

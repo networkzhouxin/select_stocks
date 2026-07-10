@@ -48,7 +48,12 @@ def test_iopv_probe_compares_same_day_and_previous_day_nav():
     assert "get_extras(" in text
     assert '"unit_net_value"' in text
     assert "get_trade_days(end_date=context.current_dt.date(), count=2)" in text
-    assert "[iopv-probe-nav]" in text
+    assert "start_date=previous_date" in text
+    assert "end_date=previous_date" in text
+    assert "[iopv-probe-prev-nav]" in text
+    assert "start_date=context.current_dt.date()" in text
+    assert "end_date=context.current_dt.date()" in text
+    assert "[iopv-probe-same-day-nav]" in text
 
 
 def test_iopv_probe_prints_minute_window_at_three_checkpoints():
@@ -60,3 +65,4 @@ def test_iopv_probe_prints_minute_window_at_three_checkpoints():
     assert 'run_daily(probe_iopv_capability, time="09:34")' in text
     assert 'run_daily(probe_iopv_capability, time="09:35")' in text
     assert 'run_daily(probe_iopv_capability, time="09:36")' in text
+    assert 'run_daily(probe_iopv_capability, time="15:30")' in text
