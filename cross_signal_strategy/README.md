@@ -70,6 +70,8 @@ These are starting defaults, not optimized parameters.
 - `docs/research_budget.md`: human-readable research map and frozen experiment families; the current open research budget is zero.
 - `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
 - `smart_trade_joinquant_cross_signal_etf.py`: JoinQuant strategy file, to be created in this folder after the design is approved.
+- `smart_trade_ptrade_cross_signal_etf.py`: Guojin PTrade live adapter frozen to the official JoinQuant `cross-v0.3.2` business rules.
+- `docs/ptrade_deployment.md`: PTrade schedule, data boundary, order lifecycle, restart recovery, and deployment checklist.
 - `training_stability.py`: training-only annual, concentration, exit, holding-period, regime, and doubled-friction diagnostics.
 - `friction_diagnostics.py`: cached-signal training replay that isolates commission-rate, minimum-commission, and slippage sensitivity.
 - `capital_utilization_diagnostics.py`: training-only occupied-slot, vacant-slot reason, and de-duplicated shadow-candidate diagnostics.
