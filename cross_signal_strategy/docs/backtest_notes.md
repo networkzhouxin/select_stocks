@@ -2440,3 +2440,38 @@ Decision:
 - Keep official `cross-v0.3.2` unchanged.
 - Do not add a new indicator from this report alone.
 - Use the report to design at most one broad, training-only structural hypothesis at a time. Any candidate still requires tests first and JoinQuant 2019-2021 confirmation before reserved validation.
+
+## 2026-07-10 Cross-v0.3.2 Training Friction Decomposition
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2`
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Method:
+- Precompute and freeze each date/code T-1 score once.
+- Rerun the complete broker, order sizing, lot rounding, cash constraint, close-marking, and ATR state path for every friction scenario.
+- Baseline assumptions: 0.03% commission rate, CNY 5 minimum commission, and 0.10% one-way slippage.
+- Component stresses double exactly one assumption; the combined stress doubles all three.
+
+Results:
+- Baseline: +118.75% return, 6.81% max drawdown, 99 buys, 96 sells.
+- Commission rate x2: +117.34% return (-1.41pp), 6.82% max drawdown, 99 buys, 96 sells.
+- Minimum commission x2: +112.67% return (-6.07pp), 7.03% max drawdown, 99 buys, 96 sells.
+- Slippage x2: +106.61% return (-12.13pp), 7.14% max drawdown, 99 buys, 96 sells.
+- All friction x2: +100.33% return (-18.42pp), 7.34% max drawdown, 99 buys, 96 sells.
+- Sum of standalone component return deltas: -19.62pp.
+- Combined-path interaction versus the standalone sum: +1.20pp.
+
+Interpretation:
+- Slippage is the dominant component, representing about 61.8% of the absolute standalone component loss.
+- Minimum commission contributes about 30.9% and matters because the strategy starts with only CNY 20000 and creates many small ETF tickets.
+- Percentage commission contributes about 7.2%, substantially less than execution price and minimum-ticket cost.
+- The stable event counts show that the loss is not caused by a trade-count explosion. Exact code/date path equality was not asserted from counts alone.
+- Broadly suppressing trades is not supported: prior sell-threshold and replacement-aware experiments either failed or had no JoinQuant effect. Execution quality is the next evidence-based research direction.
+
+Decision:
+- Keep official `cross-v0.3.2` unchanged.
+- Do not add or retune technical indicators from this result.
+- Confirm the actual Guojin PTrade ETF minimum-commission schedule before making a live-cost assumption.
+- Treat execution timing/order style as the next candidate research area, with tests first and the same training-only protocol.

@@ -511,3 +511,15 @@ Risk: This is local attribution, not authoritative performance validation. The v
 Affected files: `cross_signal_strategy/training_stability.py`, `tests/test_cross_signal_training_stability.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: adopted as training-only diagnostic infrastructure; no strategy rule changed
+
+### Add Training Friction Decomposition
+
+Date: 2026-07-10
+Decision: Add `friction_diagnostics.py` to replay the official `cross-v0.3.2` local training path under five locked broker configurations: baseline, commission rate doubled, minimum commission doubled, slippage doubled, and all three doubled. Precompute each date/code T-1 signal once and return defensive copies to every scenario.
+Reason: The stability stress test showed an 18.42 percentage-point return reduction when all friction assumptions doubled. A component decomposition is required before considering any strategy-level turnover change, because execution-price loss, minimum-ticket cost, and percentage commission imply different remedies.
+Evidence: Baseline local training return was +118.75%. Commission-rate-only doubling returned +117.34% (-1.41pp); minimum-commission-only doubling returned +112.67% (-6.07pp); slippage-only doubling returned +106.61% (-12.13pp); all friction doubled returned +100.33% (-18.42pp). Standalone component deltas sum to -19.62pp and the combined path has +1.20pp nonlinear interaction. All scenarios reported 99 buys and 96 sells.
+Interpretation: Slippage is the dominant modeled friction source, followed by minimum commission; the percentage commission rate is much less important. The remedies should therefore focus on execution timing/order style and verification of the broker's actual ETF minimum-commission terms, not on adding indicators or broadly suppressing signal sells. Identical event counts do not prove identical code/date paths, so no stronger path-equivalence claim is made.
+Risk: This is a local execution stress model, not a prediction of live slippage or a JoinQuant performance result. The broker's actual ETF fee schedule is not established by this experiment and must be confirmed before translating minimum-commission sensitivity into live decisions.
+Affected files: `cross_signal_strategy/friction_diagnostics.py`, `tests/test_cross_signal_friction_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: adopted as training-only execution diagnostic infrastructure; no strategy rule changed

@@ -69,3 +69,4 @@ These are starting defaults, not optimized parameters.
 - `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
 - `smart_trade_joinquant_cross_signal_etf.py`: JoinQuant strategy file, to be created in this folder after the design is approved.
 - `training_stability.py`: training-only annual, concentration, exit, holding-period, regime, and doubled-friction diagnostics.
+- `friction_diagnostics.py`: cached-signal training replay that isolates commission-rate, minimum-commission, and slippage sensitivity.
