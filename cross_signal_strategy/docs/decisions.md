@@ -607,3 +607,15 @@ Risk: Reframing the post-hoc same-day or mixed groups as candidates would be a n
 Affected files: `cross_signal_strategy/sequence_diagnostics.py`, `tests/test_cross_signal_sequence_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: diagnostic adopted; sequence candidate rejected before implementation
+
+### Reject Reversal-First Candidate Ranking
+
+Date: 2026-07-11
+Decision: Reject the isolated local candidate that sorts already-eligible buys by reversal score before total buy score. Keep the official `buy_score -> reversal_score -> code` ordering in `cross-v0.3.2`.
+Reason: The cross-signal philosophy gives reversal signals a central role, so reversal-first ranking was the one structurally motivated alternative worth testing without weight search. Both paths shared identical cached T-1 signals and differed only in candidate ordering.
+Evidence: Reversal-first improved local return from +118.75% to +121.69% with unchanged 6.81% drawdown, but it changed only one buy day, 2021-12-27. Official selected `159928` (buy 70, reversal 35); the candidate selected `513500` (buy 69, reversal 45). Through the 2021-12-31 boundary, the former moved -3.29% and the latter +0.95%.
+Interpretation: The apparent improvement is a single terminal mark-to-market event, not a repeatable ranking edge. The activity gate failed, and 2019/2020 had no changed decisions at all.
+Risk: Promoting a rule from one late-boundary event would be severe small-sample and endpoint overfitting. No JoinQuant or reserved validation run is justified.
+Affected files: `cross_signal_strategy/ranking_candidate.py`, `tests/test_cross_signal_ranking_candidate.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: rejected locally; official ranking unchanged

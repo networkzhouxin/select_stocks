@@ -2620,6 +2620,39 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-11 Reversal-First Candidate Ranking Comparison
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` versus one isolated local ranking candidate
+Engine: two local replays sharing identical precomputed T-1 score snapshots
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked candidate before comparison:
+- Keep the official eligible-candidate set, buy threshold, entry filters, maximum holdings, position sizing, sell rules, ATR logic, and execution model unchanged.
+- Official ranking: descending `buy_score`, then descending `reversal_score`, then code.
+- Candidate ranking: descending `reversal_score`, then descending `buy_score`, then code.
+- Do not search weights or test additional ranking permutations.
+- Advance only if at least 10 buy-decision days change, every training year contains a changed decision, annual returns do not worsen, total return improves, and max drawdown, Sharpe, and Sortino do not worsen.
+
+Local comparison:
+- Official: +118.75% return, 6.81% max drawdown, Sharpe 2.117, Sortino 3.327, 99 buys, 96 sells.
+- Reversal-first: +121.69% return, 6.81% max drawdown, Sharpe 2.157, Sortino 3.403, 99 buys, 96 sells.
+- Annual returns were identical in 2019 and 2020. 2021 changed from +8.60% to +10.06%.
+- The candidate changed the bought code on only one day: 2021-12-27.
+
+Root-cause audit of the only changed decision:
+- Both signals used `signal_date=2021-12-24`.
+- Official chose `159928`: buy score 70, reversal 35, location 15, trend 14, volume 6.
+- Reversal-first chose `513500`: buy score 69, reversal 45, location 15, trend 9, volume 0.
+- From 2021-12-27 09:35 to the 2021-12-31 training boundary, `159928` moved -3.29% while `513500` moved +0.95%.
+- The changed position remained inside the final four-trading-day boundary segment. The headline improvement is therefore dominated by one terminal mark-to-market difference rather than repeated closed-trade ranking evidence.
+
+Decision:
+- Reject reversal-first ranking locally and do not prepare a JoinQuant candidate.
+- The two ranking methods are behaviorally identical on all but one training day. A one-event terminal-boundary gain is not evidence of a robust ranking improvement.
+- Preserve official `buy_score -> reversal_score -> code` ordering and do not tune ranking weights from this event.
+- Do not inspect reserved validation periods for this failed local candidate.
+
 ## 2026-07-10 BOLL(20,2) BandWidth Direction Observation Gate
 
 Period: 2019-01-01 to 2021-12-31

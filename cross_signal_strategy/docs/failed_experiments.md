@@ -442,3 +442,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The strategy's actual closed-trade path does not contain the proposed MACD-first sequence and is dominated by early oscillator entries without active MACD confirmation. There is no robust sample for the intended filter.
 Can it be revisited? no as a MACD-leading mild-trend filter
 Conditions for revisiting: Do not widen the cross window, change indicator periods, or promote the post-hoc same-day/mixed groups from this result. A future timing experiment needs a new independently specified mechanism.
+
+Date: 2026-07-11
+Version: `cross-v0.3.2-reversal-first-local-candidate`
+Experiment: Keep every official signal, filter, risk, sizing, and execution rule unchanged, but rank eligible candidates by `reversal_score`, then `buy_score`, then code instead of official total-buy-score-first ordering. Baseline and candidate used identical precomputed T-1 scores.
+Hypothesis: Prioritizing the core cross-reversal dimension might select earlier low-position opportunities when portfolio slots are limited.
+Local training result: Official returned +118.75% with 6.81% drawdown, Sharpe 2.117, and Sortino 3.327. Reversal-first returned +121.69% with 6.81% drawdown, Sharpe 2.157, and Sortino 3.403. Both had 99 buys and 96 sells.
+Path audit: Only 2021-12-27 changed. Official bought `159928` (buy 70/reversal 35); candidate bought `513500` (buy 69/reversal 45). Through the 2021-12-31 training endpoint, `159928` returned -3.29% and `513500` +0.95% from 09:35.
+JoinQuant training result: Not run because the local activity gate failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The entire improvement came from one selection four trading days before the training boundary. There were no changed decisions in 2019 or 2020 and no repeated ranking evidence.
+Can it be revisited? no as a global reversal-first ordering
+Conditions for revisiting: Do not search weighted ranking combinations from this event. A future ranking change requires a new independent information dimension that changes a materially larger set of decisions.

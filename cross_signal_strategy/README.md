@@ -77,3 +77,4 @@ These are starting defaults, not optimized parameters.
 - `gap_execution_diagnostics.py`: training-only attribution of T-day 09:35 execution gaps normalized by frozen T-1 ATR; it does not filter orders.
 - `boll_width_diagnostics.py`: observation-only standard BOLL(20,2) BandWidth direction attribution on frozen T-1 signal frames.
 - `sequence_diagnostics.py`: observation-only timing attribution for active RSI/KDJ/MACD crosses inside the existing three-day window.
+- `ranking_candidate.py`: rejected local A/B experiment that compared official total-score-first ranking with reversal-score-first ranking on identical cached T-1 signals.
