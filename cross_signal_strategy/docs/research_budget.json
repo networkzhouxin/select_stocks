@@ -1,0 +1,98 @@
+{
+  "strategy_scope": "cross_signal_strategy",
+  "training_window": {
+    "start": "2019-01-01",
+    "end": "2021-12-31"
+  },
+  "validation_tuning_forbidden": true,
+  "expected_failed_experiment_count": 43,
+  "max_total_open_experiments": 2,
+  "families": [
+    {
+      "key": "cross_signal_definition",
+      "label": "Cross detection and signal correctness",
+      "status": "adopted",
+      "max_new_experiments": 0,
+      "rationale": "Positional alignment, T-1 timing, and the three-day cross window are covered by correctness tests and the adopted mainline."
+    },
+    {
+      "key": "indicator_enumeration",
+      "label": "Additional technical-indicator enumeration",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "RSI, MACD, KDJ, BOLL, MA, ADX/DMI, volume, CMF, BandWidth, and Kaufman ER already cover reversal, trend, location, flow, volatility, and efficiency. Trying more indicators now would be winner selection after repeated tests."
+    },
+    {
+      "key": "threshold_and_period_search",
+      "label": "Indicator periods and score thresholds",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "Coarse buy, sell, hold, RSI, ADX, ATR, and capacity variants have been tested. Fine searches around the winners are prohibited parameter mining."
+    },
+    {
+      "key": "entry_confirmation",
+      "label": "Entry confirmation and backup fills",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "Volume, trend, weak-entry sizing, low-bounce blocking, backup fills, cross sequence, and gap filters did not produce stable training evidence."
+    },
+    {
+      "key": "exit_and_atr_control",
+      "label": "Signal exits and ATR risk controls",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "Sell thresholds, minimum holds, structure protection, replacement awareness, profit tightening, cooldowns, and ATR multiplier changes have already been tested."
+    },
+    {
+      "key": "position_sizing_and_capacity",
+      "label": "Position sizing and idle-capital deployment",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "Base exposure, volume scaling, weak-signal scaling, strong-trend extra capacity, and forced slot filling have been tested without robust improvement beyond the adopted sizing."
+    },
+    {
+      "key": "training_period_pool_selection",
+      "label": "ETF deletion or selection from training attribution",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "Deleting ETFs from one training window showed path dependence and selection bias. Pool constituents must not be mined from 2019-2021 standalone contribution."
+    },
+    {
+      "key": "candidate_ranking",
+      "label": "Candidate ranking with existing score components",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "Reversal, location, volume, trend, risk-adjusted, confirmation, and reversal-first rankings were tested; the last apparent gain came from one endpoint trade."
+    },
+    {
+      "key": "execution_gap_and_timing",
+      "label": "09:35 execution gaps and timing filters",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The pre-registered one-ATR gap split was sparse and directionally contradicted the chase-risk hypothesis. Smaller thresholds must not be searched post hoc."
+    },
+    {
+      "key": "portfolio_dependence",
+      "label": "Portfolio-level dependence and crowding",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "Existing work scores ETFs mostly independently; simultaneous exposure to highly correlated holdings is a genuinely different portfolio-level dimension.",
+      "planned_experiment": "Observation only: at each official buy decision, use T-1 and earlier adjusted closes to measure standard 20-day return correlation between the candidate and current holdings. Use one fixed 0.80 high-dependence split. Implement no candidate unless high-dependence entries have adequate samples and consistently worse return and drawdown contribution in 2019, 2020, and 2021."
+    },
+    {
+      "key": "market_breadth",
+      "label": "ETF-pool breadth regime",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "A pool-wide breadth state is distinct from the rejected single-benchmark MA60 guard and may describe whether reversals are isolated or broadly supported.",
+      "planned_experiment": "Observation only: on T-1, calculate the share of eligible pool ETFs above their standard MA20 and compare the pre-registered majority states below 50% versus at least 50%. Implement no candidate unless the below-majority state consistently identifies worse mild-trend entries in all three training years with adequate samples."
+    },
+    {
+      "key": "etf_microstructure",
+      "label": "ETF premium, quota, tracking, and cross-market microstructure",
+      "status": "blocked",
+      "max_new_experiments": 0,
+      "rationale": "The approved local training source does not contain point-in-time NAV premium, QDII quota, FX, or tracking-error fields. This family cannot be tested honestly without a separately approved, point-in-time source."
+    }
+  ]
+}

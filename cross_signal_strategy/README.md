@@ -66,6 +66,8 @@ These are starting defaults, not optimized parameters.
 - `docs/backtest_notes.md`: structured backtest result log.
 - `docs/decisions.md`: why each rule was added, rejected, or frozen.
 - `docs/failed_experiments.md`: failed ideas and why they should not be repeated casually.
+- `docs/research_budget.json`: machine-readable experiment-family status and remaining training-only budget.
+- `docs/research_budget.md`: human-readable research map, frozen families, and the two pre-registered open directions.
 - `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
 - `smart_trade_joinquant_cross_signal_etf.py`: JoinQuant strategy file, to be created in this folder after the design is approved.
 - `training_stability.py`: training-only annual, concentration, exit, holding-period, regime, and doubled-friction diagnostics.
@@ -79,3 +81,4 @@ These are starting defaults, not optimized parameters.
 - `sequence_diagnostics.py`: observation-only timing attribution for active RSI/KDJ/MACD crosses inside the existing three-day window.
 - `ranking_candidate.py`: rejected local A/B experiment that compared official total-score-first ranking with reversal-score-first ranking on identical cached T-1 signals.
 - `efficiency_ratio_diagnostics.py`: observation-only standard Kaufman ER(10) direction attribution on frozen T-1 signal frames.
+- `research_budget.py`: read-only ledger parser and experiment gate that prevents repeated or multi-variant search in exhausted families.
