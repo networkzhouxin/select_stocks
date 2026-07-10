@@ -74,3 +74,4 @@ These are starting defaults, not optimized parameters.
 - `backup_fill_candidate.py`: rejected local candidate that tested 50-59 score backup fills without changing the main buy threshold.
 - `cmf_diagnostics.py`: observation-only CMF(20) attribution using adjusted T-1 signal frames; it does not alter strategy scores or orders.
 - `strong_trend_capacity_diagnostics.py`: training-only strong-trend entry, idle-slot, cash-headroom, and close-path excursion diagnostics; it never changes order targets.
+- `gap_execution_diagnostics.py`: training-only attribution of T-day 09:35 execution gaps normalized by frozen T-1 ATR; it does not filter orders.

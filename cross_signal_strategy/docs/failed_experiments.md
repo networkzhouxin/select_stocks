@@ -406,3 +406,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The profitable strong-trend population and the actually scalable idle-capacity population are different. Most strong buys did not leave a complete unused slot after other official candidates, and the remaining five trades are too sparse and concentrated for a defensible concentration rule.
 Can it be revisited? no as a one-extra-slot strong-trend rule
 Conditions for revisiting: Do not search smaller multipliers or relax the cash/slot definition. Revisit sizing only after an independent strategy change creates a materially larger executable strong-signal capacity sample.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2` observation-only 09:35 gap gate
+Experiment: Group filled buys by `(T-day 09:35 raw price - T-1 close) / T-1 ATR` using fixed boundaries `<=0`, `(0, 0.5]`, `(0.5, 1]`, and `>1 ATR`. Create a candidate only if `>1 ATR` high gaps consistently underperform in all three training years with adequate samples.
+Hypothesis: A valid low-position T-1 cross signal may become an expensive chase when the next 09:35 execution price gaps more than one ATR above the prior close.
+Training diagnostic result: The `>1 ATR` group had only 5 trades, but it earned +3309.80 PnL, +8.15% average return, 60.00% win rate, and a 9.120 profit/loss ratio. The 2019 and 2020 groups were strongly profitable. Four of the five trades were strong-trend entries and produced +3340.20.
+Candidate result: Not implemented because the minimum sample and annual-underperformance gates failed, and the observed direction contradicted the hypothesis.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Large positive gaps were rare strong-trend continuation events rather than a stable source of chase losses. A broad `>1 ATR` block would remove some of the training path's highest-quality entries.
+Can it be revisited? no as a broad `>1 ATR` entry filter
+Conditions for revisiting: Do not search smaller ATR thresholds or add the post-hoc mild-trend interaction seen in this attribution. A future execution filter requires a new independent market-structure hypothesis.

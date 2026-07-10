@@ -571,3 +571,15 @@ Risk: MFE/MAE and realized trade outcomes use future training prices only for ex
 Affected files: `cross_signal_strategy/strong_trend_capacity_diagnostics.py`, `tests/test_cross_signal_strong_trend_capacity.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: diagnostic adopted; sizing candidate rejected before implementation
+
+### Reject The Greater-Than-One-ATR 09:35 Gap Filter
+
+Date: 2026-07-10
+Decision: Add a T-1-safe execution-gap diagnostic, but do not create the pre-registered candidate that would skip new buys when the T-day 09:35 price is more than one T-1 ATR above the T-1 close. Official `cross-v0.3.2` remains unchanged.
+Reason: A T-1 low-position signal can theoretically become an unattractive chase after a large next-morning gap. The test therefore separated signal quality from the actual 09:35 entry price without changing the original trading path.
+Evidence: The `>1 ATR` group contained only 5 closed trades but produced +3309.80 PnL, +8.15% average return, 60.00% win rate, and a 9.120 profit/loss ratio. It was profitable in 2019 and 2020; four of the five trades were strong-trend entries and produced +3340.20. The pre-registered sample-size and annual-underperformance gates failed.
+Interpretation: Large positive gaps are not automatically chase-risk in this strategy. In the training path they usually represent strong-trend continuation, so a broad high-gap block would remove valuable opportunities. The weak post-hoc mild-trend `0.5-1 ATR` subgroup is not eligible for rule creation from this experiment.
+Risk: T-day 09:35 is permissible only as an explicit execution-time filter. Later prices used for MFE/MAE are ex-post diagnostics. Searching smaller gap cutoffs or trend interactions after seeing these groups would create multiple-testing bias.
+Affected files: `cross_signal_strategy/gap_execution_diagnostics.py`, `tests/test_cross_signal_gap_execution_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic adopted; gap-filter candidate rejected before implementation

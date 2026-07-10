@@ -2619,3 +2619,43 @@ Decision:
 - The aggregate strong-trend edge is real in this training replay, but it usually occurs when no complete extra slot remains after official candidates are allocated.
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
+## 2026-07-10 09:35 ATR-Normalized Gap Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` closed-trade path with observation-only execution-gap attribution
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Calculate `gap_atr = (T-day 09:35 raw price - T-1 close) / T-1 ATR`.
+- Use the raw 09:35 minute close, not the local fill price after slippage.
+- Keep four fixed groups: `<=0`, `(0, 0.5]`, `(0.5, 1.0]`, and `>1.0 ATR`.
+- Consider one candidate only if `>1 ATR` contains at least 10 closed trades, at least 3 in every training year, and has both lower average return and lower win rate than all other buys in every year.
+- The possible candidate would skip only `>1 ATR` T-day entries. No other gap bucket or trend interaction was pre-registered.
+
+Future-function boundary:
+- T-1 close, ATR, trend score, and signal date come from the frozen entry-score snapshot.
+- The diagnostic rejects any trade whose signal date is not strictly before the buy date.
+- T-day 09:35 price is used only as execution-time information, which is available when the order decision is made.
+- Later closes are used only for ex-post MFE/MAE attribution and never enter strategy code.
+
+Overall results:
+- `gap_atr > 1`: 5 trades, +3309.80 PnL, +8.15% average trade return, 60.00% win rate, 9.120 profit/loss ratio, +12.40% average MFE, -1.23% average MAE.
+- `0.5 < gap_atr <= 1`: 13 trades, +1199.70 PnL, +1.05% average return, 38.46% win rate, 1.733 profit/loss ratio.
+- `0 < gap_atr <= 0.5`: 19 trades, +5328.60 PnL, +3.38% average return, 57.89% win rate, 4.812 profit/loss ratio.
+- `gap_atr <= 0`: 59 trades, +14051.30 PnL, +2.61% average return, 57.63% win rate, 4.170 profit/loss ratio.
+
+Year and trend evidence:
+- `>1 ATR` had only 2/2/1 trades in 2019/2020/2021.
+- 2019: +1081.40 PnL, +7.18% average return, 100% win rate.
+- 2020: +2258.80 PnL, +13.27% average return, 50% win rate.
+- 2021: -30.40 PnL from one trade.
+- Four of the five `>1 ATR` trades were strong-trend entries; they produced +3340.20 PnL and +10.23% average return.
+- The post-hoc `0.5-1 ATR` mild-trend subgroup was weak, but it was not the locked hypothesis and must not be converted into a rule from this experiment.
+
+Decision:
+- Reject the proposed `>1 ATR` high-gap entry filter before candidate creation.
+- Large positive gaps are rare and mostly belong to profitable strong-trend continuation trades in this training path. Blocking them would contradict the observed evidence and the strategy's need to preserve strong trends.
+- Do not tune a smaller gap threshold or add a mild-trend interaction after seeing these results. That would be post-hoc selection.
+- Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
