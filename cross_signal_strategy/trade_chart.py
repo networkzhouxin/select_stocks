@@ -70,6 +70,12 @@ DEFAULT_PERIODS = (
     ),
 )
 
+FULL_PERIOD = PeriodSpec(
+    "2015-2026-continuous", "2015-01-01", "2026-03-11",
+    r"C:\Users\xin\.codex\attachments\a9062ff4-95d2-4aca-b5ac-706de32b6a93\pasted-text.txt",
+)
+REPORT_PERIODS = DEFAULT_PERIODS + (FULL_PERIOD,)
+
 ETF_NAMES = {
     "159915": "创业板ETF",
     "159920": "恒生ETF",
@@ -85,6 +91,9 @@ ETF_NAMES = {
     "518880": "黄金ETF",
 }
 ETF_CODES = tuple(ETF_NAMES)
+PERIOD_LABELS = {
+    "2015-2026-continuous": "2015-2026 连续回测",
+}
 
 DEFAULT_DAILY_ROOT = Path(r"G:\financial\history_data\按年份合并\日级")
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "reports" / "trade_charts"
@@ -269,6 +278,7 @@ def render_period_page(period_key: str, datasets: Mapping[str, Mapping[str, obje
     """Render a standalone period page that references the shared Plotly bundle."""
     if not datasets:
         raise ValueError("cannot render a period without datasets")
+    period_label = PERIOD_LABELS.get(period_key, period_key)
     payload = json.dumps(datasets, ensure_ascii=False, separators=(",", ":"))
     options = "".join(
         f'<option value="{escape(code)}">{escape(code)} {escape(str(data.get("name", "")))}</option>'
@@ -276,7 +286,7 @@ def render_period_page(period_key: str, datasets: Mapping[str, Mapping[str, obje
     )
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(period_key)} 交易 K 线复盘</title><script src="plotly.min.js"></script>
+<title>{escape(period_label)} 交易 K 线复盘</title><script src="plotly.min.js"></script>
 <style>
 :root{{--bg:#f4f6f8;--panel:#fff;--ink:#18212b;--muted:#687381;--line:#d9dee5;--blue:#1769aa;--orange:#e26d21}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}}
@@ -287,7 +297,7 @@ select{{height:36px;min-width:230px;border:1px solid #b9c1cb;background:#fff;pad
 .note{{margin-top:10px;color:var(--muted);font-size:13px}} .legend{{font-weight:600;color:var(--ink)}}
 @media(max-width:700px){{header,main{{padding-left:12px;padding-right:12px}} #chart{{height:720px;min-height:720px}} select{{width:100%}}}}
 </style></head><body>
-<header><h1>{escape(period_key)} 日 K 交易复盘</h1><div class="sub">cross-v0.3.2（由 combo-candidate 同逻辑回测日志生成）</div></header>
+<header><h1>{escape(period_label)} 日 K 交易复盘</h1><div class="sub">cross-v0.3.2（聚宽成交日志 + 本地日线）</div></header>
 <main><div class="toolbar"><label for="etf-select">ETF</label><select id="etf-select">{options}</select><span id="stats" class="stats"></span></div>
 <div id="chart"></div>
 <div class="note"><span class="legend">数据口径：</span>买卖标记采用<strong>聚宽成交</strong>日志中的实际成交价；K 线采用<strong>本地日线</strong>原始行情。两套数据仅叠加展示，不修改、不反推、不强行对齐。页面仅用于复盘观察，不用于验证期调参。</div></main>
@@ -321,7 +331,7 @@ select.addEventListener('change',()=>draw(select.value)); draw(select.value);
 
 def render_index_page(summary: Mapping[str, Mapping[str, object]]) -> str:
     cards = "".join(
-        f'<a class="card" href="{escape(key)}.html"><strong>{escape(key)}</strong>'
+        f'<a class="card" href="{escape(key)}.html"><strong>{escape(PERIOD_LABELS.get(key, key))}</strong>'
         f'<span>{int(item["fills"])} 笔成交 · {int(item["symbols"])} 只 ETF</span>'
         f'<small>日线截至 {escape(str(item["last_kline"]))}</small></a>'
         for key, item in summary.items()
@@ -393,7 +403,7 @@ def load_period_daily_bars(
 
 
 def generate_all_reports(
-    periods: Sequence[PeriodSpec] = DEFAULT_PERIODS,
+    periods: Sequence[PeriodSpec] = REPORT_PERIODS,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
 ) -> dict[str, dict[str, object]]:
     """Generate the five offline HTML reports and their index."""

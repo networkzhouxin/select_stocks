@@ -23,5 +23,10 @@
     "fills": 153,
     "symbols": 12,
     "last_kline": "2026-07-03"
+  },
+  "2015-2026-continuous": {
+    "fills": 694,
+    "symbols": 12,
+    "last_kline": "2026-03-11"
   }
 }

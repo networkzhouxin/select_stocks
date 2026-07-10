@@ -45,6 +45,18 @@ def test_default_periods_match_the_five_joinquant_backtests():
     ]
 
 
+def test_report_periods_include_the_continuous_full_backtest():
+    from cross_signal_strategy.trade_chart import FULL_PERIOD, REPORT_PERIODS
+
+    assert (FULL_PERIOD.key, FULL_PERIOD.start, FULL_PERIOD.end) == (
+        "2015-2026-continuous",
+        "2015-01-01",
+        "2026-03-11",
+    )
+    assert REPORT_PERIODS[-1] == FULL_PERIOD
+    assert len(REPORT_PERIODS) == 6
+
+
 def test_parse_joinquant_log_extracts_fills_scores_and_sell_reason():
     from cross_signal_strategy.trade_chart import parse_joinquant_trade_log
 
@@ -143,6 +155,19 @@ def test_render_period_page_has_etf_selector_kline_and_source_caveat():
     assert "本地日线" in html
     assert "159915" in html
     assert "rangeslider:{visible:false" in html
+
+
+def test_render_continuous_page_uses_formal_strategy_label():
+    from cross_signal_strategy.trade_chart import render_period_page
+
+    html = render_period_page(
+        period_key="2015-2026-continuous",
+        datasets={"159915": build_minimal_dataset()},
+    )
+
+    assert "2015-2026 连续回测 日 K 交易复盘" in html
+    assert "聚宽成交日志 + 本地日线" in html
+    assert "combo-candidate" not in html
 
 
 def test_render_index_links_each_period_and_reports_fill_count():
