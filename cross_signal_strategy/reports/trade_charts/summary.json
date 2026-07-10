@@ -1,0 +1,27 @@
+{
+  "2010-2014": {
+    "fills": 83,
+    "symbols": 8,
+    "last_kline": "2014-12-31"
+  },
+  "2015-2018": {
+    "fills": 235,
+    "symbols": 10,
+    "last_kline": "2018-12-28"
+  },
+  "2019-2021": {
+    "fills": 193,
+    "symbols": 12,
+    "last_kline": "2021-12-31"
+  },
+  "2022-2023": {
+    "fills": 133,
+    "symbols": 12,
+    "last_kline": "2023-12-29"
+  },
+  "2024-latest": {
+    "fills": 153,
+    "symbols": 12,
+    "last_kline": "2026-07-03"
+  }
+}
