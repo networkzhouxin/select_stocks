@@ -466,3 +466,27 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: Rising ER is not a stable mild-trend confirmation. Its aggregate descriptive advantage came from strong-trend entries, which were outside the locked hypothesis and overlap existing trend context.
 Can it be revisited? no as a mild-trend rising-ER gate
 Conditions for revisiting: Do not search ER thresholds, alternate periods, or slope windows from this result. A future regime experiment must use a separately specified mechanism.
+
+Date: 2026-07-11
+Version: `cross-v0.3.2` observation-only portfolio-dependence gate
+Experiment: At each official buy decision, measure the maximum standard 20-day return correlation between the candidate and current or earlier same-day planned holdings using only adjusted closes available through T-1. Use one fixed `0.80` high-dependence split and leave all orders unchanged.
+Hypothesis: Entries that add a highly correlated ETF may crowd the portfolio and contribute lower returns and deeper adverse excursions than low-dependence entries.
+Training diagnostic result: The high-dependence group had 9 closed trades, +3365.50 PnL, +3.92% average return, 66.67% win rate, 5.197 profit/loss ratio, and -1.85% average MAE. The low-dependence group had 79 trades, +17803.90 PnL, +2.50% average return, 54.43% win rate, 3.889 profit/loss ratio, and -1.08% average MAE. In 2019, high dependence underperformed average return (1.05% versus 2.83%) and had slightly worse MAE (-1.06% versus -0.82%). In 2020, however, the 2 high-dependence trades averaged +15.31% versus +4.46% for low dependence. In 2021, high dependence averaged +0.37% versus +0.41%, with worse MAE (-2.66% versus -1.02%).
+Candidate result: Not implemented because the pre-registered sample-size and annual-return gates failed.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Only 9 high-dependence trades existed, including just 2 in 2020, and high dependence was not consistently harmful. In a broad market move, correlation can identify simultaneous strong trends rather than avoidable crowding, so a universal correlation block would remove valid opportunities.
+Can it be revisited? no as a 20-day/0.80 correlation gate
+Conditions for revisiting: Do not search nearby correlation thresholds, return windows, or ETF-pair exceptions. Revisit only if a future strategy structure explicitly optimizes portfolio covariance with a separately justified allocation objective.
+
+Date: 2026-07-11
+Version: `cross-v0.3.2` observation-only market-breadth gate
+Experiment: On T-1, calculate the share of eligible pool ETFs above their standard MA20, excluding ETFs with fewer than 20 valid adjusted closes. Compare the single pre-registered states below `50%` versus at least `50%`, and evaluate only official mild-trend entries while leaving all orders unchanged.
+Hypothesis: A mild-trend reversal may be less reliable when fewer than half of the eligible ETF pool is above MA20, because the signal is isolated rather than broadly supported.
+Training diagnostic result: Across all entries, below-majority breadth had 31 closed trades, +4016.80 PnL, +1.37% average return, 54.84% win rate, and 2.817 profit/loss ratio; majority breadth had 65 trades, +19872.60 PnL, +3.54% average return, 55.38% win rate, and 4.509 profit/loss ratio. For the pre-registered mild-trend subset, 2019 below-majority had 6 trades, +0.61% average return, and 33.33% win rate versus majority's 13 trades, +1.94%, and 46.15%. In 2020, below-majority had 5 trades, +0.78%, and 60.00% win rate versus majority's 14 trades, +3.76%, and 57.14%. In 2021, the relationship reversed materially: below-majority had 14 trades, +1.45%, and 64.29% win rate versus majority's 17 trades, -0.24%, and 41.18%.
+Candidate result: Not implemented because the pre-registered annual return-and-win-rate consistency gate failed.
+JoinQuant training result: Not run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Breadth below 50% is not uniformly hostile to low-position reversal entries. In 2021 it identified the narrower early leaders that this strategy is designed to catch, so a broad market confirmation would delay or block valid reversals.
+Can it be revisited? no as an MA20/50% mild-trend gate
+Conditions for revisiting: Do not search MA10/MA60, alternate breadth thresholds, smoothing windows, or A-share-only subsets from this result. Revisit only after a new independently justified breadth objective is pre-registered outside the exhausted indicator-search family.

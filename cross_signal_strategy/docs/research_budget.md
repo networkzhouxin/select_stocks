@@ -7,11 +7,11 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 43 real ledger entries.
+- Recorded failed or non-adopted experiments: 45 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: two independent families, one pre-registered observation per family.
+- New open budget: none. A new family requires a separately justified design before any backtest.
 
 ## Frozen Families
 
@@ -26,6 +26,8 @@ it does not change any score, order, position, or risk rule.
 | `training_period_pool_selection` | exhausted | Do not delete ETFs based on 2019-2021 attribution. |
 | `candidate_ranking` | exhausted | Existing-score ranking combinations are closed after the endpoint-artifact result. |
 | `execution_gap_and_timing` | exhausted | Do not search smaller post-hoc gap thresholds. |
+| `portfolio_dependence` | exhausted | The fixed 20-day/0.80 observation had only 9 high-dependence trades, and high dependence strongly outperformed in 2020. |
+| `market_breadth` | exhausted | The fixed MA20/50% observation reversed in 2021; low breadth was then the better early-reversal environment. |
 | `etf_microstructure` | blocked | Point-in-time premium, NAV, quota, FX, and tracking data are not in the approved source. |
 
 An exhausted family can reopen only after a new external market-structure reason
@@ -34,23 +36,10 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-### `portfolio_dependence`
-
-One observation-only representative is allowed. At each official buy decision,
-measure standard 20-day return correlation using only adjusted closes available
-through T-1. Use the pre-registered `0.80` split between the candidate and current
-holdings. Do not search correlation windows or thresholds. A strategy candidate
-is allowed only if high-dependence entries have adequate samples and consistently
-worse return and drawdown contribution in 2019, 2020, and 2021.
-
-### `market_breadth`
-
-One observation-only representative is allowed. On T-1, calculate the share of
-eligible pool ETFs above their standard MA20 and use the pre-registered majority
-split of below `50%` versus at least `50%`. Do not search MA periods or breadth
-thresholds. A strategy candidate is allowed only if the below-majority state
-consistently identifies worse mild-trend entries in all three training years with
-adequate samples.
+None. The current research budget is exhausted. Do not invent another indicator,
+threshold, period, interaction, pool deletion, or ranking variant merely to keep
+searching. Reopening research requires a new independent market-structure reason,
+a precise pre-registration, and an update to the structured budget before code.
 
 ## Mandatory Sequence
 
@@ -66,4 +55,3 @@ adequate samples.
 The gate is intentionally strict: every open family permits exactly one
 pre-registered variant. A request for multiple variants is rejected before a
 backtest can turn into winner selection.
-

@@ -5,8 +5,8 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 43,
-  "max_total_open_experiments": 2,
+  "expected_failed_experiment_count": 45,
+  "max_total_open_experiments": 0,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -74,18 +74,16 @@
     {
       "key": "portfolio_dependence",
       "label": "Portfolio-level dependence and crowding",
-      "status": "open",
-      "max_new_experiments": 1,
-      "rationale": "Existing work scores ETFs mostly independently; simultaneous exposure to highly correlated holdings is a genuinely different portfolio-level dimension.",
-      "planned_experiment": "Observation only: at each official buy decision, use T-1 and earlier adjusted closes to measure standard 20-day return correlation between the candidate and current holdings. Use one fixed 0.80 high-dependence split. Implement no candidate unless high-dependence entries have adequate samples and consistently worse return and drawdown contribution in 2019, 2020, and 2021."
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The single pre-registered 20-day/0.80 observation produced only 9 high-dependence trades. High dependence was profitable overall and strongly outperformed low dependence in 2020, so it is not a stable crowding filter. Do not search nearby windows or thresholds."
     },
     {
       "key": "market_breadth",
       "label": "ETF-pool breadth regime",
-      "status": "open",
-      "max_new_experiments": 1,
-      "rationale": "A pool-wide breadth state is distinct from the rejected single-benchmark MA60 guard and may describe whether reversals are isolated or broadly supported.",
-      "planned_experiment": "Observation only: on T-1, calculate the share of eligible pool ETFs above their standard MA20 and compare the pre-registered majority states below 50% versus at least 50%. Implement no candidate unless the below-majority state consistently identifies worse mild-trend entries in all three training years with adequate samples."
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The single pre-registered MA20/50% observation reversed across years. Below-majority mild-trend entries had higher win rate in 2020 and materially better return and win rate in 2021, so breadth is not a stable universal entry filter."
     },
     {
       "key": "etf_microstructure",

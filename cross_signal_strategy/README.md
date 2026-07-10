@@ -82,3 +82,5 @@ These are starting defaults, not optimized parameters.
 - `ranking_candidate.py`: rejected local A/B experiment that compared official total-score-first ranking with reversal-score-first ranking on identical cached T-1 signals.
 - `efficiency_ratio_diagnostics.py`: observation-only standard Kaufman ER(10) direction attribution on frozen T-1 signal frames.
 - `research_budget.py`: read-only ledger parser and experiment gate that prevents repeated or multi-variant search in exhausted families.
+- `portfolio_dependence_diagnostics.py`: rejected observation-only 20-day/0.80 portfolio-correlation attribution; it labels official buys without changing their order or size.
+- `market_breadth_diagnostics.py`: rejected observation-only pool MA20/50% breadth attribution for mild-trend entries; it does not filter or resize orders.

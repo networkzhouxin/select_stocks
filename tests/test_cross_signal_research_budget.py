@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 43
-    assert report.expected_failed_experiment_count == 43
+    assert report.failed_experiment_count == 45
+    assert report.expected_failed_experiment_count == 45
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -68,13 +68,12 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["indicator_enumeration"].status == "exhausted"
     assert families["threshold_and_period_search"].status == "exhausted"
     assert families["training_period_pool_selection"].status == "exhausted"
+    assert families["portfolio_dependence"].status == "exhausted"
+    assert families["market_breadth"].status == "exhausted"
     assert families["etf_microstructure"].status == "blocked"
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert {family.key for family in open_families} == {
-        "portfolio_dependence",
-        "market_breadth",
-    }
+    assert open_families == []
     assert all(family.max_new_experiments == 1 for family in open_families)
     assert all(family.planned_experiment for family in open_families)
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
@@ -88,9 +87,14 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
 
     budget = load_research_budget(BUDGET)
 
-    allowed = evaluate_experiment_request(
+    exhausted_portfolio = evaluate_experiment_request(
         budget,
         family_key="portfolio_dependence",
+        planned_variants=1,
+    )
+    exhausted_breadth = evaluate_experiment_request(
+        budget,
+        family_key="market_breadth",
         planned_variants=1,
     )
     closed = evaluate_experiment_request(
@@ -98,22 +102,18 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         family_key="indicator_enumeration",
         planned_variants=1,
     )
-    mined = evaluate_experiment_request(
-        budget,
-        family_key="market_breadth",
-        planned_variants=2,
-    )
     unknown = evaluate_experiment_request(
         budget,
         family_key="mystery_factor",
         planned_variants=1,
     )
 
-    assert allowed.allowed is True
+    assert exhausted_portfolio.allowed is False
+    assert "exhausted" in exhausted_portfolio.reason
+    assert exhausted_breadth.allowed is False
+    assert "exhausted" in exhausted_breadth.reason
     assert closed.allowed is False
     assert "exhausted" in closed.reason
-    assert mined.allowed is False
-    assert "one pre-registered variant" in mined.reason
     assert unknown.allowed is False
     assert "unknown research family" in unknown.reason
 
@@ -123,6 +123,24 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
     invalid.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate research family"):
         load_research_budget(invalid)
+
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    payload["max_total_open_experiments"] = 1
+    market = next(item for item in payload["families"] if item["key"] == "market_breadth")
+    market.update({
+        "status": "open",
+        "max_new_experiments": 1,
+        "planned_experiment": "One fixed representative.",
+    })
+    synthetic_open = tmp_path / "open.json"
+    synthetic_open.write_text(json.dumps(payload), encoding="utf-8")
+    mined = evaluate_experiment_request(
+        load_research_budget(synthetic_open),
+        family_key="market_breadth",
+        planned_variants=2,
+    )
+    assert mined.allowed is False
+    assert "one pre-registered variant" in mined.reason
 
 
 def test_budget_is_training_only_and_forbids_validation_tuning():
@@ -134,14 +152,14 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 2
+    assert budget.max_total_open_experiments == 0
 
 
 def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 
     assert "research_budget.json" in text
-    assert "43" in text
+    assert "45" in text
     assert "cross-v0.3.2" in text
     assert "portfolio_dependence" in text
     assert "market_breadth" in text
