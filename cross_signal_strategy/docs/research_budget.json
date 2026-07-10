@@ -6,7 +6,7 @@
   },
   "validation_tuning_forbidden": true,
   "expected_failed_experiment_count": 45,
-  "max_total_open_experiments": 0,
+  "max_total_open_experiments": 1,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -88,9 +88,10 @@
     {
       "key": "etf_microstructure",
       "label": "ETF premium, quota, tracking, and cross-market microstructure",
-      "status": "blocked",
-      "max_new_experiments": 0,
-      "rationale": "The approved local training source does not contain point-in-time NAV premium, QDII quota, FX, or tracking-error fields. This family cannot be tested honestly without a separately approved, point-in-time source."
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "JoinQuant capability probes proved that T-1 unit NAV is available at 09:35 while same-day NAV is blocked until after 15:00. This creates one new point-in-time-safe market-structure question for US-market QDII ETFs without reopening technical-indicator or threshold searches.",
+      "planned_experiment": "One observation-only 513100/513500 attribution of 09:35 market price versus T-1 unit NAV proxy, split by pre-registered economic premium bands and entry year. No orders, ranking, sizing, pool membership, or thresholds may change."
     }
   ]
 }

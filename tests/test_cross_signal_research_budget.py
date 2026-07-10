@@ -70,10 +70,12 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["training_period_pool_selection"].status == "exhausted"
     assert families["portfolio_dependence"].status == "exhausted"
     assert families["market_breadth"].status == "exhausted"
-    assert families["etf_microstructure"].status == "blocked"
+    assert families["etf_microstructure"].status == "open"
+    assert families["etf_microstructure"].max_new_experiments == 1
+    assert "513100/513500" in families["etf_microstructure"].planned_experiment
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
+    assert [family.key for family in open_families] == ["etf_microstructure"]
     assert all(family.max_new_experiments == 1 for family in open_families)
     assert all(family.planned_experiment for family in open_families)
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
@@ -126,6 +128,14 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
 
     payload = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload["max_total_open_experiments"] = 1
+    microstructure = next(
+        item for item in payload["families"] if item["key"] == "etf_microstructure"
+    )
+    microstructure.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    microstructure.pop("planned_experiment", None)
     market = next(item for item in payload["families"] if item["key"] == "market_breadth")
     market.update({
         "status": "open",
@@ -152,7 +162,30 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
+
+
+def test_etf_microstructure_budget_allows_only_one_registered_observation():
+    from cross_signal_strategy.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+
+    allowed = evaluate_experiment_request(
+        budget,
+        family_key="etf_microstructure",
+        planned_variants=1,
+    )
+    rejected = evaluate_experiment_request(
+        budget,
+        family_key="etf_microstructure",
+        planned_variants=2,
+    )
+
+    assert allowed.allowed is True
+    assert rejected.allowed is False
 
 
 def test_readable_research_map_matches_the_structured_budget():
