@@ -359,3 +359,15 @@ Validation result: Not run. Per protocol, validation periods were not inspected 
 Why it failed: The local improvement was too small and did not translate into an actual JoinQuant path change. Under the JoinQuant authority path, the rule never triggered, so it adds complexity without measurable effect.
 Can it be revisited? no as currently defined
 Conditions for revisiting: Only revisit replacement-aware selling if future training-only diagnostics show a materially larger set of weak signal sells with no replacement. Any revised rule must include explicit trigger-count logging before JoinQuant testing.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2-low-bounce-candidate`
+Experiment: Block new buys where RSI and KDJ cross up, MACD does not cross up, price is in the BOLL lower-to-middle/near-MA20 repair zone, volume confirmation is positive, and trend score is positive but below strong-trend level (`0 < trend_score < 20`).
+Hypothesis: A low-position volume bounce with RSI/KDJ timing but no MACD confirmation and no strong trend support may be a false rebound. Filtering this pattern might remove weak entries without changing the core cross-signal strategy.
+Local training result: Local 2019-2021 replay improved from official mainline +118.75% return, 6.81% max drawdown, 99 buys, 96 sells, and end value 43749.40 to candidate +122.49% return, 7.20% max drawdown, 95 buys, 92 sells, and end value 44498.60.
+JoinQuant training result: JoinQuant 2019-2021 returned +124.73%, annualized +31.96%, max drawdown 7.00%, Sharpe 3.127, Sortino 0.778, win rate 0.582, profit/loss ratio 5.117, 53 profitable trades, and 38 losing trades. Official `cross-v0.3.2` returned +125.82%, annualized +32.18%, max drawdown 6.70%, Sharpe 3.109, Sortino 0.799, win rate 0.558, profit/loss ratio 4.845, 53 profitable trades, and 42 losing trades.
+Operational result: The candidate log contained 94 buy events and 92 sell events, versus the mainline-equivalent local path of 99 buys and 96 sells, so the rule changed the trade path. There were 0 ERROR-level logs. The two WARNING lines were both the already-understood 2019-12-12 `513880.XSHG` zero-volume market-order matching event, not a strategy exception.
+Validation result: Not run. Per protocol, reserved validation periods were not inspected for this failed training candidate.
+Why it failed: The filter removed four losing trades and improved win rate, profit/loss ratio, and Sharpe slightly, but it also removed enough profitable opportunity to lower total and annualized return. More importantly, max drawdown worsened from 6.70% to 7.00% and Sortino fell from 0.799 to 0.778. The local gain did not survive the JoinQuant authority check on the primary return-and-drawdown objective.
+Can it be revisited? no as currently defined
+Conditions for revisiting: Do not widen or tune this pattern with extra thresholds. A future entry filter must come from a new training-only structural hypothesis and must beat the official mainline on JoinQuant without trading lower return for worse downside risk.

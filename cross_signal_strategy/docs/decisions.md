@@ -498,4 +498,4 @@ Evidence: Local 2019-2021 same-mouth replay improved from official mainline +118
 Risk: This is an entry-quality filter learned from training attribution and therefore has overfitting risk. The local improvement comes with higher drawdown and fewer trades, so it must be treated as a candidate only. JoinQuant training confirmation is required before any reserved validation or adoption discussion.
 Affected files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_low_bounce_candidate.py`, `tests/test_cross_signal_low_bounce_candidate.py`, `cross_signal_strategy/attribution_diagnostics.py`, `tests/test_cross_signal_attribution_diagnostics.py`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; validation periods must not be inspected unless the candidate is first frozen after JoinQuant training confirmation
-Status: proposed, local-training-only candidate
+Status: rejected after JoinQuant 2019-2021 training confirmation. The candidate improved win rate, profit/loss ratio, and Sharpe slightly, but reduced return and annualized return while worsening max drawdown and Sortino. It must not proceed to reserved validation.

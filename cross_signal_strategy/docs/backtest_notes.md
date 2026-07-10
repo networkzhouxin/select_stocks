@@ -2206,6 +2206,7 @@ Local training probe:
 - Mainline equivalent baseline: +118.75% return, +29.90% annualized, 6.81% max drawdown, Sharpe 2.117, Sortino 3.327, 99 buys, 96 sells, trade win rate 0.552, profit/loss ratio 4.034.
 - Broad no-replacement protection for all weak sells: +108.24% return, 7.67% max drawdown, Sharpe 1.973, protected 9 sells. Rejected.
 - Weak no-replacement with `buy_score >= 35`: +119.82% return, +30.12% annualized, 6.86% max drawdown, Sharpe 2.120, Sortino 3.335, 99 buys, 96 sells, trade win rate 0.552, profit/loss ratio 4.107, protected 2 sells.
+
 - Other no-replacement variants were worse than baseline.
 
 Implementation checks:
@@ -2343,3 +2344,41 @@ Interpretation:
 
 Can this result be used to change rules? no direct rule change
 Reason: This is validation evidence for the already-frozen candidate. It supports continuing validation, not retuning.
+
+## 2026-07-10 Low-Bounce Entry Filter JoinQuant Training Check
+
+Period: 2019-01-01 to 2021-12-31
+Version: `cross-v0.3.2-low-bounce-candidate`
+Authority: JoinQuant
+
+Candidate result:
+- Strategy return: +124.73%.
+- Annualized return: +31.96%.
+- Max drawdown: 7.00%.
+- Sharpe: 3.127.
+- Sortino: 0.778.
+- Win rate: 0.582.
+- Profit/loss ratio: 5.117.
+- Profitable/loss trades: 53/38.
+- Buy/sell log events: 94/92.
+
+Official `cross-v0.3.2` training baseline:
+- Strategy return: +125.82%.
+- Annualized return: +32.18%.
+- Max drawdown: 6.70%.
+- Sharpe: 3.109.
+- Sortino: 0.799.
+- Win rate: 0.558.
+- Profit/loss ratio: 4.845.
+- Profitable/loss trades: 53/42.
+
+Operational checks:
+- Version initialization confirmed `cross-v0.3.2-low-bounce-candidate`.
+- ERROR-level log count: 0. Text matches for `error=` came from JoinQuant's `StockOrder` object representation and were logged at INFO level.
+- WARNING-level log count: 2. Both were the known 2019-12-12 `513880.XSHG` zero-volume market-order matching event.
+- The changed event counts and changed performance confirm that the candidate altered the JoinQuant trade path.
+
+Decision:
+- Reject the candidate and keep official `cross-v0.3.2` unchanged.
+- Do not run reserved validation. The candidate failed the JoinQuant training gate because return and annualized return fell while max drawdown and Sortino worsened.
+- The higher win rate and profit/loss ratio show that the filter removed some losing entries, but it also removed higher-value opportunity. This is not a favorable trade under the strategy's primary objective.
