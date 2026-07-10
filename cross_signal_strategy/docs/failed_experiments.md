@@ -371,3 +371,14 @@ Validation result: Not run. Per protocol, reserved validation periods were not i
 Why it failed: The filter removed four losing trades and improved win rate, profit/loss ratio, and Sharpe slightly, but it also removed enough profitable opportunity to lower total and annualized return. More importantly, max drawdown worsened from 6.70% to 7.00% and Sortino fell from 0.799 to 0.778. The local gain did not survive the JoinQuant authority check on the primary return-and-drawdown objective.
 Can it be revisited? no as currently defined
 Conditions for revisiting: Do not widen or tune this pattern with extra thresholds. A future entry filter must come from a new training-only structural hypothesis and must beat the official mainline on JoinQuant without trading lower return for worse downside risk.
+
+Date: 2026-07-10
+Version: `cross-v0.3.2-backup-fill-local-candidate`
+Experiment: Keep the official 60-point primary buy threshold, then fill only remaining slots with 50-59 point candidates that have a reversal cross and pass all other official entry filters. Primary candidates always rank first and cannot be displaced.
+Hypothesis: The capital-utilization diagnostic found 51 independent 50-59 point rejected-signal episodes with positive average 5/10/20-day shadow returns. A backup-only rule might use otherwise idle slots without weakening the main entry gate.
+Local training result: Official local baseline returned +118.75%, max drawdown 6.81%, 99 buys, 96 sells, and 0.732 average exposure. The candidate returned +86.39%, max drawdown 9.17%, 110 buys, 107 sells, and 0.810 average exposure. It executed 50 backup buys, reduced return by 32.35 percentage points, and worsened drawdown by 2.36 percentage points.
+JoinQuant training result: Not run because the local direction check materially failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Fixed-horizon shadow returns did not model portfolio opportunity cost. Backup positions consumed slots and cash that later stronger primary signals needed, while the existing ATR and signal exits realized a much worse path than the isolated 5/10/20-day snapshots suggested.
+Can it be revisited? no as a score-only backup fill
+Conditions for revisiting: Do not lower the buy threshold or mechanically fill idle slots based on fixed-horizon shadow returns. Revisit only if a new independent signal dimension can identify backup candidates without relying on the existing buy score alone.

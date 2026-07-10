@@ -70,3 +70,5 @@ These are starting defaults, not optimized parameters.
 - `smart_trade_joinquant_cross_signal_etf.py`: JoinQuant strategy file, to be created in this folder after the design is approved.
 - `training_stability.py`: training-only annual, concentration, exit, holding-period, regime, and doubled-friction diagnostics.
 - `friction_diagnostics.py`: cached-signal training replay that isolates commission-rate, minimum-commission, and slippage sensitivity.
+- `capital_utilization_diagnostics.py`: training-only occupied-slot, vacant-slot reason, and de-duplicated shadow-candidate diagnostics.
+- `backup_fill_candidate.py`: rejected local candidate that tested 50-59 score backup fills without changing the main buy threshold.

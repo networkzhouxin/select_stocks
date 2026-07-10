@@ -2475,3 +2475,68 @@ Decision:
 - Do not add or retune technical indicators from this result.
 - Confirm the actual Guojin PTrade ETF minimum-commission schedule before making a live-cost assumption.
 - Treat execution timing/order style as the next candidate research area, with tests first and the same training-only protocol.
+
+## 2026-07-10 Cross-v0.3.2 Capital Utilization Diagnostic
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2`
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Portfolio occupancy:
+- Trading days: 730.
+- Daily-mean exposure ratio: 0.725; daily-mean cash ratio: 0.275.
+- The earlier 0.732 exposure figure is value-weighted (`sum exposure / sum total value`); 0.725 is the arithmetic mean of daily exposure ratios. Both are correct under their stated aggregation.
+- Position-count days: 0 holdings 43 days, 1 holding 86 days, 2 holdings 172 days, 3 holdings 429 days.
+- Days with at least one vacant slot: 301.
+- Total vacant slot-days: 473 out of 2190 available slot-days; occupied-slot ratio 78.40%.
+
+Vacant-slot causes:
+- Below official 60-point buy threshold: 326 slot-days.
+- No reversal candidate available: 136 slot-days.
+- Official blocked entry combo: 6 slot-days.
+- RSI overheat: 4 slot-days.
+- Location filter: 1 slot-day.
+- No eligible-but-unfilled or sell-conflict slot was observed.
+
+De-duplicated below-threshold shadow episodes:
+- Total: 199 independent episodes from 326 candidate-days.
+- 50-59: 51 episodes; average 5/10/20-day returns +0.93%/+0.44%/+1.38%; win rates 62.75%/54.90%/58.82%.
+- 40-49: 71 episodes; average 5/10/20-day returns +0.42%/+0.77%/+1.97%.
+- 30-39: 44 episodes; average 5/10/20-day returns -0.02%/+1.06%/+2.83%.
+- 20-29: 19 episodes; average 5/10/20-day returns -0.10%/+0.59%/+2.28%.
+- Below 20: 14 episodes; sample too small and short-horizon return negative, so it is not actionable.
+- These are ex-post fixed-horizon diagnostics, not executable strategy results.
+
+Other rejected groups:
+- Blocked combo: 4 independent episodes; 20-day average -3.30% and 25% win rate, supporting the existing v0.3.2 block.
+- Overheat: 3 episodes; 5/10/20-day averages all negative, supporting the existing overheat filter.
+- Location filter: 1 episode with negative returns at all horizons; too small for a new conclusion but not contradictory.
+
+Decision:
+- Preserve every existing filter.
+- Test exactly one local candidate: 50-59 point backup fills only when primary candidates leave slots vacant.
+- Do not globally lower `buy_threshold=60` and do not inspect validation periods.
+
+## 2026-07-10 Backup Cross-Signal Slot-Fill Local Candidate
+
+Period: 2019-01-01 to 2021-12-31
+Candidate: primary threshold remains 60; 50-59 point reversal candidates fill only slots left after primary candidates
+Protocol role: local training direction check only
+
+Results:
+- Official baseline: +118.75% return, 6.81% max drawdown, 99 buys, 96 sells, 0.732 value-weighted exposure.
+- Backup-fill candidate: +86.39% return, 9.17% max drawdown, 110 buys, 107 sells, 0.810 value-weighted exposure.
+- Filled backup buys: 50.
+- Return delta: -32.35 percentage points.
+- Max-drawdown delta: +2.36 percentage points.
+
+Interpretation:
+- The candidate fails decisively despite positive isolated shadow returns.
+- Fixed-horizon shadow labels omitted capital opportunity cost, later primary signals, and the strategy's actual ATR/signal exit path.
+- Higher exposure is not automatically better; selective cash protects the ability to enter stronger signals later.
+
+Decision:
+- Reject locally. Do not prepare a JoinQuant candidate and do not run reserved validation.
+- Keep official `cross-v0.3.2` unchanged.
+- Do not revisit score-only backup filling or global buy-threshold loosening without a new independent signal dimension.

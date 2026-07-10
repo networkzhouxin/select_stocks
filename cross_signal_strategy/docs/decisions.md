@@ -523,3 +523,27 @@ Risk: This is a local execution stress model, not a prediction of live slippage 
 Affected files: `cross_signal_strategy/friction_diagnostics.py`, `tests/test_cross_signal_friction_diagnostics.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: adopted as training-only execution diagnostic infrastructure; no strategy rule changed
+
+### Add Capital-Utilization And Shadow-Candidate Diagnostics
+
+Date: 2026-07-10
+Decision: Add `capital_utilization_diagnostics.py` to measure occupied slots, vacant-slot causes, and T-1 rejected-candidate forward returns for official `cross-v0.3.2`. Consecutive appearances of the same ETF/rejection reason are collapsed into one signal episode, and score bands are kept broad (`50-59`, `40-49`, `30-39`, `20-29`, below 20).
+Reason: The local stability report showed only 0.732 value-weighted exposure. Before changing signals, the research needed to distinguish intentional cash caused by no reversal opportunities from potentially usable candidates rejected by the current gate.
+Evidence: Across 730 training days, the portfolio held 0/1/2/3 ETFs on 43/86/172/429 days. There were 301 days with at least one vacant slot and 473 vacant slot-days. Causes were 326 below-threshold candidate slots, 136 slots with no reversal candidate, 6 blocked-combo candidates, 4 overheated candidates, and 1 location-filter candidate. After collapsing consecutive duplicates, the 50-59 below-threshold band contained 51 episodes with average 5/10/20-day shadow returns of +0.93%/+0.44%/+1.38%.
+Interpretation: Empty capacity is mostly associated with sub-threshold reversal candidates, but fixed-horizon shadow returns are not portfolio returns. They ignore exits, capital competition, path dependence, and later primary signals. They may justify one isolated local candidate, never a direct threshold change.
+Risk: Forward returns use future training prices only as ex-post diagnostics. They are not available to the strategy at decision time and must not be called from production strategy code. No validation-period data was read.
+Affected files: `cross_signal_strategy/capital_utilization_diagnostics.py`, `tests/test_cross_signal_capital_utilization.py`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: adopted as training-only diagnostic infrastructure; no strategy rule changed
+
+### Reject 50-59 Backup Cross-Signal Slot Fill
+
+Date: 2026-07-10
+Decision: Reject the local candidate that retained the official 60-point primary gate but filled remaining portfolio slots with 50-59 point reversal candidates that passed every other mainline filter.
+Reason: This was the narrowest structural test supported by the capital-utilization report. It did not lower the global threshold, did not displace primary candidates, and kept overheat, sell-conflict, location, blocked-combo, cooldown, and same-day ATR-stop protections.
+Evidence: Local 2019-2021 baseline returned +118.75% with 6.81% max drawdown, 99 buys, 96 sells, and 0.732 value-weighted exposure. The backup-fill candidate returned +86.39% with 9.17% max drawdown, 110 buys, 107 sells, and 0.810 exposure. It filled 50 backup buys, reduced return by 32.35 percentage points, and increased drawdown by 2.36 percentage points.
+Interpretation: Positive 5/10/20-day shadow returns did not survive actual portfolio path simulation. Backup positions occupied capital needed for later stronger signals and interacted poorly with the existing exit system. Idle slots are therefore a feature of signal selectivity, not an error that should be filled mechanically.
+Risk: This is a local direction check rather than JoinQuant authority performance. The failure is sufficiently large and directionally adverse that a JoinQuant run would waste a candidate test and increase multiple-testing risk.
+Affected files: `cross_signal_strategy/backup_fill_candidate.py`, `tests/test_cross_signal_backup_fill_candidate.py`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; validation periods were not inspected
+Status: rejected locally; do not run on JoinQuant or reserved validation
