@@ -4,6 +4,7 @@
 from datetime import date, datetime
 import importlib.util
 from pathlib import Path
+import pickle
 import sys
 import types
 
@@ -94,6 +95,155 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
         "518880.SS",
         "159985.SZ",
     ]
+
+
+def test_before_trading_start_relocks_frozen_business_config_after_restore(monkeypatch):
+    today = date(2026, 7, 13)
+    stale_params = pt.get_default_params()
+    stale_params["buy_threshold"] = 999
+    pt.g = make_g(
+        params=stale_params,
+        etf_pool=["510300.SS"],
+        execution_date=today,
+        __is_live=False,
+    )
+    monkeypatch.setattr(pt, "_restore_live_state", lambda: True, raising=False)
+
+    context = types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30))
+    pt.before_trading_start(context, data=None)
+
+    assert pt.g.params == pt.get_default_params()
+    assert pt.g.etf_pool == pt.get_default_etf_pool()
+
+
+def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    today = date(2026, 7, 13)
+    signal_date = date(2026, 7, 10)
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.5},
+        entry_atr={"513100.SS": 0.05},
+        buy_date={"513100.SS": signal_date},
+        last_scores={"513100.SS": make_buy_score()},
+        sold_today={"159915.SZ": True},
+        paused_pool_codes={"513880.SS"},
+        unverified_positions={"159985.SZ"},
+        execution_date=today,
+        deferred_scores=[make_buy_score()],
+        deferred_signal_date=signal_date,
+    )
+
+    assert pt._persist_live_state(path=state_path) is True
+
+    pt.g.highest_since_buy = {}
+    pt.g.entry_atr = {}
+    pt.g.buy_date = {}
+    pt.g.last_scores = {}
+    pt.g.sold_today = {}
+    pt.g.paused_pool_codes = set()
+    pt.g.unverified_positions = set()
+    pt.g.execution_date = None
+    pt.g.deferred_scores = []
+    pt.g.deferred_signal_date = None
+    pt.g.params = {"buy_threshold": 777}
+    pt.g.etf_pool = ["510300.SS"]
+
+    assert pt._restore_live_state(path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
+    assert pt.g.entry_atr == {"513100.SS": 0.05}
+    assert pt.g.buy_date == {"513100.SS": signal_date}
+    assert pt.g.sold_today == {"159915.SZ": True}
+    assert pt.g.paused_pool_codes == {"513880.SS"}
+    assert pt.g.unverified_positions == {"159985.SZ"}
+    assert pt.g.execution_date == today
+    assert pt.g.deferred_signal_date == signal_date
+    assert pt.g.params == {"buy_threshold": 777}
+    assert pt.g.etf_pool == ["510300.SS"]
+
+
+def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "get_user_name", lambda: "account-a", raising=False)
+    monkeypatch.setattr(pt, "get_trade_name", lambda: "simulation", raising=False)
+
+    simulation_path = pt._live_state_path()
+    monkeypatch.setattr(pt, "get_trade_name", lambda: "live", raising=False)
+    live_path = pt._live_state_path()
+
+    assert simulation_path != live_path
+    assert state_parent(simulation_path) == state_parent(live_path) == str(tmp_path)
+    assert "account-a" not in simulation_path
+
+
+def test_automatic_live_state_path_fails_closed_without_instance_identity(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.delattr(pt, "get_user_name", raising=False)
+    monkeypatch.delattr(pt, "get_trade_name", raising=False)
+
+    assert pt._live_state_path() is None
+
+
+def state_parent(path):
+    return str(Path(path).parent)
+
+
+def test_malformed_live_state_is_rejected_without_partial_restore(tmp_path):
+    state_path = tmp_path / "malformed-state.pkl"
+    payload = {
+        "strategy_version": pt.STRATEGY_VERSION,
+        "state": {
+            "highest_since_buy": {"513100.SS": 9.9},
+            "entry_atr": ["not", "a", "mapping"],
+        },
+    }
+    state_path.write_bytes(pickle.dumps(payload))
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.5},
+        entry_atr={"513100.SS": 0.05},
+    )
+
+    assert pt._restore_live_state(path=state_path) is False
+    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
+    assert pt.g.entry_atr == {"513100.SS": 0.05}
+
+
+def test_live_schedule_wrappers_checkpoint_state(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pt, "do_trading", lambda context: calls.append("trade"))
+    monkeypatch.setattr(pt, "halt_recover", lambda context: calls.append("recover"))
+    monkeypatch.setattr(pt, "after_close", lambda context: calls.append("close"))
+    monkeypatch.setattr(
+        pt, "_persist_live_state", lambda: calls.append("persist") or True,
+        raising=False,
+    )
+    pt.g = make_g()
+    context = types.SimpleNamespace()
+
+    pt._do_trading_wrapper(context)
+    pt._halt_recover_wrapper(context)
+    pt._after_close_wrapper(context)
+
+    assert calls == [
+        "trade", "persist",
+        "recover", "persist",
+        "close", "persist",
+    ]
+
+
+def test_order_and_trade_callbacks_checkpoint_state(monkeypatch):
+    persisted = []
+    monkeypatch.setattr(
+        pt, "_persist_live_state", lambda: persisted.append(True) or True,
+        raising=False,
+    )
+    pt.g = make_g()
+
+    pt.on_order_response(types.SimpleNamespace(), [])
+    pt.on_trade_response(types.SimpleNamespace(), [])
+
+    assert len(persisted) == 2
 
 
 def test_ptrade_scoring_and_stop_math_match_joinquant_mainline():
@@ -1009,3 +1159,5 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "15:30" in notes
     assert "JoinQuant" in notes
     assert "PTrade" in notes
+    assert "configuration lock" in notes
+    assert "explicit state checkpoint" in notes

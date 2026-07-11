@@ -9,10 +9,26 @@ backtests are smoke tests; JoinQuant remains the performance authority.
 import numpy as np
 import pandas as pd
 import builtins as _builtins
+import hashlib
+import os
+import pickle
 from datetime import datetime
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
+LIVE_STATE_FILENAME = "cross_signal_v032_live_state_%s.pkl"
+LIVE_STATE_FIELDS = (
+    "highest_since_buy",
+    "entry_atr",
+    "buy_date",
+    "last_scores",
+    "sold_today",
+    "paused_pool_codes",
+    "unverified_positions",
+    "execution_date",
+    "deferred_scores",
+    "deferred_signal_date",
+)
 
 
 try:
@@ -77,6 +93,125 @@ def get_default_etf_pool():
         "518880.SS",
         "159985.SZ",
     ]
+
+
+def _lock_frozen_business_config():
+    """Reassert code-owned strategy configuration after PTrade restores g."""
+    g.params = get_default_params()
+    g.etf_pool = get_default_etf_pool()
+    try:
+        set_universe(g.etf_pool)
+    except Exception as exc:
+        log.warning("[config-lock] set_universe failed: %s" % exc)
+
+
+def _live_state_path(path=None):
+    if path is not None:
+        return os.fspath(path)
+    try:
+        root = get_research_path()
+    except Exception as exc:
+        log.warning("[state] research path unavailable: %s" % exc)
+        return None
+    if not root:
+        log.warning("[state] research path is empty")
+        return None
+    identity = []
+    for getter_name in ("get_user_name", "get_trade_name"):
+        getter = globals().get(getter_name)
+        if getter is None:
+            continue
+        try:
+            value = getter()
+            if value not in (None, ""):
+                identity.append(str(value))
+        except Exception as exc:
+            log.warning("[state] %s unavailable: %s" % (getter_name, exc))
+    if not identity:
+        log.error("[state] account/trade identity unavailable; checkpoint disabled")
+        return None
+    identity_text = "|".join(identity)
+    identity_hash = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:12]
+    return os.path.join(str(root), LIVE_STATE_FILENAME % identity_hash)
+
+
+def _persist_live_state(path=None):
+    state_path = _live_state_path(path)
+    if state_path is None:
+        return False
+    payload = {
+        "strategy_version": STRATEGY_VERSION,
+        "state": {
+            field: getattr(g, field, None)
+            for field in LIVE_STATE_FIELDS
+        },
+    }
+    temp_path = state_path + ".tmp"
+    try:
+        with open(temp_path, "wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temp_path, state_path)
+        return True
+    except Exception as exc:
+        log.error("[state] persist failed: %s" % exc)
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+        return False
+
+
+def _validated_live_state(state):
+    if not isinstance(state, dict):
+        raise ValueError("invalid state body")
+    missing = [field for field in LIVE_STATE_FIELDS if field not in state]
+    if missing:
+        raise ValueError("missing state fields: %s" % ",".join(missing))
+    mapping_fields = (
+        "highest_since_buy",
+        "entry_atr",
+        "buy_date",
+        "last_scores",
+        "sold_today",
+    )
+    for field in mapping_fields:
+        if not isinstance(state[field], dict):
+            raise ValueError("invalid mapping field: %s" % field)
+    for field in ("paused_pool_codes", "unverified_positions"):
+        if not isinstance(state[field], set):
+            raise ValueError("invalid set field: %s" % field)
+    if not isinstance(state["deferred_scores"], list):
+        raise ValueError("invalid deferred scores")
+
+    validated = dict(state)
+    for field in ("execution_date", "deferred_signal_date"):
+        value = state[field]
+        normalized = _as_date(value) if value is not None else None
+        if value is not None and normalized is None:
+            raise ValueError("invalid date field: %s" % field)
+        validated[field] = normalized
+    return validated
+
+
+def _restore_live_state(path=None):
+    state_path = _live_state_path(path)
+    if state_path is None or not os.path.exists(state_path):
+        return False
+    try:
+        with open(state_path, "rb") as handle:
+            payload = pickle.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid state payload")
+        if payload.get("strategy_version") != STRATEGY_VERSION:
+            raise ValueError("strategy version mismatch")
+        state = _validated_live_state(payload.get("state"))
+        for field in LIVE_STATE_FIELDS:
+            setattr(g, field, state[field])
+        return True
+    except Exception as exc:
+        log.error("[state] restore failed: %s" % exc)
+        return False
 
 
 def get_a_share_etf_codes():
@@ -262,6 +397,9 @@ def handle_data(context, data):
 def before_trading_start(context, data):
     g.__data = data
     g.__last_snapshot = {}
+    if g.__is_live:
+        _restore_live_state()
+    _lock_frozen_business_config()
     today = _as_date(get_context_datetime(context))
     if today is None:
         g.__order_state_unknown = True
@@ -280,25 +418,32 @@ def before_trading_start(context, data):
         g.__pending_orders = {}
         g.__pending_sells = {}
         g.__order_state_unknown = False
+    if g.__is_live:
+        _persist_live_state()
 
 
 def after_trading_end(context, data):
     if not g.__is_live:
         after_close(context)
     g.sold_today = {}
+    if g.__is_live:
+        _persist_live_state()
 
 
 def _do_trading_wrapper(context):
     do_trading(context)
+    _persist_live_state()
 
 
 def _halt_recover_wrapper(context):
     halt_recover(context)
+    _persist_live_state()
 
 
 def _after_close_wrapper(context):
     after_close(context)
     g.sold_today = {}
+    _persist_live_state()
 
 
 def calc_rsi(close, period):
@@ -1640,6 +1785,7 @@ def on_order_response(context, order_list):
                 g.sold_today.pop(code, None)
                 log.error("[sell rejected/cancelled] %s status=%s reason=%s" % (
                     code, status, error))
+    _persist_live_state()
 
 
 def on_trade_response(context, trade_list):
@@ -1688,3 +1834,4 @@ def on_trade_response(context, trade_list):
             _finish_terminal_sell(code, pending)
             log.info("[fill] sell %s qty=%.0f @%.3f cumulative=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
+    _persist_live_state()

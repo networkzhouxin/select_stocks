@@ -15,6 +15,12 @@ filtering, position sizing, minimum signal hold, and ATR stop formula are
 frozen to the JoinQuant `cross-v0.3.2` mainline. Only platform access and live
 order lifecycle handling differ.
 
+After PTrade restores its persisted `g` object, a configuration lock rebuilds
+`g.params` and `g.etf_pool` from the frozen source code and calls
+`set_universe()` again. Old persisted configuration therefore cannot replace
+the formal `cross-v0.3.2` parameters or nine-ETF pool after an upgrade or
+server restart.
+
 ## Live Schedule
 
 PTrade live mode registers three tasks, below the platform limit of five:
@@ -80,6 +86,18 @@ of the requested time. That result must not be compared with the JoinQuant
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
+- An explicit state checkpoint is written atomically to
+  `cross_signal_v032_live_state_<identity>.pkl` under PTrade's research path.
+  The anonymous identity is derived from the account and trade name so
+  simulation and live instances cannot overwrite each other's state. The file
+  contains risk state, execution dates, deferred T-1 scores, and halt/recovery
+  state, but deliberately excludes strategy parameters and the ETF pool.
+  If the account/trade identity cannot be obtained, checkpointing fails closed
+  instead of falling back to a shared filename.
+- State checkpoints run after the 09:35, 10:35, and 15:30 tasks and after
+  order/trade callbacks. On restart, the file is restored before broker order
+  reconciliation and position verification. A version mismatch or malformed
+  file is rejected instead of partially restoring state.
 
 ## Platform Evidence
 
@@ -105,11 +123,10 @@ official authority for this port.
    15:30 logs, callback code format, halt status, partial fills, and rejected
    orders.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
-   Verify that `execution_date`, `deferred_signal_date`, `deferred_scores`, and
-   `paused_pool_codes` survive. The bundled documentation does not guarantee a
-   persistence checkpoint after `run_daily`, so this cannot be proved by local
-   unit tests. If the state does not survive, deferred 10:35 execution must
-   remain disabled after restart.
+   Verify that the explicit state checkpoint restores `execution_date`,
+   `deferred_signal_date`, `deferred_scores`, `paused_pool_codes`, buy dates,
+   entry ATR values, and trailing highs. Confirm that the configuration lock
+   still reports the formal parameters and nine-ETF pool after restoration.
 5. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
 6. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
