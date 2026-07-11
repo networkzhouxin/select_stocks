@@ -2,6 +2,7 @@
 """Parity and live-safety tests for the PTrade cross-signal strategy."""
 
 from datetime import date, datetime
+import ast
 import importlib.util
 from pathlib import Path
 import pickle
@@ -95,6 +96,74 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
         "518880.SS",
         "159985.SZ",
     ]
+
+
+def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
+    function_names = {
+        "_as_float_array",
+        "_date_key",
+        "_numeric_score",
+        "_valid_pair",
+        "build_signal_snapshot",
+        "buy_position_scale",
+        "calc_atr",
+        "calc_bollinger",
+        "calc_buy_target_value",
+        "calc_dmi_adx",
+        "calc_kdj",
+        "calc_macd",
+        "calc_rsi",
+        "calc_stop_price",
+        "can_sell_by_signal",
+        "crossed_above_by_diff_recent",
+        "crossed_above_recent",
+        "crossed_below_by_diff_recent",
+        "crossed_below_recent",
+        "filter_buy_candidates",
+        "format_cross_flags",
+        "format_indicator_params",
+        "format_indicator_values",
+        "format_self_check",
+        "get_a_share_etf_codes",
+        "get_default_params",
+        "has_new_buy_position",
+        "has_signal_sell_confirmation",
+        "is_blocked_entry_combo",
+        "is_protected_by_strong_adx_uptrend",
+        "is_strong_adx_uptrend",
+        "latest_cross_direction_by_diff_recent",
+        "rsi_group_direction",
+        "score_buy_snapshot",
+        "score_sell_snapshot",
+        "score_skip_reason",
+        "should_force_sell",
+        "sort_candidates",
+        "summarize_cross_signal_candidates",
+        "summarize_loose_reversal_candidates",
+    }
+
+    def functions(path):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        return {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+        }
+
+    jq_functions = functions(
+        ROOT / "cross_signal_strategy" / "smart_trade_joinquant_cross_signal_etf.py"
+    )
+    pt_functions = functions(
+        ROOT / "cross_signal_strategy" / "smart_trade_ptrade_cross_signal_etf.py"
+    )
+    assert function_names <= jq_functions.keys()
+    assert function_names <= pt_functions.keys()
+    for name in sorted(function_names):
+        assert ast.dump(
+            pt_functions[name], include_attributes=False
+        ) == ast.dump(
+            jq_functions[name], include_attributes=False
+        ), name
 
 
 def test_before_trading_start_relocks_frozen_business_config_after_restore(monkeypatch):
@@ -219,7 +288,9 @@ def test_live_schedule_wrappers_checkpoint_state(monkeypatch):
         raising=False,
     )
     pt.g = make_g()
-    context = types.SimpleNamespace()
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={})
+    )
 
     pt._do_trading_wrapper(context)
     pt._halt_recover_wrapper(context)
@@ -1070,6 +1141,283 @@ def test_live_recovery_does_not_invent_missing_entry_risk_state(monkeypatch):
     assert "513100.SS" not in pt.g.buy_date
     assert "513100.SS" not in pt.g.highest_since_buy
     assert "513100.SS" not in pt.g.entry_atr
+
+
+def test_delivery_reconstruction_finds_current_open_position_episode():
+    records = [
+        {
+            "stock_code": "513100",
+            "entrust_bs": "1",
+            "business_amount": 1000,
+            "init_date": 20260105,
+            "business_time": 93501,
+        },
+        {
+            "stock_code": "513100",
+            "entrust_bs": "2",
+            "business_amount": 1000,
+            "init_date": 20260202,
+            "business_time": 93502,
+        },
+        {
+            "stock_code": "513100",
+            "business_name": "\u8bc1\u5238\u4e70\u5165",
+            "occur_amount": 500,
+            "init_date": 20260303,
+            "business_time": 93503,
+        },
+        {
+            "stock_code": "513100",
+            "business_name": "\u8bc1\u5238\u5356\u51fa",
+            "occur_amount": 100,
+            "init_date": 20260310,
+            "business_time": 93504,
+        },
+    ]
+
+    recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
+
+    assert recovered["buy_date"] == date(2026, 3, 3)
+    assert recovered["amount"] == pytest.approx(400)
+
+
+def test_delivery_reconstruction_rejects_quantity_mismatch():
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 500,
+        "init_date": 20260303,
+        "business_time": 93503,
+    }]
+
+    assert pt._reconstruct_open_position(records, "513100.SS", 400) is None
+
+
+def test_live_recovery_rebuilds_proven_entry_state_from_broker_facts(monkeypatch):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g()
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 400,
+        "init_date": 20260303,
+        "business_time": 93503,
+        "business_price": 1.18,
+    }]
+    score = make_buy_score()
+    monkeypatch.setattr(
+        pt,
+        "_previous_trade_date_before",
+        lambda value: date(2026, 3, 2),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date: score,
+    )
+    monkeypatch.setattr(
+        pt,
+        "_get_recovery_close_data",
+        lambda code, start_date, end_date: pt.pd.DataFrame(
+            {"close": [1.20, 1.35, 1.28], "volume": [100, 200, 150]},
+            index=pt.pd.to_datetime(["2026-03-03", "2026-03-20", "2026-07-10"]),
+        ),
+        raising=False,
+    )
+
+    pt.recover_live_state(
+        context,
+        deliver_records=records,
+        prev_date=date(2026, 7, 10),
+    )
+
+    assert pt.g.buy_date["513100.SS"] == date(2026, 3, 3)
+    assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
+    assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.35)
+    assert pt.g.unverified_positions == set()
+
+
+def test_live_recovery_rejects_manual_or_unproven_entry_signal(monkeypatch):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g()
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 400,
+        "init_date": 20260303,
+    }]
+    ineligible = make_buy_score()
+    ineligible["buy_score"] = 10
+    monkeypatch.setattr(
+        pt,
+        "_previous_trade_date_before",
+        lambda value: date(2026, 3, 2),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date: ineligible,
+    )
+    monkeypatch.setattr(
+        pt,
+        "_get_recovery_close_data",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unproven entry must not rebuild highest price")
+        ),
+        raising=False,
+    )
+
+    pt.recover_live_state(
+        context,
+        deliver_records=records,
+        prev_date=date(2026, 7, 10),
+    )
+
+    assert pt.g.unverified_positions == {"513100.SS"}
+    assert "513100.SS" not in pt.g.buy_date
+    assert "513100.SS" not in pt.g.entry_atr
+    assert "513100.SS" not in pt.g.highest_since_buy
+
+
+def test_live_recovery_prunes_state_for_positions_no_longer_held():
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={})
+    )
+    pt.g = make_g(
+        buy_date={"513100.SS": date(2026, 3, 3)},
+        entry_atr={"513100.SS": 0.05},
+        highest_since_buy={"513100.SS": 1.35},
+        unverified_positions={"513100.SS"},
+    )
+
+    pt.recover_live_state(context)
+
+    assert pt.g.buy_date == {}
+    assert pt.g.entry_atr == {}
+    assert pt.g.highest_since_buy == {}
+    assert pt.g.unverified_positions == set()
+
+
+def test_live_recovery_requires_valid_broker_cost_for_automatic_exits():
+    position = types.SimpleNamespace(amount=400, cost_basis=0, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g(
+        buy_date={"513100.SS": date(2026, 3, 3)},
+        entry_atr={"513100.SS": 0.05},
+        highest_since_buy={"513100.SS": 1.35},
+    )
+
+    pt.recover_live_state(context)
+
+    assert pt.g.unverified_positions == {"513100.SS"}
+
+
+def test_live_recovery_rebuilds_same_day_buy_from_strategy_trades(monkeypatch):
+    today = date(2026, 7, 13)
+    position = types.SimpleNamespace(amount=400, cost_basis=1.181, last_sale_price=1.22)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g()
+    monkeypatch.setattr(
+        pt,
+        "get_trades",
+        lambda: {
+            "order-1": [[
+                "trade-1",
+                "entrust-1",
+                "513100.XSHG",
+                "\u4e70",
+                400.0,
+                1.18,
+                472.0,
+                "2026-07-13 09:35:01",
+            ]]
+        },
+        raising=False,
+    )
+    score = make_buy_score()
+    monkeypatch.setattr(
+        pt,
+        "_previous_trade_date_before",
+        lambda value: date(2026, 7, 10),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date: score,
+    )
+    monkeypatch.setattr(
+        pt,
+        "_get_recovery_close_data",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("same-day entry has no completed daily close yet")
+        ),
+        raising=False,
+    )
+
+    current_records = pt._fetch_current_strategy_trades()
+    pt.recover_live_state(
+        context,
+        current_trade_records=current_records,
+        prev_date=date(2026, 7, 10),
+    )
+
+    assert current_records[0]["stock_code"] == "513100.XSHG"
+    assert current_records[0]["entrust_bs"] == "1"
+    assert pt.g.buy_date["513100.SS"] == today
+    assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
+    assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.18)
+    assert pt.g.unverified_positions == set()
+
+
+@pytest.mark.parametrize(
+    ("allow_deliver", "expected_calls"),
+    [(True, ["current", "deliver", "recover"]), (False, ["current", "recover"])],
+)
+def test_recovery_source_query_respects_ptrade_call_phase(
+        monkeypatch, allow_deliver, expected_calls):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.22)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position}),
+    )
+    pt.g = make_g()
+    calls = []
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: date(2026, 7, 10))
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: calls.append("current") or [{"source": "current"}],
+    )
+    monkeypatch.setattr(
+        pt,
+        "_fetch_deliver_records",
+        lambda prev_date: calls.append("deliver") or [{"source": "deliver"}],
+    )
+
+    def recover(context, deliver_records=None, current_trade_records=None, prev_date=None):
+        calls.append("recover")
+        assert current_trade_records == [{"source": "current"}]
+        assert deliver_records == ([{"source": "deliver"}] if allow_deliver else None)
+        assert prev_date == date(2026, 7, 10)
+
+    monkeypatch.setattr(pt, "recover_live_state", recover)
+
+    pt._recover_live_state_with_available_sources(context, allow_deliver)
+
+    assert calls == expected_calls
 
 
 def test_unverified_position_is_excluded_from_atr_stop_execution(monkeypatch):

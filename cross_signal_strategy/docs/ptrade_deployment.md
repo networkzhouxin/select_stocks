@@ -78,11 +78,34 @@ of the requested time. That result must not be compared with the JoinQuant
 - PTrade may send an early callback with a blank `order_id`. It is ignored
   rather than guessed; the 10:35 task queries `get_open_orders()` and positions
   again before any deferred buy.
-- Persisted `buy_date`, entry ATR, and highest close must all exist for an old
-  holding. If any field is missing, the holding is marked unverified and all
-  automatic signal and ATR exits for it are blocked. The adapter never invents historical
-  entry ATR, buy date, or trailing peak; the position then requires explicit
-  operator reconciliation.
+- Broker position quantity and `cost_basis` are always read from the live
+  PTrade portfolio. Cost is not copied into strategy cache as a competing
+  source of truth. A missing, zero, or non-finite broker cost blocks automatic
+  exits.
+- Persisted `buy_date`, entry ATR, and highest close are the primary cross-day
+  risk state. If any field is missing, the adapter first attempts deterministic
+  reconstruction and otherwise marks the holding unverified, blocking all
+  automatic signal and ATR exits.
+- `get_trades()` is the authoritative fallback for fills made by this strategy
+  on the current day. It allows a same-day restart to reconstruct filled
+  quantity, weighted entry price, buy date, T-1 entry ATR, and the initial
+  highest-price baseline without waiting for the next delivery statement.
+- `get_deliver()` is called only in `before_trading_start`, as required by the
+  official API. Records from `20100101` through the proven T-1 date are replayed
+  by signed quantity; the reconstructed open quantity must exactly match the
+  current broker position. The entry date must also reproduce an eligible
+  frozen `cross-v0.3.2` T-1 buy signal. Entry ATR is recalculated only on that
+  proven signal date, and the trailing peak is rebuilt from the actual weighted
+  fill price plus pre-adjusted non-zero-volume closing prices since entry.
+- The adapter never uses the multi-factor fallback guesses such as
+  `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
+  Quantity mismatch, missing fill price, missing calendar evidence, ineligible
+  entry signal, or incomplete price history leaves the position unverified.
+- Historical delivery statements are account-wide rather than explicitly
+  strategy-owned. Disaster reconstruction therefore assumes the PTrade trade
+  uses a dedicated account, or at least that no other strategy/manual process
+  trades the same ETF pool. A mixed account requires operator reconciliation;
+  the explicit state checkpoint remains the authoritative ownership record.
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
@@ -127,7 +150,11 @@ official authority for this port.
    `deferred_signal_date`, `deferred_scores`, `paused_pool_codes`, buy dates,
    entry ATR values, and trailing highs. Confirm that the configuration lock
    still reports the formal parameters and nine-ETF pool after restoration.
-5. Confirm broker-side ETF commission and minimum-fee settings separately.
+5. Delete only a simulation copy of the explicit state checkpoint after a
+   filled same-day buy, restart, and verify that `get_trades()` reconstructs
+   the exact fill price/date/ATR. On a later day, test delivery reconstruction
+   only in an account with no manual or second-strategy trades in the pool.
+6. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
-6. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
+7. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
    reference for future parity reviews.

@@ -17,6 +17,7 @@ from datetime import datetime
 
 STRATEGY_VERSION = "cross-v0.3.2"
 LIVE_STATE_FILENAME = "cross_signal_v032_live_state_%s.pkl"
+DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
     "highest_since_buy",
     "entry_atr",
@@ -413,7 +414,7 @@ def before_trading_start(context, data):
         g.deferred_signal_date = None
     if g.__is_live:
         _reconcile_open_orders(context)
-        recover_live_state(context)
+        _recover_live_state_with_available_sources(context, allow_deliver=True)
     else:
         g.__pending_orders = {}
         g.__pending_sells = {}
@@ -441,6 +442,7 @@ def _halt_recover_wrapper(context):
 
 
 def _after_close_wrapper(context):
+    _recover_live_state_with_available_sources(context, allow_deliver=False)
     after_close(context)
     g.sold_today = {}
     _persist_live_state()
@@ -1624,7 +1626,7 @@ def halt_recover(context):
         return
     if not _reconcile_open_orders(context):
         return
-    recover_live_state(context)
+    _recover_live_state_with_available_sources(context, allow_deliver=False)
     previous = set(getattr(g, "paused_pool_codes", set()))
     still_paused = set(code for code in previous if is_paused(code))
     recovered = sorted(previous - still_paused)
@@ -1648,27 +1650,355 @@ def halt_recover(context):
         execute_buy_candidates(context, scores, today)
 
 
-def recover_live_state(context):
-    """Verify persisted risk state; never synthesize historical entry state."""
-    held = set(current_hold_codes(context))
-    g.unverified_positions.intersection_update(held)
-    for code in held:
-        atr = g.entry_atr.get(code)
-        buy_date = _as_date(g.buy_date.get(code))
-        highest_valid = _is_positive_finite(g.highest_since_buy.get(code))
-        atr_valid = _is_positive_finite(atr)
-        complete = (
-            buy_date is not None and
-            highest_valid and
-            atr_valid
+def _has_incomplete_position_state(context):
+    for code in current_hold_codes(context):
+        if (
+            _as_date(g.buy_date.get(code)) is None or
+            not _is_positive_finite(g.entry_atr.get(code)) or
+            not _is_positive_finite(g.highest_since_buy.get(code))
+        ):
+            return True
+    return False
+
+
+def _recover_live_state_with_available_sources(context, allow_deliver):
+    if not _has_incomplete_position_state(context):
+        recover_live_state(context)
+        return
+    prev_date = get_prev_trade_date(context)
+    current_records = _fetch_current_strategy_trades()
+    deliver_records = (
+        _fetch_deliver_records(prev_date)
+        if allow_deliver and prev_date is not None else None
+    )
+    recover_live_state(
+        context,
+        deliver_records=deliver_records,
+        current_trade_records=current_records,
+        prev_date=prev_date,
+    )
+
+
+def _fetch_deliver_records(prev_date):
+    """Fetch broker delivery records once, only from the supported pre-open phase."""
+    end_date = _as_date(prev_date)
+    if end_date is None:
+        return []
+    getter = globals().get("get_deliver")
+    if getter is None:
+        log.error("[recovery] get_deliver unavailable")
+        return []
+    end_text = end_date.strftime("%Y%m%d")
+    try:
+        records = getter(DELIVER_RECOVERY_START_DATE, end_text)
+    except Exception as exc:
+        log.error("[recovery] get_deliver failed: %s" % exc)
+        return []
+    if not isinstance(records, (list, tuple)):
+        log.error("[recovery] invalid get_deliver response")
+        return []
+    log.info("[recovery] delivery records=%d range=%s~%s" % (
+        len(records), DELIVER_RECOVERY_START_DATE, end_text))
+    return list(records)
+
+
+def _fetch_current_strategy_trades():
+    """Normalize PTrade's strategy-only current-day fills into delivery rows."""
+    getter = globals().get("get_trades")
+    if getter is None:
+        log.error("[recovery] get_trades unavailable")
+        return []
+    try:
+        payload = getter()
+    except Exception as exc:
+        log.error("[recovery] get_trades failed: %s" % exc)
+        return []
+    if not isinstance(payload, dict):
+        log.error("[recovery] invalid get_trades response")
+        return []
+
+    records = []
+    for order_id, fills in payload.items():
+        if not isinstance(fills, (list, tuple)):
+            continue
+        for fill in fills:
+            if not isinstance(fill, (list, tuple)) or len(fill) < 8:
+                continue
+            side = str(fill[3] or "").strip()
+            if "\u4e70" in side:
+                entrust_bs = "1"
+            elif "\u5356" in side:
+                entrust_bs = "2"
+            else:
+                continue
+            try:
+                trade_time = pd.Timestamp(fill[7])
+            except Exception:
+                continue
+            records.append({
+                "stock_code": fill[2],
+                "entrust_bs": entrust_bs,
+                "business_amount": fill[4],
+                "business_price": fill[5],
+                "init_date": trade_time.strftime("%Y%m%d"),
+                "business_time": trade_time.strftime("%H%M%S"),
+                "order_id": str(order_id),
+            })
+    log.info("[recovery] current strategy trades=%d" % len(records))
+    return records
+
+
+def _delivery_trade_date(record):
+    for field in ("init_date", "entrust_date", "date_back", "business_date"):
+        raw = record.get(field)
+        digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+        if len(digits) < 8:
+            continue
+        try:
+            return datetime.strptime(digits[:8], "%Y%m%d").date()
+        except Exception:
+            continue
+    return None
+
+
+def _delivery_direction(record):
+    side = str(record.get("entrust_bs", "") or "").strip()
+    business_name = str(record.get("business_name", "") or "")
+    if side == "1" or "\u4e70\u5165" in business_name:
+        return 1
+    if side == "2" or "\u5356\u51fa" in business_name:
+        return -1
+    return 0
+
+
+def _delivery_quantity(record):
+    for field in ("business_amount", "occur_amount"):
+        value = _safe_float(record.get(field), np.nan)
+        if np.isfinite(value) and abs(value) > 0:
+            return abs(value)
+    return 0.0
+
+
+def _delivery_sort_key(record):
+    trade_date = _delivery_trade_date(record)
+    if trade_date is None:
+        return (datetime.max.date(), 0, 0)
+    trade_time = int(abs(_safe_float(
+        record.get("business_time", record.get("report_time", 0)), 0
+    )))
+    serial = int(abs(_safe_float(
+        record.get("serial_no", record.get("business_no", 0)), 0
+    )))
+    return (trade_date, trade_time, serial)
+
+
+def _reconstruct_open_position(records, code, broker_amount):
+    """Rebuild the current open episode and require exact broker-quantity parity."""
+    target = normalize_code(code)
+    expected = _safe_float(broker_amount, np.nan)
+    if not _is_positive_finite(expected):
+        return None
+    matched = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        if normalize_code(record.get("stock_code")) != target:
+            continue
+        direction = _delivery_direction(record)
+        quantity = _delivery_quantity(record)
+        trade_date = _delivery_trade_date(record)
+        if direction == 0 or quantity <= 0 or trade_date is None:
+            continue
+        matched.append(record)
+    if not matched:
+        return None
+
+    amount = 0.0
+    buy_date = None
+    entry_quantity = 0.0
+    entry_value = 0.0
+    tolerance = max(1e-6, expected * 1e-8)
+    for record in sorted(matched, key=_delivery_sort_key):
+        direction = _delivery_direction(record)
+        quantity = _delivery_quantity(record)
+        if direction > 0:
+            if amount <= tolerance:
+                buy_date = _delivery_trade_date(record)
+                entry_quantity = 0.0
+                entry_value = 0.0
+            price = _safe_float(record.get("business_price"), np.nan)
+            if _is_positive_finite(price):
+                entry_quantity += quantity
+                entry_value += quantity * price
+            amount += quantity
+        else:
+            amount -= quantity
+            if amount < -tolerance:
+                return None
+            if abs(amount) <= tolerance:
+                amount = 0.0
+                buy_date = None
+                entry_quantity = 0.0
+                entry_value = 0.0
+
+    if buy_date is None or abs(amount - expected) > tolerance:
+        return None
+    entry_price = entry_value / entry_quantity if entry_quantity > 0 else None
+    return {
+        "buy_date": buy_date,
+        "amount": amount,
+        "entry_price": entry_price,
+    }
+
+
+def _previous_trade_date_before(value):
+    trade_date = _as_date(value)
+    if trade_date is None:
+        return None
+    try:
+        result = get_trade_days(end_date=trade_date, count=2)
+        previous = _previous_day_from_result(result, trade_date)
+        if previous is not None:
+            return previous
+    except Exception as exc:
+        log.warning("[recovery] get_trade_days failed: %s" % exc)
+    try:
+        result = get_all_trades_days(date=trade_date.strftime("%Y%m%d"))
+        previous = _previous_day_from_result(result, trade_date)
+        if previous is not None:
+            return previous
+    except Exception as exc:
+        log.warning("[recovery] get_all_trades_days failed: %s" % exc)
+    return None
+
+
+def _get_recovery_close_data(code, start_date, end_date):
+    """Load comparable pre-adjusted closes for disaster recovery only."""
+    start = _as_date(start_date)
+    end = _as_date(end_date)
+    if start is None or end is None or start > end:
+        return None
+    try:
+        frame = get_price(
+            code,
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+            frequency="1d",
+            fields=["close", "volume"],
+            fq="pre",
         )
+        frame = pd.DataFrame(frame).copy()
+    except Exception as exc:
+        log.error("[recovery] close history unavailable %s: %s" % (code, exc))
+        return None
+    if "code" in frame.columns:
+        frame = frame[frame["code"].map(normalize_code) == normalize_code(code)]
+    if "close" not in frame.columns or "volume" not in frame.columns:
+        return None
+    frame = frame[frame["volume"] > 0]
+    try:
+        index_dates = pd.to_datetime(frame.index).date
+        frame = frame[(index_dates >= start) & (index_dates <= end)]
+    except Exception:
+        return None
+    return frame
+
+
+def _is_proven_strategy_entry(score):
+    if not isinstance(score, dict):
+        return False
+    return bool(filter_buy_candidates([score], [], g.params))
+
+
+def _recover_position_from_broker(code, pos, records, prev_date):
+    if code not in set(g.etf_pool):
+        return False
+    amount = _pos_amount(pos)
+    cost = _pos_cost(pos)
+    if not _is_positive_finite(amount) or not _is_positive_finite(cost):
+        return False
+    open_position = _reconstruct_open_position(records, code, amount)
+    if open_position is None:
+        return False
+    buy_date = open_position["buy_date"]
+    signal_date = _previous_trade_date_before(buy_date)
+    if signal_date is None:
+        return False
+    score = calc_cross_signal_score(code, signal_date)
+    if not _is_proven_strategy_entry(score):
+        return False
+    atr = score.get("atr")
+    if not _is_positive_finite(atr):
+        return False
+    entry_price = open_position.get("entry_price")
+    if not _is_positive_finite(entry_price):
+        return False
+    prev_date = _as_date(prev_date)
+    if prev_date is None:
+        return False
+    if buy_date <= prev_date:
+        closes = _get_recovery_close_data(code, buy_date, prev_date)
+        if closes is None or len(closes) == 0:
+            return False
+        valid_closes = pd.to_numeric(closes["close"], errors="coerce")
+        valid_closes = valid_closes[np.isfinite(valid_closes) & (valid_closes > 0)]
+        if len(valid_closes) == 0:
+            return False
+        highest = max(float(entry_price), float(valid_closes.max()))
+    else:
+        if signal_date != prev_date:
+            return False
+        highest = float(entry_price)
+
+    g.buy_date[code] = buy_date
+    g.entry_atr[code] = float(atr)
+    g.highest_since_buy[code] = highest
+    log.warning(
+        "[recovery] %s rebuilt from broker delivery: buy_date=%s "
+        "signal_date=%s ATR=%.6f highest_close=%.6f cost=%.6f" % (
+            code, buy_date, signal_date, atr, highest, cost)
+    )
+    return True
+
+
+def _prune_closed_position_state(held):
+    for field in ("highest_since_buy", "entry_atr", "buy_date"):
+        mapping = getattr(g, field, {})
+        for code in list(mapping.keys()):
+            if normalize_code(code) not in held:
+                mapping.pop(code, None)
+    g.unverified_positions.intersection_update(held)
+
+
+def recover_live_state(
+        context, deliver_records=None, current_trade_records=None, prev_date=None):
+    """Verify persisted state, then rebuild only facts provable from broker data."""
+    held = set(current_hold_codes(context))
+    _prune_closed_position_state(held)
+    recovery_records = None
+    if deliver_records is not None or current_trade_records is not None:
+        recovery_records = list(deliver_records or []) + list(current_trade_records or [])
+    for code in held:
+        pos = _get_position(context, code)
+        buy_date = _as_date(g.buy_date.get(code))
+        complete = (
+            pos is not None and
+            _is_positive_finite(_pos_cost(pos)) and
+            buy_date is not None and
+            _is_positive_finite(g.highest_since_buy.get(code)) and
+            _is_positive_finite(g.entry_atr.get(code))
+        )
+        if not complete and recovery_records is not None and prev_date is not None:
+            complete = _recover_position_from_broker(
+                code, pos, recovery_records, prev_date
+            )
         if complete:
             g.unverified_positions.discard(code)
         else:
             g.unverified_positions.add(code)
             log.error(
-                "[recovery] %s historical buy date/ATR/high cannot be proved; "
-                "automatic exits blocked" % code
+                "[recovery] %s historical buy date/ATR/high or broker cost "
+                "cannot be proved; automatic exits blocked" % code
             )
 
 
