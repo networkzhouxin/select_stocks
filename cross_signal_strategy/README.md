@@ -82,6 +82,8 @@ These are starting defaults, not optimized parameters.
 - `iopv_quality_diagnostics.py`: read-only 2019-2021 minute-data audit for IOPV completeness, 09:35 point coverage, executable premium distributions, and zero-trade IOPV movement; it does not alter signals or orders.
 - `docs/iopv_data_quality.md`: evidence and usage boundary for local historical IOPV; the data is diagnostic-only until exact point-in-time availability is proved.
 - `smart_trade_joinquant_cross_signal_iopv_probe.py`: temporary no-order JoinQuant capability probe for current-data IOPV, same-day NAV leakage, and 09:34/09:35/09:36 minute boundaries. Run only as documented in its header; it is not a strategy candidate.
+- `smart_trade_ptrade_cross_signal_iopv_probe.py`: isolated no-order PTrade live/simulation probe for real-time QDII IOPV, quote timestamps, and ETF publication metadata; it never enters the official strategy.
+- `docs/ptrade_iopv_probe.md`: PTrade probe procedure, evidence gate, and strict boundary against threshold tuning or validation inference.
 - `us_qdii_premium_diagnostics.py`: consumed observation-only attribution for actual `513100/513500` closed buys using 09:35 price and the point-in-time reference proxy. The candidate gate failed; it does not alter signals or orders.
 - `boll_width_diagnostics.py`: observation-only standard BOLL(20,2) BandWidth direction attribution on frozen T-1 signal frames.
 - `sequence_diagnostics.py`: observation-only timing attribution for active RSI/KDJ/MACD crosses inside the existing three-day window.

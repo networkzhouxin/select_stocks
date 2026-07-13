@@ -703,3 +703,15 @@ Risk: Canonical DSR is unavailable because the complete candidate Sharpe distrib
 Affected files: `cross_signal_strategy/multiple_testing_audit.py`, `tests/test_cross_signal_multiple_testing_audit.py`, `cross_signal_strategy/docs/multiple_testing_audit.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: audit infrastructure adopted; strategy logic, ETF pool, parameters, and research-budget counts unchanged
+
+### Add An Isolated PTrade IOPV Capability Probe
+
+Date: 2026-07-13
+Decision: Add a separate, no-order PTrade probe for QDII IOPV availability and keep it outside official `cross-v0.3.2`.
+Reason: The local official PTrade documentation identifies a genuinely new point-in-time mechanism: trading-module `get_snapshot()` documents real-time `iopv` and `hsTimeStamp`, while `get_etf_info()` documents whether IOPV should be published plus T-1 NAV metadata. This can establish live data feasibility but cannot retroactively improve the training backtest.
+Evidence: The documentation states that `get_snapshot()` is available only in the trading module and returns real-time snapshots. It also states that `get_etf_info()` is PTrade-client and counter dependent. The probe checks the four QDII ETFs in the frozen PTrade pool at 09:34, 09:35, and 09:36, uses three of the five allowed callbacks, logs only capability fields, and contains no order call.
+Interpretation: PTrade may provide a better live fair-value input than JoinQuant, but operational availability remains unproved until Guojin simulation/live logs show positive IOPV with fresh timestamps for ETFs marked `publish=1`.
+Risk: Current-market output is not training or validation evidence and must not be used to choose a premium threshold. The previously rejected `513100/513500` premium candidate remains rejected, the microstructure research family remains exhausted, and no production rule changes in this milestone.
+Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_iopv_probe.py`, `tests/test_cross_signal_ptrade_iopv_probe.py`, `cross_signal_strategy/docs/ptrade_iopv_probe.md`, `cross_signal_strategy/docs/iopv_data_quality.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
+Allowed validation influence: none; only local official PTrade documentation and existing training-governance records were read
+Status: capability probe ready; operational result pending a separate one-session Guojin PTrade run

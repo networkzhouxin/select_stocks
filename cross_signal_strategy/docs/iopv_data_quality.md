@@ -147,3 +147,20 @@ The single pre-registered `513100/513500` closed-trade attribution then found
 only two above-5% buys, both in `513100` during 2020 and profitable in aggregate.
 The candidate gate failed. The microstructure research family is therefore
 exhausted, and this audit must not be used to search lower premium thresholds.
+
+## PTrade Live Capability Follow-Up
+
+The local official PTrade documentation exposes a separate operational path:
+
+- `get_snapshot()` is a trading-module real-time snapshot API and documents an
+  `iopv` field plus `hsTimeStamp`.
+- `get_etf_info()` documents `publish`, `nav_pre`, and `nav_percu`, while also
+  stating that some counter connections do not support the API.
+
+This is a genuinely point-in-time live-platform mechanism, unlike JoinQuant's
+T-1 NAV proxy. Documentation alone cannot prove that Guojin's active connection
+returns positive and fresh IOPV for each QDII ETF, so an isolated no-order probe
+was added. The probe only checks field presence, positivity, timestamps, and
+publication metadata. It does not reopen the exhausted microstructure research
+family, cannot replace JoinQuant historical performance validation, and must not
+be used to derive a premium threshold from current-market observations.
