@@ -715,3 +715,15 @@ Risk: Current-market output is not training or validation evidence and must not 
 Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_iopv_probe.py`, `tests/test_cross_signal_ptrade_iopv_probe.py`, `cross_signal_strategy/docs/ptrade_iopv_probe.md`, `cross_signal_strategy/docs/iopv_data_quality.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
 Allowed validation influence: none; only local official PTrade documentation and existing training-governance records were read
 Status: capability probe ready; operational result pending a separate one-session Guojin PTrade run
+
+### Observe PTrade IOPV Without Changing Frozen Orders
+
+Date: 2026-07-14
+Decision: Add failure-open IOPV logging to actual QDII buy submissions in the formal PTrade adapter while retaining `cross-v0.3.2` and every frozen business rule.
+Reason: The user accepted the official PTrade API contract as a provisional operational assumption and chose to validate actual Guojin field quality through release logs because a separate intraday probe is inconvenient. Reusing the snapshot already fetched for the buy price gives the required evidence without an extra API call or scheduled task.
+Evidence: Tests first failed because no IOPV observation builder or buy-time log existed. The implementation records price, positive IOPV, descriptive premium, raw `hsTimeStamp`, and snapshot age before QDII order submission. Runtime tests prove that valid, zero, and missing IOPV produce the same order quantity and path, while A-share buys emit no IOPV line. The frozen JoinQuant/PTrade pure-business AST parity guard remains unchanged.
+Interpretation: These logs can establish whether the Guojin connection supplies usable real-time IOPV at actual exposure decisions. They are operational telemetry, not a signal and not evidence that a premium filter improves returns.
+Risk: PTrade may return zero, missing, or stale IOPV despite the documented field. Logging therefore catches its own errors and cannot block or resize an order. Early live observations must not be used to tune a threshold or override the exhausted microstructure research budget.
+Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
+Allowed validation influence: none; no market period was read and no strategy result informed this platform-only change
+Status: adopted as observation-only PTrade release telemetry; JoinQuant strategy and production multi-factor files unchanged

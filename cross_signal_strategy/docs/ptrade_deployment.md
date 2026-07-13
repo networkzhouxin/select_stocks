@@ -122,6 +122,24 @@ of the requested time. That result must not be compared with the JoinQuant
   reconciliation and position verification. A version mismatch or malformed
   file is rejected instead of partially restoring state.
 
+## Observation-Only IOPV Log
+
+For `513100.SS`, `513500.SS`, `513880.SS`, and `513050.SS`, the adapter writes
+one `[iopv-observe]` line immediately before an actual buy submission. It reuses
+the same cached `get_snapshot()` record that supplied the live buy price and
+does not issue another market-data request.
+
+The line records the callback time, code, execution reference price, positive
+IOPV when available, descriptive premium percentage, raw `hsTimeStamp`, and
+snapshot age. `valid=False` means that a positive price/IOPV pair was not
+available. The observation return value is never consumed by candidate
+filtering, ranking, position sizing, or order submission.
+
+IOPV logging is failure-open and must never block or resize an order. Missing,
+zero, stale, malformed, or exception-producing IOPV data only changes the log.
+It does not reopen the rejected premium-filter experiment and must not be used
+to select a threshold from validation or early live results.
+
 ## Platform Evidence
 
 The adapter was checked against the official help bundled with the Guojin
@@ -144,7 +162,9 @@ official authority for this port.
    without an API or syntax error.
 3. Use simulation trading before live capital. Confirm the 09:35, 10:35, and
    15:30 logs, callback code format, halt status, partial fills, and rejected
-   orders.
+   orders. For every submitted QDII buy, confirm exactly one `[iopv-observe]`
+   line appears before the `[buy]` submission log; both `valid=True` and
+   `valid=False` must leave the submitted quantity unchanged.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
    Verify that the explicit state checkpoint restores `execution_date`,
    `deferred_signal_date`, `deferred_scores`, `paused_pool_codes`, buy dates,

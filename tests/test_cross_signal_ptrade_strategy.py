@@ -361,6 +361,39 @@ def test_live_price_fails_closed_when_snapshot_is_unavailable(monkeypatch):
     assert history_called == []
 
 
+def test_iopv_observation_uses_the_same_snapshot_as_the_live_buy_price():
+    observation = pt.build_iopv_observation(
+        "513100.SS",
+        {
+            "last_px": 2.0,
+            "iopv": "1.95",
+            "hsTimeStamp": "20260713093500123",
+        },
+        execution_price=2.0,
+        observed_at=datetime(2026, 7, 13, 9, 35, 1),
+    )
+
+    assert observation["code"] == "513100.SS"
+    assert observation["valid"] is True
+    assert observation["market_price"] == pytest.approx(2.0)
+    assert observation["iopv"] == pytest.approx(1.95)
+    assert observation["premium"] == pytest.approx(2.0 / 1.95 - 1.0)
+    assert observation["snapshot_age_seconds"] == pytest.approx(1.0)
+
+
+def test_iopv_observation_is_limited_to_qdii_and_tolerates_missing_values():
+    assert pt.build_iopv_observation(
+        "159915.SZ", {"last_px": 2.0, "iopv": 1.95}, 2.0
+    ) is None
+
+    observation = pt.build_iopv_observation(
+        "513500.SS", {"last_px": 2.0, "iopv": 0}, 2.0
+    )
+    assert observation["valid"] is False
+    assert observation["iopv"] is None
+    assert observation["premium"] is None
+
+
 def test_prev_trade_date_does_not_guess_weekdays_when_apis_fail(monkeypatch):
     context = types.SimpleNamespace(
         blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35))
@@ -956,6 +989,104 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert orders == [(('513100.SS', 3100), {'limit_price': 2.0})]
     assert pt.g.__pending_orders["513100.SS"]["requested_qty"] == 3100
     assert pt.g.__pending_orders["513100.SS"]["order_id"] == "buy-order-1"
+
+
+@pytest.mark.parametrize(
+    ("iopv", "expected_valid"),
+    [("1.95", "valid=True"), (0, "valid=False")],
+)
+def test_qdii_buy_logs_iopv_but_never_changes_order_path(
+    monkeypatch, iopv, expected_valid
+):
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g(
+        __last_snapshot={
+            "513100.SS": {
+                "last_px": 2.0,
+                "iopv": iopv,
+                "hsTimeStamp": "20260713093500123",
+            }
+        }
+    )
+    events = []
+
+    def log_info(message, *args):
+        rendered = message % args if args else message
+        events.append(("log", rendered))
+
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(info=log_info, warning=log_info, error=log_info),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: events.append(("order", (args, kwargs))) or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context, [make_buy_score()], date(2026, 7, 13)
+    ) == 1
+    assert ("order", (("513100.SS", 3100), {"limit_price": 2.0})) in events
+    observations = [
+        (index, value)
+        for index, (kind, value) in enumerate(events)
+        if kind == "log" and value.startswith("[iopv-observe]")
+    ]
+    assert len(observations) == 1
+    assert expected_valid in observations[0][1]
+    order_index = next(index for index, item in enumerate(events) if item[0] == "order")
+    assert observations[0][0] < order_index
+
+
+def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35)),
+        portfolio=types.SimpleNamespace(positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g()
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "order", lambda *args, **kwargs: "buy-order-1", raising=False)
+
+    assert pt.execute_buy_candidates(
+        context, [make_buy_score("159915.SZ")], date(2026, 7, 13)
+    ) == 1
+    assert not any(message.startswith("[iopv-observe]") for message in messages)
+
+
+def test_release_docs_keep_iopv_observation_non_binding():
+    deployment = (
+        ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
+    ).read_text(encoding="utf-8")
+    decisions = (
+        ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
+    ).read_text(encoding="utf-8")
+    readme = (ROOT / "cross_signal_strategy" / "README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "[iopv-observe]" in deployment
+    assert "must never block or resize an order" in deployment
+    assert "Observe PTrade IOPV Without Changing Frozen Orders" in decisions
+    assert "observation-only IOPV" in readme
 
 
 def test_buy_submission_failure_does_not_create_guard(monkeypatch):

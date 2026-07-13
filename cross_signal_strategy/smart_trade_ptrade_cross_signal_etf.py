@@ -16,6 +16,12 @@ from datetime import datetime
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
+IOPV_OBSERVE_CODES = frozenset((
+    "513100.SS",
+    "513500.SS",
+    "513880.SS",
+    "513050.SS",
+))
 LIVE_STATE_FILENAME = "cross_signal_v032_live_state_%s.pkl"
 DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
@@ -1220,6 +1226,98 @@ def _snapshot_record(raw, code):
     return None
 
 
+def _positive_float_or_none(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) and number > 0 else None
+
+
+def _snapshot_age_seconds(raw_timestamp, observed_at):
+    if raw_timestamp in (None, "") or not isinstance(observed_at, datetime):
+        return None
+    digits = "".join(ch for ch in str(raw_timestamp) if ch.isdigit())
+    if len(digits) < 14:
+        return None
+    try:
+        snapshot_dt = datetime.strptime(digits[:14], "%Y%m%d%H%M%S")
+        return (observed_at - snapshot_dt).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def build_iopv_observation(
+    code,
+    snapshot,
+    execution_price,
+    observed_at=None,
+):
+    code = normalize_code(code)
+    if code not in IOPV_OBSERVE_CODES:
+        return None
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    snapshot_price = _positive_float_or_none(snapshot.get("last_px"))
+    fallback_price = _positive_float_or_none(execution_price)
+    market_price = snapshot_price if snapshot_price is not None else fallback_price
+    iopv = _positive_float_or_none(snapshot.get("iopv"))
+    premium = (
+        market_price / iopv - 1.0
+        if market_price is not None and iopv is not None
+        else None
+    )
+    timestamp = snapshot.get("hsTimeStamp")
+    return {
+        "code": code,
+        "valid": bool(market_price is not None and iopv is not None),
+        "market_price": market_price,
+        "iopv": iopv,
+        "premium": premium,
+        "snapshot_timestamp": timestamp,
+        "snapshot_age_seconds": _snapshot_age_seconds(timestamp, observed_at),
+    }
+
+
+def log_iopv_buy_observation(context, code, execution_price):
+    if not getattr(g, "__is_live", False):
+        return
+    try:
+        normalized = normalize_code(code)
+        snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
+        observation = build_iopv_observation(
+            normalized,
+            snapshot,
+            execution_price,
+            observed_at=get_context_datetime(context),
+        )
+        if observation is None:
+            return
+        premium_pct = (
+            observation["premium"] * 100.0
+            if observation["premium"] is not None
+            else None
+        )
+        log.info(
+            "[iopv-observe] event=buy dt=%s code=%s valid=%s price=%s "
+            "iopv=%s premium_pct=%s hsTimeStamp=%s age_seconds=%s"
+            % (
+                get_context_datetime(context),
+                observation["code"],
+                observation["valid"],
+                observation["market_price"],
+                observation["iopv"],
+                premium_pct,
+                observation["snapshot_timestamp"],
+                observation["snapshot_age_seconds"],
+            )
+        )
+    except Exception as exc:
+        try:
+            log.warning("[iopv-observe] code=%s unavailable: %s" % (code, exc))
+        except Exception:
+            pass
+
+
 def get_current_price(code):
     code = normalize_code(code)
     if getattr(g, "__is_live", False):
@@ -1406,6 +1504,7 @@ def execute_buy_candidates(context, all_scores, today):
         if shares < 100:
             log.info("[buy skip] %s insufficient cash %.0f" % (code, available))
             continue
+        log_iopv_buy_observation(context, code, price)
         log.info(
             "[buy] %s buy=%.0f rev=%.0f loc=%.0f trend=%.0f vol=%.0f "
             "target=%.0f shares=%d" % (
