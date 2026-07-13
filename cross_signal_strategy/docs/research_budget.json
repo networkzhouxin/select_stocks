@@ -5,8 +5,8 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 47,
-  "max_total_open_experiments": 1,
+  "expected_failed_experiment_count": 48,
+  "max_total_open_experiments": 0,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -102,10 +102,9 @@
     {
       "key": "horizontal_price_structure",
       "label": "User-authorized horizontal support and resistance structure",
-      "status": "open",
-      "max_new_experiments": 1,
-      "rationale": "Prior horizontal highs and lows are a separately motivated price-structure dimension that is not identical to the existing moving-average and BOLL location rules.",
-      "planned_experiment": "One fixed observation using the prior 20 valid T-2-or-earlier daily bars and a one ATR near-resistance boundary; only mild-uptrend near-resistance underperformance is actionable."
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The fixed prior-20-day T-2-safe, one-ATR observation failed its annual gate. Near-resistance mild entries outperformed the comparison in 2019 and had higher win rate in 2021; all 89 closed buys were more than one ATR above prior support. Nearby periods, distances, pivots, and breakout rules are prohibited post-hoc searches."
     }
   ]
 }

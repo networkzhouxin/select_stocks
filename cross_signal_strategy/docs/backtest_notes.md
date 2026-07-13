@@ -2674,6 +2674,38 @@ Decision:
 - Do not run JoinQuant or validation because the local gate failed.
 - Keep official `cross-v0.3.2` and MACD(12,26,9) unchanged. Close the one-shot MACD research budget.
 
+## 2026-07-14 Horizontal Support/Resistance Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` trading path with observation-only horizontal structure labels
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked definition and future-function boundary:
+- Resistance is the maximum adjusted high and support is the minimum adjusted low over exactly 20 valid bars strictly before T-1, so the latest level input is T-2.
+- T-1 close and official ATR(14) are used only to calculate normalized distance from those pre-existing levels.
+- Fixed pressure groups are breakout, within one ATR below resistance, and more than one ATR below resistance.
+- Fixed support groups are breakdown, within one ATR above support, and more than one ATR above support.
+- The only actionable hypothesis was that mild-trend near-resistance entries would have lower average return and lower win rate than all other mild-trend entries in every training year, with at least 15 total and 3 annual trades in each group.
+- No reserved validation period was read or run.
+
+Overall closed-trade attribution:
+- Breakout: 17 trades, +9963.50 PnL, +7.06% average return, 70.59% win rate, 10.468 profit/loss ratio.
+- Near resistance: 37 trades, +8070.40 PnL, +2.63% average return, 54.05% win rate, 3.294 profit/loss ratio.
+- Room to resistance: 35 trades, +6230.20 PnL, +1.69% average return, 51.43% win rate, 3.508 profit/loss ratio.
+- All 89 closed-buy snapshots were more than one ATR above prior support; no near-support or support-breakdown trade existed.
+
+Pre-registered mild-trend annual comparison:
+- 2019: near resistance 4 trades, +6.25% average return, 50.00% win rate; comparison 14 trades, about +0.35%, 42.86% win rate.
+- 2020: near resistance 5 trades, +3.56%, 40.00%; comparison 12 trades, +3.97%, 66.67%.
+- 2021: near resistance 13 trades, +0.61%, 61.54%; comparison 14 trades, about +0.75%, 50.00%.
+
+Decision:
+- Reject the near-resistance filter before candidate creation. It failed both locked metrics in 2019 and the win-rate condition in 2021.
+- Do not promote the strong descriptive breakout group because a breakout candidate was not pre-registered. Doing so now would be post-hoc winner selection.
+- Do not search other lookbacks, ATR boundaries, pivots, support exceptions, Fibonacci levels, or volume profiles.
+- Keep official `cross-v0.3.2` unchanged and close the one-shot horizontal-price-structure budget.
+
 ## 2026-07-11 US-QDII Previous-NAV Premium Observation
 
 Period: 2019-01-01 to 2021-12-31

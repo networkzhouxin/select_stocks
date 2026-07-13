@@ -696,13 +696,13 @@ Status: rejected locally; official strategy unchanged; one-shot MACD budget exha
 
 Date: 2026-07-13
 Decision: Adopt a reproducible training-only multiple-testing audit and keep official `cross-v0.3.2` frozen.
-Reason: Repeated 2019-2021 experiments create strategy-selection bias even when every individual experiment obeys the no-validation rule. The retained ledger can prove a minimum of 47 failed or non-adopted experiments plus the selected mainline, so the apparent training significance must be judged against at least 48 trials.
-Evidence: The frozen local path returned +120.61% with 30.27% annualized return and 2.172 annualized Sharpe. Its single-trial PSR p-value is 0.000123988; the minimum-48 Bonferroni value is 0.00595144. A Newey-West/HAC mean-return test with automatic lag 6 gives a single-trial p-value of 0.0000622008 and minimum-48 Bonferroni value of 0.00298564. The PSR approximation remains below 5% through 403 trials.
-Interpretation: The retained evidence is stronger than a marginal best-of-48 result, but the corrected confidence is an optimistic upper bound because 48 is only a provable minimum. This remains in-sample evidence and is not out-of-sample validation.
+Reason: Repeated 2019-2021 experiments create strategy-selection bias even when every individual experiment obeys the no-validation rule. After the 2026-07-14 horizontal-structure observation, the retained ledger can prove a minimum of 48 failed or non-adopted experiments plus the selected mainline, so the apparent training significance must be judged against at least 49 trials.
+Evidence: The frozen local path returned +120.61% with 30.27% annualized return and 2.172 annualized Sharpe. Its single-trial PSR p-value is 0.000123988; the minimum-49 Bonferroni value is 0.00607543. A Newey-West/HAC mean-return test with automatic lag 6 gives a single-trial p-value of 0.0000622008 and minimum-49 Bonferroni value of 0.00304784. The PSR approximation remains below 5% through 403 trials.
+Interpretation: The retained evidence is stronger than a marginal best-of-49 result, but the corrected confidence is an optimistic upper bound because 49 is only a provable minimum. This remains in-sample evidence and is not out-of-sample validation.
 Risk: Canonical DSR is unavailable because the complete candidate Sharpe distribution was not retained. PBO is unavailable because aligned daily return curves for all candidates were not retained. Reconstructing either from prose would create false precision.
 Affected files: `cross_signal_strategy/multiple_testing_audit.py`, `tests/test_cross_signal_multiple_testing_audit.py`, `cross_signal_strategy/docs/multiple_testing_audit.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
-Status: audit infrastructure adopted; strategy logic, ETF pool, parameters, and research-budget counts unchanged
+Status: audit infrastructure adopted; strategy logic, ETF pool, and parameters unchanged; the retained trial-count lower bound is updated whenever a new experiment closes
 
 ### Add An Isolated PTrade IOPV Capability Probe
 
@@ -727,3 +727,15 @@ Risk: PTrade may return zero, missing, or stale IOPV despite the documented fiel
 Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
 Allowed validation influence: none; no market period was read and no strategy result informed this platform-only change
 Status: adopted as observation-only PTrade release telemetry; JoinQuant strategy and production multi-factor files unchanged
+
+### Reject The Fixed Horizontal Support/Resistance Filter
+
+Date: 2026-07-14
+Decision: Keep the T-2-safe horizontal-structure diagnostic, reject the pre-registered near-resistance filter before candidate creation, and leave official `cross-v0.3.2` unchanged.
+Reason: Prior horizontal highs and lows are economically distinct enough from MA/BOLL location to justify one fixed observation, but they must improve the actual cross-signal path consistently rather than merely sound intuitive.
+Evidence: The diagnostic used exactly 20 valid bars ending T-2 and normalized T-1 distance with official ATR(14). The locked mild-trend near-resistance group materially outperformed the comparison in 2019 (+6.25% average return and 50.00% win rate versus about +0.35% and 42.86%), underperformed both metrics in 2020 (+3.56% and 40.00% versus +3.97% and 66.67%), and had lower average return but higher win rate in 2021 (+0.61% and 61.54% versus about +0.75% and 50.00%). All 89 closed buys were more than one ATR above prior support.
+Interpretation: Near resistance is not a universal false-signal condition; it can also describe an entry already participating in emerging strength. The support side had no actionable sample under the existing location filters. The strong breakout group's descriptive result cannot justify a breakout rule because that candidate was not pre-registered.
+Risk: Searching alternate channel periods, ATR distances, pivots, Fibonacci levels, support exceptions, breakout rewards, or volume profiles after seeing these groups would be post-hoc winner selection. No validation period was inspected.
+Affected files: `cross_signal_strategy/horizontal_structure_diagnostics.py`, `tests/test_cross_signal_horizontal_structure_diagnostics.py`, `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, `tests/test_cross_signal_research_budget.py`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/multiple_testing_audit.md`, `tests/test_cross_signal_multiple_testing_audit.py`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: diagnostic retained; candidate rejected; research family exhausted; official strategy and production multi-factor files unchanged

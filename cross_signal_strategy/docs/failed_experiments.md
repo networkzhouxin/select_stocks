@@ -514,3 +514,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The faster MACD materially increased path sensitivity and trading activity but admitted more short-lived crosses. Its small 2020 improvement did not compensate for large degradation in 2019 and 2021 or the broad fall in risk-adjusted and trade-quality metrics.
 Can it be revisited? no as a MACD period search
 Conditions for revisiting: Do not test neighboring fast/slow/signal periods, optimize a MACD grid, or combine 6/13/5 with new thresholds after seeing this result. Reopening requires a genuinely new externally justified mechanism and a new explicit research authorization.
+
+Date: 2026-07-14
+Version: `cross-v0.3.2` observation-only horizontal price-structure gate
+Experiment: Use the prior 20 valid daily bars ending T-2 to define horizontal resistance and support, normalize T-1 close distance by official ATR(14), and test the single fixed hypothesis that mild-uptrend buys within one ATR below resistance underperform all other mild-uptrend buys in every training year.
+Hypothesis: An oscillator cross that occurs immediately below established horizontal resistance may have poor upside room and may be a false reversal unless it has already broken out.
+Training diagnostic result: Across all 89 closed buys, breakouts had 17 trades, +9963.50 PnL, +7.06% average return, 70.59% win rate, and 10.468 profit/loss ratio; near-resistance had 37 trades, +8070.40 PnL, +2.63% average return, 54.05% win rate, and 3.294 profit/loss ratio; room-to-resistance had 35 trades, +6230.20 PnL, +1.69% average return, 51.43% win rate, and 3.508 profit/loss ratio. For the locked mild-trend comparison, 2019 near-resistance had 4 trades, +6.25% average return, and 50.00% win rate versus 14 comparison trades at +0.35% and 42.86%; 2020 near-resistance had 5 trades at +3.56% and 40.00% versus 12 at +3.97% and 66.67%; 2021 near-resistance had 13 trades at +0.61% and 61.54% versus 14 at +0.75% and 50.00%. Every one of the 89 closed-buy snapshots was more than one ATR above prior support, leaving no near-support or support-breakdown sample.
+Candidate result: Not implemented because the annual return-and-win-rate gate failed in 2019 and the win-rate gate failed in 2021.
+JoinQuant training result: Not run because the local observation gate failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Near resistance was not a stable source of weak entries. In 2019 it identified materially stronger trades, and in 2021 it had higher win rate despite slightly lower average return. The existing BOLL/MA location filters also left no closed entry near the fixed prior support level, so support could not supply an independent actionable rule.
+Can it be revisited? no as a prior-20-day/one-ATR entry filter
+Conditions for revisiting: Do not search 10/30/60-day windows, smaller or larger ATR distances, pivot/fractal definitions, breakout rewards, support exceptions, Fibonacci levels, or volume-profile variants from this result. Reopening requires a genuinely new external market mechanism and explicit new research authorization.
