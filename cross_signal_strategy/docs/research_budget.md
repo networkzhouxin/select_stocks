@@ -7,11 +7,11 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 46 real ledger entries.
+- Recorded failed or non-adopted experiments: 47 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: none. The single ETF microstructure attribution has been consumed and closed.
+- New open budget: none. The fixed MACD(6,13,5) comparison has been consumed and closed.
 
 ## Frozen Families
 
@@ -29,6 +29,7 @@ it does not change any score, order, position, or risk rule.
 | `portfolio_dependence` | exhausted | The fixed 20-day/0.80 observation had only 9 high-dependence trades, and high dependence strongly outperformed in 2020. |
 | `market_breadth` | exhausted | The fixed MA20/50% observation reversed in 2021; low breadth was then the better early-reversal environment. |
 | `etf_microstructure` | exhausted | Only two above-5% buys existed, both in 2020 and `513100`; do not lower the threshold or widen the QDII scope post hoc. |
+| `macd_half_cycle_user_authorized` | exhausted | The fixed `(6,13,5)` variant reduced return and most quality metrics; do not search neighboring MACD periods. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -36,10 +37,10 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. The current research budget is exhausted. The consumed microstructure
-experiment cannot be repeated with a lower premium threshold, additional QDII
-codes, or a different proxy after seeing its result. Every research family is
-closed, and validation periods remain unavailable for tuning.
+None. The fixed MACD(6,13,5) comparison changed 89 filled-order days but reduced
+local training return from 120.61% to 84.69% and failed the locked quality gate.
+No neighboring periods, thresholds, weights, or combined changes may be tested
+after seeing this result. Validation periods remain unavailable for tuning.
 
 ## Mandatory Sequence
 

@@ -679,3 +679,15 @@ Risk: No platform API can recreate deleted strategy ownership metadata from an a
 Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; this is platform reliability work and reads no reserved market period
 Status: adopted for the PTrade adapter; JoinQuant business rules and production multi-factor files unchanged
+
+### Reject The Fixed MACD(6,13,5) Candidate
+
+Date: 2026-07-13
+Decision: Reject the isolated MACD(6,13,5) candidate and retain official MACD(12,26,9) in `cross-v0.3.2`.
+Reason: A widely discussed faster MACD setting was a concrete external claim worth one explicitly authorized, fixed, single-variable training comparison. It did not justify a broader parameter search.
+Evidence: The candidate changed 89 filled-order days across 2019/2020/2021, so the experiment was behaviorally active. Local total return fell from +120.61% to +84.69%, annualized return from 30.27% to 22.76%, Sharpe from 2.172 to 1.766, Sortino from 3.415 to 2.670, win rate from 56.18% to 50.00%, and profit/loss ratio from 4.440 to 2.834. Maximum drawdown improved from 7.47% to 7.00%, and 2020 improved from 49.74% to 51.94%, but 2019 fell from 35.84% to 17.02% and 2021 from 8.46% to 3.87%.
+Interpretation: Faster MACD responds earlier but also confirms more short-lived noise in this daily cross-signal ensemble. The result is not an endpoint artifact; it is a broad three-year path change with worse aggregate and cross-year quality.
+Risk: Trying 5/12/4, 7/14/5, other nearby periods, or compensating score thresholds after seeing this result would be direct parameter mining. The 2018 data used here was warm-up only, and no validation period was inspected.
+Affected files: `cross_signal_strategy/macd_parameter_candidate.py`, `tests/test_cross_signal_macd_parameter_candidate.py`, `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, `tests/test_cross_signal_research_budget.py`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: rejected locally; official strategy unchanged; one-shot MACD budget exhausted

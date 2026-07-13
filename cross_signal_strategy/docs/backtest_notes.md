@@ -2620,6 +2620,30 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-13 Fixed MACD(6,13,5) Single-Variable Candidate
+
+Period: 2019-01-01 to 2021-12-31
+Warm-up: approved read-only 2018 daily bars only; excluded from trades and returns
+Version: `cross-v0.3.2-macd-6-13-5-candidate`
+Engine: two independent local replays; JoinQuant remains the performance authority
+
+Locked design before the run:
+- Baseline MACD is `(12,26,9)` and candidate MACD is `(6,13,5)`.
+- MACD periods are the only changed values. ETF pool, RSI, KDJ, BOLL, MA, ADX, ATR, scoring, thresholds, sizing, exits, and execution are identical.
+- A candidate can pass only if it changes filled orders in every training year, improves total and annualized return, and does not worsen maximum drawdown, Sharpe, Sortino, win rate, profit/loss ratio, or any annual return.
+- No nearby-period search is permitted after the result.
+
+Results:
+- Baseline: +120.61% total, 30.27% annualized, 7.47% max drawdown, 2.172 Sharpe, 3.415 Sortino, 56.18% win rate, 4.440 profit/loss ratio, 92 buys, 89 sells.
+- Candidate: +84.69% total, 22.76% annualized, 7.00% max drawdown, 1.766 Sharpe, 2.670 Sortino, 50.00% win rate, 2.834 profit/loss ratio, 97 buys, 94 sells.
+- Annual baseline versus candidate: 2019 35.84% versus 17.02%; 2020 49.74% versus 51.94%; 2021 8.46% versus 3.87%.
+- Filled-order paths changed on 89 days: 38 in 2019, 11 in 2020, and 40 in 2021.
+
+Decision:
+- Reject MACD(6,13,5). The 0.47 percentage-point drawdown improvement and 2.20-point 2020 gain do not offset the 35.92-point total-return loss and broad quality deterioration.
+- Do not run JoinQuant or validation because the local gate failed.
+- Keep official `cross-v0.3.2` and MACD(12,26,9) unchanged. Close the one-shot MACD research budget.
+
 ## 2026-07-11 US-QDII Previous-NAV Premium Observation
 
 Period: 2019-01-01 to 2021-12-31

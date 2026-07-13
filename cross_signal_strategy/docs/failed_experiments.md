@@ -502,3 +502,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The official strategy almost never bought these ETFs during elevated-premium episodes. There is no repeated cross-year or cross-code evidence that a premium veto would improve the trading path, while the two observed elevated trades were profitable in aggregate.
 Can it be revisited? no as a `513100/513500` previous-NAV premium entry filter
 Conditions for revisiting: Do not lower 5%, search nearby bands, add `513050`, or extend the stale previous-NAV proxy to dynamic-IOPV products such as `159920` or `513880`. A future reopening requires a genuinely new point-in-time market mechanism and a new governance approval, not a re-slice of these outcomes.
+
+Date: 2026-07-13
+Version: `cross-v0.3.2-macd-6-13-5-candidate`
+Experiment: Compare official MACD(12,26,9) with MACD(6,13,5) as the only changed parameter group on 2019-2021; use 2018 only as a read-only indicator warm-up and keep every other signal, threshold, ETF, sizing, risk, and execution rule identical.
+Hypothesis: The approximately half-cycle MACD might recognize early reversals sooner and improve the cross-signal strategy without changing its core logic.
+Training diagnostic result: The candidate changed 89 filled-order days across all three years (38/11/40). Official local replay returned +120.61% annualized at 30.27%, with 7.47% max drawdown, 2.172 Sharpe, 3.415 Sortino, 56.18% closed-trade win rate, and 4.440 profit/loss ratio. MACD(6,13,5) returned +84.69% annualized at 22.76%, with 7.00% max drawdown, 1.766 Sharpe, 2.670 Sortino, 50.00% win rate, and 2.834 profit/loss ratio. Annual returns were 35.84%/49.74%/8.46% versus 17.02%/51.94%/3.87% in 2019/2020/2021.
+Candidate result: Rejected by the pre-registered gate. Only maximum drawdown and 2020 return improved; total and annualized return, Sharpe, Sortino, win rate, profit/loss ratio, 2019, and 2021 all worsened.
+JoinQuant training result: Not run because the local gate failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The faster MACD materially increased path sensitivity and trading activity but admitted more short-lived crosses. Its small 2020 improvement did not compensate for large degradation in 2019 and 2021 or the broad fall in risk-adjusted and trade-quality metrics.
+Can it be revisited? no as a MACD period search
+Conditions for revisiting: Do not test neighboring fast/slow/signal periods, optimize a MACD grid, or combine 6/13/5 with new thresholds after seeing this result. Reopening requires a genuinely new externally justified mechanism and a new explicit research authorization.

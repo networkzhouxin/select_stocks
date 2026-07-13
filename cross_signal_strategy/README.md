@@ -86,6 +86,7 @@ These are starting defaults, not optimized parameters.
 - `boll_width_diagnostics.py`: observation-only standard BOLL(20,2) BandWidth direction attribution on frozen T-1 signal frames.
 - `sequence_diagnostics.py`: observation-only timing attribution for active RSI/KDJ/MACD crosses inside the existing three-day window.
 - `ranking_candidate.py`: rejected local A/B experiment that compared official total-score-first ranking with reversal-score-first ranking on identical cached T-1 signals.
+- `macd_parameter_candidate.py`: rejected one-shot local A/B experiment that changed only MACD from `(12,26,9)` to `(6,13,5)`; it reduced training return and most quality metrics, so no nearby period search is allowed.
 - `efficiency_ratio_diagnostics.py`: observation-only standard Kaufman ER(10) direction attribution on frozen T-1 signal frames.
 - `research_budget.py`: read-only ledger parser and experiment gate that prevents repeated or multi-variant search in exhausted families.
 - `portfolio_dependence_diagnostics.py`: rejected observation-only 20-day/0.80 portfolio-correlation attribution; it labels official buys without changing their order or size.

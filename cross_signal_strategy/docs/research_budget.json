@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 46,
+  "expected_failed_experiment_count": 47,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -91,6 +91,13 @@
       "status": "exhausted",
       "max_new_experiments": 0,
       "rationale": "The one pre-registered 513100/513500 previous-NAV premium attribution found only two above-5% closed buys, both in 2020 and both in 513100. Sample-size, cross-year, and cross-code gates failed, so lower thresholds or wider QDII scopes are prohibited post-hoc searches."
+    },
+    {
+      "key": "macd_half_cycle_user_authorized",
+      "label": "User-authorized fixed MACD half-cycle comparison",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The one fixed MACD(6,13,5) comparison was consumed. It cut local training return from 120.61% to 84.69% and worsened Sharpe, Sortino, win rate, profit/loss ratio, 2019, and 2021. Nearby period searches are prohibited."
     }
   ]
 }
