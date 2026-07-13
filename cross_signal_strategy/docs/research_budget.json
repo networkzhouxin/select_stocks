@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 48,
+  "expected_failed_experiment_count": 49,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -105,6 +105,20 @@
       "status": "exhausted",
       "max_new_experiments": 0,
       "rationale": "The fixed prior-20-day T-2-safe, one-ATR observation failed its annual gate. Near-resistance mild entries outperformed the comparison in 2019 and had higher win rate in 2021; all 89 closed buys were more than one ATR above prior support. Nearby periods, distances, pivots, and breakout rules are prohibited post-hoc searches."
+    },
+    {
+      "key": "controlled_breakout_anti_chase",
+      "label": "User-authorized controlled-breakout anti-chase check",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The one fixed observation found 15 controlled breakouts but only 2 extended breakouts: one in 2019, none in 2020, and one in 2021. The total and per-year sample gates failed, and the 2019 extended trade had a higher win rate than controlled breakouts. No candidate was permitted; nearby thresholds, periods, AND variants, breakout rewards, and sell changes are prohibited post-hoc searches.",
+      "structure_period": 20,
+      "rsi6_extension": 75,
+      "ma20_extension": 0.1,
+      "candidate_action": "reject_extended_breakout_only",
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
     }
   ]
 }

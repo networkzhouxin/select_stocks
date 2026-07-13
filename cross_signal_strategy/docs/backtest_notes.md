@@ -2620,6 +2620,38 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-14 Controlled-Breakout Anti-Chase Observation Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` closed-trade path with observation-only breakout extension labels
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked hypothesis before attribution:
+- Resistance is the highest adjusted high of exactly 20 valid bars ending T-2.
+- T-1 close above resistance is a breakout.
+- A breakout is extended when `RSI6 >= 75` or close is at least 10% above MA20; otherwise it is controlled.
+- A candidate may reject only extended breakouts, and only if both groups have at least 6 closed trades overall, at least 2 per year, and extended breakouts have lower average return and win rate every year.
+- Breakout cannot create a buy, add score, alter ranking or sizing, or change sells.
+
+Safety checks:
+- The adapter requires the adjusted frame to end exactly on T-1 and rejects later rows.
+- The resistance window excludes T-1 and ends on T-2.
+- Score snapshots are copied defensively; labels and continuous diagnostics are observation-only.
+
+Results:
+- Controlled breakout: 15 trades, +9823.80 PnL, +7.83% average return, 73.33% win rate, 11.365 profit/loss ratio.
+- Extended breakout: 2 trades, +139.70 PnL, +1.32% average return, 50.00% win rate, 2.337 profit/loss ratio.
+- Controlled annual counts: 5/6/4. Extended annual counts: 1/0/1.
+- The controlled group averaged RSI6 70.52, 3.29% above MA20, +2.67% over 5 days, +3.07% over 10 days, +6.93% over 20 days, and +9.04% from the same prior-20-day low.
+- Both extended trades were RSI extensions rather than MA20-distance extensions: their RSI6 values were 75.10 and 82.37, while MA20 distances were only 2.47% and 2.83%.
+
+Decision:
+- Reject the anti-chase candidate before implementation. The extended subset failed the overall and every annual sample gate, and its single 2019 trade had higher win rate than controlled breakouts.
+- The observed controlled breakouts look like early or measured strength rather than late chasing, but this diagnostic cannot reward them or add a new buy rule.
+- Do not search nearby thresholds, periods, AND variants, breakout bonuses, or sell interactions.
+- Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
 ## 2026-07-13 Multiple-Testing Risk Audit
 
 Period: 2019-01-01 to 2021-12-31

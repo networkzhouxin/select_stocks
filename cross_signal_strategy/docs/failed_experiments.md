@@ -526,3 +526,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: Near resistance was not a stable source of weak entries. In 2019 it identified materially stronger trades, and in 2021 it had higher win rate despite slightly lower average return. The existing BOLL/MA location filters also left no closed entry near the fixed prior support level, so support could not supply an independent actionable rule.
 Can it be revisited? no as a prior-20-day/one-ATR entry filter
 Conditions for revisiting: Do not search 10/30/60-day windows, smaller or larger ATR distances, pivot/fractal definitions, breakout rewards, support exceptions, Fibonacci levels, or volume-profile variants from this result. Reopening requires a genuinely new external market mechanism and explicit new research authorization.
+
+Date: 2026-07-14
+Version: `cross-v0.3.2` observation-only controlled-breakout anti-chase gate
+Experiment: Classify an existing eligible cross-signal buy as a breakout only when T-1 close exceeds the highest adjusted high of the prior 20 valid bars ending T-2. Label that breakout extended when `RSI6 >= 75` or T-1 close is at least 10% above MA20; otherwise label it controlled. Consider one candidate only if both groups have at least 6 closed trades overall and at least 2 per training year, and extended breakouts have lower average return and win rate in every year.
+Hypothesis: A cross-signal breakout can still be an early-strength entry, but one already extended by oscillator or MA20 distance may be avoidable chasing.
+Training diagnostic result: Controlled breakouts had 15 closed trades, +9823.80 PnL, +7.83% average return, 73.33% win rate, and 11.365 profit/loss ratio. Extended breakouts had only 2 trades, +139.70 PnL, +1.32% average return, 50.00% win rate, and 2.337 profit/loss ratio. Controlled counts were 5/6/4 in 2019/2020/2021; extended counts were 1/0/1. The 2019 extended trade returned +3.33% with 100% win rate versus controlled breakouts at +9.81% and 80%; the 2021 extended trade returned -0.69% with 0% win rate versus controlled at +0.64% and 75%.
+Candidate result: Not implemented because the total sample gate, every annual extended-sample gate, and the 2019 win-rate underperformance gate failed.
+JoinQuant training result: Not run because the local observation gate failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Only two realized extended breakouts existed, they were split across two years with none in 2020, and their outcomes were mixed. This is insufficient to prove a stable anti-chase rule; rejecting them would be a decision based on two isolated trades rather than a repeated mechanism.
+Can it be revisited? no as a prior-20-day breakout with `RSI6 >= 75` or MA20-distance-at-least-10% veto
+Conditions for revisiting: Do not search neighboring RSI or MA20 thresholds, 10/30/60-day resistance windows, replace OR with AND, reward controlled breakouts, or alter sells. Reopening requires a genuinely new external market mechanism and explicit new research authorization.

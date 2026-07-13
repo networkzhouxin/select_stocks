@@ -96,3 +96,4 @@ These are starting defaults, not optimized parameters.
 - `portfolio_dependence_diagnostics.py`: rejected observation-only 20-day/0.80 portfolio-correlation attribution; it labels official buys without changing their order or size.
 - `market_breadth_diagnostics.py`: rejected observation-only pool MA20/50% breadth attribution for mild-trend entries; it does not filter or resize orders.
 - `horizontal_structure_diagnostics.py`: rejected observation-only prior-20-day horizontal support/resistance attribution; levels end on T-2, distances use T-1 ATR, and the failed gate never changes orders.
+- `breakout_extension_diagnostics.py`: rejected observation-only controlled-versus-extended breakout attribution using prior-20-day resistance ending T-2; only 2 extended trades existed, so the failed gate never created a candidate or changed orders.

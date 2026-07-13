@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 48
-    assert report.expected_failed_experiment_count == 48
+    assert report.failed_experiment_count == 49
+    assert report.expected_failed_experiment_count == 49
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -76,8 +76,6 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
 
     open_families = [family for family in budget.families if family.status == "open"]
     assert open_families == []
-    assert all(family.max_new_experiments == 1 for family in open_families)
-    assert all(family.planned_experiment for family in open_families)
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -154,6 +152,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     macd.pop("planned_experiment", None)
+    controlled_breakout = next(
+        item for item in payload["families"]
+        if item["key"] == "controlled_breakout_anti_chase"
+    )
+    controlled_breakout.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    controlled_breakout.pop("planned_experiment", None)
     market = next(item for item in payload["families"] if item["key"] == "market_breadth")
     market.update({
         "status": "open",
@@ -181,6 +188,43 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
     assert budget.max_total_open_experiments == 0
+
+
+def test_user_authorized_controlled_breakout_budget_is_consumed_after_one_observation():
+    from cross_signal_strategy.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["controlled_breakout_anti_chase"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "controlled_breakout_anti_chase"
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["structure_period"] == 20
+    assert raw["rsi6_extension"] == 75
+    assert raw["ma20_extension"] == pytest.approx(0.10)
+    assert raw["candidate_action"] == "reject_extended_breakout_only"
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is False
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=2,
+    ).allowed is False
 
 
 def test_user_authorized_horizontal_structure_budget_is_closed_after_one_observation():
@@ -261,12 +305,15 @@ def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 
     assert "research_budget.json" in text
-    assert "48" in text
+    assert "49" in text
     assert "cross-v0.3.2" in text
     assert "portfolio_dependence" in text
     assert "market_breadth" in text
     assert "indicator_enumeration" in text
     assert "macd_half_cycle_user_authorized" in text
     assert "horizontal_price_structure" in text
+    assert "controlled_breakout_anti_chase" in text
+    assert "RSI6 >= 75" in text
+    assert "MA20" in text and "10%" in text
     assert "MACD(6,13,5)" in text
     assert "不得" in text and "验证期" in text
