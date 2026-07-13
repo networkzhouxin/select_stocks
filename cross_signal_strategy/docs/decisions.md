@@ -691,3 +691,15 @@ Risk: Trying 5/12/4, 7/14/5, other nearby periods, or compensating score thresho
 Affected files: `cross_signal_strategy/macd_parameter_candidate.py`, `tests/test_cross_signal_macd_parameter_candidate.py`, `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, `tests/test_cross_signal_research_budget.py`, `cross_signal_strategy/docs/failed_experiments.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`, `cross_signal_strategy/README.md`
 Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
 Status: rejected locally; official strategy unchanged; one-shot MACD budget exhausted
+
+### Record The Multiple-Testing Audit Without Changing Strategy
+
+Date: 2026-07-13
+Decision: Adopt a reproducible training-only multiple-testing audit and keep official `cross-v0.3.2` frozen.
+Reason: Repeated 2019-2021 experiments create strategy-selection bias even when every individual experiment obeys the no-validation rule. The retained ledger can prove a minimum of 47 failed or non-adopted experiments plus the selected mainline, so the apparent training significance must be judged against at least 48 trials.
+Evidence: The frozen local path returned +120.61% with 30.27% annualized return and 2.172 annualized Sharpe. Its single-trial PSR p-value is 0.000123988; the minimum-48 Bonferroni value is 0.00595144. A Newey-West/HAC mean-return test with automatic lag 6 gives a single-trial p-value of 0.0000622008 and minimum-48 Bonferroni value of 0.00298564. The PSR approximation remains below 5% through 403 trials.
+Interpretation: The retained evidence is stronger than a marginal best-of-48 result, but the corrected confidence is an optimistic upper bound because 48 is only a provable minimum. This remains in-sample evidence and is not out-of-sample validation.
+Risk: Canonical DSR is unavailable because the complete candidate Sharpe distribution was not retained. PBO is unavailable because aligned daily return curves for all candidates were not retained. Reconstructing either from prose would create false precision.
+Affected files: `cross_signal_strategy/multiple_testing_audit.py`, `tests/test_cross_signal_multiple_testing_audit.py`, `cross_signal_strategy/docs/multiple_testing_audit.md`, `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/backtest_notes.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; only approved 2018 warm-up and 2019-2021 training data were read
+Status: audit infrastructure adopted; strategy logic, ETF pool, parameters, and research-budget counts unchanged

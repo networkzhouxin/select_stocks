@@ -2620,6 +2620,36 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-13 Multiple-Testing Risk Audit
+
+Period: 2019-01-01 to 2021-12-31
+Version: frozen official `cross-v0.3.2` local training path
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Retained-trial evidence:
+- The failed/non-adopted ledger contains 47 experiments.
+- Counting the selected mainline gives a minimum trial count of 48.
+- This is a lower bound, not an exact historical search count.
+
+Training result:
+- Total return +120.61%, annualized return 30.27%, annualized Sharpe 2.172.
+- Annual returns: 2019 +35.84%, 2020 +49.74%, 2021 +8.46%.
+- PSR p-value 0.000123988; minimum-48 Bonferroni p-value 0.00595144.
+- The PSR/Bonferroni approximation passes at no more than 403 trials.
+- Newey-West/HAC automatic lag 6, t-statistic 3.837, p-value 0.0000622008, and minimum-48 Bonferroni p-value 0.00298564.
+
+Limitations:
+- This is training-only evidence and not out-of-sample validation.
+- Canonical DSR is unavailable because all candidate Sharpe values were not retained.
+- PBO is unavailable because aligned daily return curves for all candidates were not retained.
+- The 48-trial corrections are optimistic upper bounds if undocumented early or adopted variants exist.
+
+Decision:
+- Keep official `cross-v0.3.2` unchanged.
+- Do not increment the failed-experiment counter or reopen any exhausted research family; this is governance infrastructure, not a candidate.
+- Retain aligned daily candidate curves for any future authorized experiment so exact cross-trial diagnostics become possible.
+
 ## 2026-07-13 Fixed MACD(6,13,5) Single-Variable Candidate
 
 Period: 2019-01-01 to 2021-12-31
