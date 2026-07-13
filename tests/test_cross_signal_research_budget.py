@@ -75,7 +75,7 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].planned_experiment is None
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
+    assert [family.key for family in open_families] == ["horizontal_price_structure"]
     assert all(family.max_new_experiments == 1 for family in open_families)
     assert all(family.planned_experiment for family in open_families)
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
@@ -128,6 +128,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
 
     payload = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload["max_total_open_experiments"] = 1
+    horizontal = next(
+        item for item in payload["families"]
+        if item["key"] == "horizontal_price_structure"
+    )
+    horizontal.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    horizontal.pop("planned_experiment", None)
     microstructure = next(
         item for item in payload["families"] if item["key"] == "etf_microstructure"
     )
@@ -171,7 +180,34 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
+
+
+def test_user_authorized_horizontal_structure_budget_allows_one_locked_variant():
+    from cross_signal_strategy.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["horizontal_price_structure"]
+
+    assert family.status == "open"
+    assert family.max_new_experiments == 1
+    assert "20" in family.planned_experiment
+    assert "T-2" in family.planned_experiment
+    assert "one ATR" in family.planned_experiment
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=2,
+    ).allowed is False
 
 
 def test_user_authorized_macd_budget_is_consumed_after_one_fixed_variant():

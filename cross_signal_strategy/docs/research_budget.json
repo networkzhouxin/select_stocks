@@ -6,7 +6,7 @@
   },
   "validation_tuning_forbidden": true,
   "expected_failed_experiment_count": 47,
-  "max_total_open_experiments": 0,
+  "max_total_open_experiments": 1,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -98,6 +98,14 @@
       "status": "exhausted",
       "max_new_experiments": 0,
       "rationale": "The one fixed MACD(6,13,5) comparison was consumed. It cut local training return from 120.61% to 84.69% and worsened Sharpe, Sortino, win rate, profit/loss ratio, 2019, and 2021. Nearby period searches are prohibited."
+    },
+    {
+      "key": "horizontal_price_structure",
+      "label": "User-authorized horizontal support and resistance structure",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "Prior horizontal highs and lows are a separately motivated price-structure dimension that is not identical to the existing moving-average and BOLL location rules.",
+      "planned_experiment": "One fixed observation using the prior 20 valid T-2-or-earlier daily bars and a one ATR near-resistance boundary; only mild-uptrend near-resistance underperformance is actionable."
     }
   ]
 }

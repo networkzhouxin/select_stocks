@@ -11,7 +11,8 @@ it does not change any score, order, position, or risk rule.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: none. The fixed MACD(6,13,5) comparison has been consumed and closed.
+- New open budget: one user-authorized horizontal-price-structure observation.
+- The completed fixed `MACD(6,13,5)` comparison remains closed.
 
 ## Frozen Families
 
@@ -30,6 +31,7 @@ it does not change any score, order, position, or risk rule.
 | `market_breadth` | exhausted | The fixed MA20/50% observation reversed in 2021; low breadth was then the better early-reversal environment. |
 | `etf_microstructure` | exhausted | Only two above-5% buys existed, both in 2020 and `513100`; do not lower the threshold or widen the QDII scope post hoc. |
 | `macd_half_cycle_user_authorized` | exhausted | The fixed `(6,13,5)` variant reduced return and most quality metrics; do not search neighboring MACD periods. |
+| `horizontal_price_structure` | open | One fixed 20-day T-2-or-earlier channel and one-ATR near-resistance observation; no alternate windows, thresholds, pivots, or volume profiles. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -37,10 +39,13 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. The fixed MACD(6,13,5) comparison changed 89 filled-order days but reduced
-local training return from 120.61% to 84.69% and failed the locked quality gate.
-No neighboring periods, thresholds, weights, or combined changes may be tested
-after seeing this result. Validation periods remain unavailable for tuning.
+Exactly one: `horizontal_price_structure`. It uses the prior 20 valid daily
+bars ending T-2, normalizes distance by the official T-1 ATR(14), and tests
+whether mild-uptrend buys within one ATR below resistance underperform the
+remaining mild-uptrend buys in every training year. Support buckets are
+descriptive only. No neighboring periods, thresholds, pivot definitions,
+Fibonacci levels, volume profiles, or post-hoc support rule may be tested.
+Validation periods remain unavailable for tuning.
 
 ## Mandatory Sequence
 
