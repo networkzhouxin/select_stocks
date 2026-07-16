@@ -277,14 +277,22 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
 
 
 def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch, tmp_path):
+    user_name_calls = []
+
+    def get_user_name(real_trade):
+        user_name_calls.append(real_trade)
+        return "account-a"
+
     monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
-    monkeypatch.setattr(pt, "get_user_name", lambda: "account-a", raising=False)
+    monkeypatch.setattr(pt, "get_user_name", get_user_name, raising=False)
     monkeypatch.setattr(pt, "get_trade_name", lambda: "simulation", raising=False)
 
     simulation_path = pt._live_state_path()
-    monkeypatch.setattr(pt, "get_user_name", lambda: "account-b", raising=False)
+    monkeypatch.setattr(
+        pt, "get_user_name", lambda real_trade: "account-b", raising=False
+    )
     other_account_path = pt._live_state_path()
-    monkeypatch.setattr(pt, "get_user_name", lambda: "account-a", raising=False)
+    monkeypatch.setattr(pt, "get_user_name", get_user_name, raising=False)
     monkeypatch.setattr(pt, "get_trade_name", lambda: "live", raising=False)
     live_path = pt._live_state_path()
 
@@ -295,6 +303,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
         state_parent(live_path),
     } == {str(tmp_path)}
     assert "account-a" not in simulation_path
+    assert user_name_calls == [False, False]
 
 
 def test_automatic_live_state_path_fails_closed_without_instance_identity(
@@ -315,7 +324,9 @@ def test_automatic_live_state_path_requires_complete_instance_identity(
     monkeypatch, tmp_path, user_name, trade_name
 ):
     monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
-    monkeypatch.setattr(pt, "get_user_name", lambda: user_name, raising=False)
+    monkeypatch.setattr(
+        pt, "get_user_name", lambda real_trade: user_name, raising=False
+    )
     monkeypatch.setattr(pt, "get_trade_name", lambda: trade_name, raising=False)
 
     assert pt._live_state_path() is None
@@ -377,6 +388,45 @@ def test_live_state_io_uses_initialize_cached_path(monkeypatch, tmp_path):
     pt.g.highest_since_buy = {"513100.SS": 9.9}
     assert pt._restore_live_state() is True
     assert pt.g.highest_since_buy == {}
+
+
+def test_before_trading_resolves_live_state_path_before_restore(monkeypatch, tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    today = date(2026, 7, 13)
+    pt.g = make_g(__state_path=None, execution_date=today)
+    calls = []
+
+    monkeypatch.setattr(
+        pt,
+        "_live_state_path",
+        lambda: calls.append("path") or str(state_path),
+    )
+
+    def restore():
+        assert pt.g.__state_path == str(state_path)
+        calls.append("restore")
+        return False
+
+    monkeypatch.setattr(pt, "_restore_live_state", restore)
+    monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: calls.append("lock"))
+    monkeypatch.setattr(
+        pt, "_reconcile_open_orders", lambda context: calls.append("orders") or True
+    )
+    monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: calls.append(("recover", allow_deliver)),
+    )
+    monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda: True)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+
+    pt.before_trading_start(context, data=None)
+
+    assert calls == ["path", "restore", "lock", "orders", ("recover", True)]
 
 
 def test_live_state_dual_slots_alternate_generations_and_use_protocol4(tmp_path):
@@ -626,6 +676,10 @@ def test_prev_trade_date_does_not_guess_weekdays_when_apis_fail(monkeypatch):
         blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35))
     )
     monkeypatch.setattr(
+        pt, "get_trading_day", lambda day: (_ for _ in ()).throw(RuntimeError()),
+        raising=False,
+    )
+    monkeypatch.setattr(
         pt, "get_trade_days", lambda **kwargs: (_ for _ in ()).throw(RuntimeError()),
         raising=False,
     )
@@ -635,6 +689,73 @@ def test_prev_trade_date_does_not_guess_weekdays_when_apis_fail(monkeypatch):
     )
 
     assert pt.get_prev_trade_date(context) is None
+
+
+def test_prev_trade_date_prefers_documented_get_trading_day(monkeypatch):
+    calls = []
+
+    def get_trading_day(day):
+        calls.append(day)
+        return date(2026, 7, 13) if day == 0 else date(2026, 7, 10)
+
+    monkeypatch.setattr(pt, "get_trading_day", get_trading_day, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback calendar should not run")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_all_trades_days",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback calendar should not run")
+        ),
+        raising=False,
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 2, 46))
+    )
+
+    assert pt.get_prev_trade_date(context) == date(2026, 7, 10)
+    assert calls == [0, -1]
+
+
+def test_prev_trade_date_logs_unusable_calendar_payloads(monkeypatch):
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda *args, **kwargs: None,
+            warning=lambda message, *args: messages.append(
+                message % args if args else message
+            ),
+            error=lambda message, *args: messages.append(
+                message % args if args else message
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        pt, "get_trading_day", lambda day: "not-a-trading-date", raising=False
+    )
+    monkeypatch.setattr(pt, "get_trade_days", lambda **kwargs: [], raising=False)
+    monkeypatch.setattr(pt, "get_all_trades_days", lambda **kwargs: [], raising=False)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 2, 46))
+    )
+
+    assert pt.get_prev_trade_date(context) is None
+    assert any(
+        "get_trading_day unusable" in message and "type=str" in message
+        for message in messages
+    )
+    assert any(
+        "get_trade_days unusable" in message and "type=list" in message
+        for message in messages
+    )
 
 
 def test_ptrade_calendar_queries_use_documented_string_dates(monkeypatch):
@@ -1965,7 +2086,7 @@ def test_delivery_reconstruction_rejects_quantity_mismatch():
     assert pt._reconstruct_open_position(records, "513100.SS", 400) is None
 
 
-def test_live_recovery_rebuilds_proven_entry_state_from_broker_facts(monkeypatch):
+def test_live_recovery_adopts_account_position_from_broker_facts(monkeypatch):
     position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={"513100.SS": position})
@@ -2012,10 +2133,14 @@ def test_live_recovery_rebuilds_proven_entry_state_from_broker_facts(monkeypatch
     assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
     assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.35)
     assert pt.g.unverified_positions == set()
-    assert pt.g.__position_recovery_source == {"513100.SS": "get-deliver"}
+    assert pt.g.__position_recovery_source == {
+        "513100.SS": "account-takeover:get-deliver"
+    }
 
 
-def test_live_recovery_rejects_manual_or_unproven_entry_signal(monkeypatch):
+def test_live_recovery_adopts_existing_account_position_without_cross_signal_entry(
+    monkeypatch,
+):
     position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={"513100.SS": position})
@@ -2026,6 +2151,8 @@ def test_live_recovery_rejects_manual_or_unproven_entry_signal(monkeypatch):
         "entrust_bs": "1",
         "business_amount": 400,
         "init_date": 20260303,
+        "business_price": 1.18,
+        "_recovery_source": "get-deliver",
     }]
     ineligible = make_buy_score()
     ineligible["buy_score"] = 10
@@ -2043,8 +2170,9 @@ def test_live_recovery_rejects_manual_or_unproven_entry_signal(monkeypatch):
     monkeypatch.setattr(
         pt,
         "_get_recovery_close_data",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("unproven entry must not rebuild highest price")
+        lambda code, start_date, end_date: pt.pd.DataFrame(
+            {"close": [1.20, 1.35, 1.28], "volume": [100, 200, 150]},
+            index=pt.pd.to_datetime(["2026-03-03", "2026-03-20", "2026-07-10"]),
         ),
         raising=False,
     )
@@ -2055,10 +2183,13 @@ def test_live_recovery_rejects_manual_or_unproven_entry_signal(monkeypatch):
         prev_date=date(2026, 7, 10),
     )
 
-    assert pt.g.unverified_positions == {"513100.SS"}
-    assert "513100.SS" not in pt.g.buy_date
-    assert "513100.SS" not in pt.g.entry_atr
-    assert "513100.SS" not in pt.g.highest_since_buy
+    assert pt.g.buy_date["513100.SS"] == date(2026, 3, 3)
+    assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
+    assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.35)
+    assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source == {
+        "513100.SS": "account-takeover:get-deliver"
+    }
 
 
 def test_live_recovery_prunes_state_for_positions_no_longer_held():
@@ -2280,7 +2411,6 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     commission_calls = []
     slippage_calls = []
     state_path_calls = []
-    cached_state_path = "C:/ptrade/cross-signal-state.pkl"
     pt.g = types.SimpleNamespace()
     monkeypatch.setattr(pt, "set_benchmark", lambda *args, **kwargs: None, raising=False)
     monkeypatch.setattr(
@@ -2306,7 +2436,7 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     monkeypatch.setattr(
         pt,
         "_live_state_path",
-        lambda: state_path_calls.append(True) or cached_state_path,
+        lambda: state_path_calls.append(True) or "unexpected",
     )
     monkeypatch.setattr(
         pt,
@@ -2330,8 +2460,8 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     }]
     assert commission_calls == []
     assert slippage_calls == []
-    assert state_path_calls == [True]
-    assert pt.g.__state_path == cached_state_path
+    assert state_path_calls == []
+    assert pt.g.__state_path is None
     assert pt.g.__mode_verified is True
 
 
@@ -2446,7 +2576,8 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "explicit state checkpoint" in notes
     assert "two tasks" in notes
     assert "after_trading_end" in notes
-    assert "cached during initialize" in notes
+    assert "path is resolved and cached at the start of" in notes
+    assert "`before_trading_start`" in notes
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
 
@@ -2464,4 +2595,7 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "legacy single-file checkpoint" in deployment
     assert "all new buys are blocked" in deployment
     assert "[state-recovery]" in deployment
+    assert "account-takeover:get-deliver" in deployment
+    assert "one account runs one active" in deployment
     assert "Harden PTrade Checkpoints And Recovery Gating" in decisions
+    assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions

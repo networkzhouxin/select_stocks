@@ -109,19 +109,24 @@ of the requested time. That result must not be compared with the JoinQuant
   `before_trading_start` and `after_trading_end`. Records from `20100101`
   through the proven T-1 date are replayed by signed quantity; the
   reconstructed open quantity must exactly match the current broker position.
-  The entry date must also reproduce an eligible frozen `cross-v0.3.2` T-1 buy
-  signal. Entry ATR is recalculated only on that proven signal date, and the
-  trailing peak is rebuilt from the actual weighted fill price plus
-  pre-adjusted non-zero-volume closing prices since entry.
+  Under the dedicated-account operating contract, an existing in-pool holding
+  is adopted even when its original buy came from the previously stopped
+  strategy. Entry ATR is recalculated only from data available on the trading
+  day before the actual buy date, and the trailing peak is rebuilt from the
+  actual weighted fill price plus pre-adjusted non-zero-volume closing prices
+  since entry.
 - The adapter never uses the multi-factor fallback guesses such as
   `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
-  Quantity mismatch, missing fill price, missing calendar evidence, ineligible
-  entry signal, or incomplete price history leaves the position unverified.
+  Quantity mismatch, missing fill price, missing calendar evidence, or
+  incomplete price history leaves the position unverified.
 - Historical delivery statements are account-wide rather than explicitly
-  strategy-owned. Disaster reconstruction therefore assumes the PTrade trade
-  uses a dedicated account, or at least that no other strategy/manual process
-  trades the same ETF pool. A mixed account requires operator reconciliation;
-  the explicit state checkpoint remains the authoritative ownership record.
+  strategy-owned. Account takeover is therefore enabled only under this
+  deployment's explicit operating contract: one account runs one active
+  strategy at a time, the previous strategy is stopped before cross-signal is
+  enabled, and the account is not traded manually. Existing holdings inside
+  the frozen ETF pool are then owned by the active cross-signal strategy.
+  Out-of-pool holdings remain unverified and block new buys instead of being
+  sold or assigned risk state automatically.
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
@@ -141,8 +146,9 @@ of the requested time. That result must not be compared with the JoinQuant
   payload contains risk state, execution dates, deferred T-1 scores, and
   halt/recovery state, but deliberately excludes strategy parameters and the
   ETF pool. Both identity values are mandatory; otherwise checkpointing fails
-  closed instead of using a shared filename. The path is resolved and cached during initialize,
-  where these APIs are documented to be available.
+  closed instead of using a shared filename. PTrade rejects `get_trade_name()`
+  during `initialize`, so the path is resolved and cached at the start of
+  `before_trading_start`, before checkpoint restore and broker reconciliation.
 - The old `cross_signal_v032_live_state_<identity>.pkl` remains a read-only
   legacy single-file checkpoint. It is considered only when neither dual slot
   is valid. A successful legacy restore is immediately migrated by writing a
@@ -154,7 +160,7 @@ of the requested time. That result must not be compared with the JoinQuant
   held ETF report quantity, broker cost, buy date, entry ATR, highest close,
   `VERIFIED`/`UNVERIFIED` status, and evidence source. Valid sources are
   `checkpoint-a`, `checkpoint-b`, `legacy`, `ptrade-g`, `get-trades`,
-  `get-deliver`, and `unverified`.
+  `account-takeover:get-deliver`, and `unverified`.
 - An unverified holding continues to block its own automatic ATR and signal
   exits. In addition, all new buys are blocked while any currently held ETF is
   unverified. Verified holdings retain their normal exit behavior, so recovery
@@ -216,8 +222,10 @@ official authority for this port.
 6. After a filled same-day simulation buy, make both A/B slots unavailable and
    restart. Verify that `get_trades()` reconstructs the exact fill
    price/date/ATR and that new buys remain blocked until every existing holding
-   is verified. Test `get_deliver()` reconstruction only in an account with no
-   manual or second-strategy trades in the ETF pool.
+   is verified. Separately test first-start account takeover after stopping the
+   previous strategy: every in-pool position must report
+   `source=account-takeover:get-deliver`; no manual or second strategy may trade
+   the account while cross-signal is active.
 7. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
 8. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic

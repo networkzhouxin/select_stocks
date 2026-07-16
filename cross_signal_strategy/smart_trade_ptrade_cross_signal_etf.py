@@ -125,13 +125,17 @@ def _live_state_path(path=None):
         log.warning("[state] research path is empty")
         return None
     identity = []
-    for getter_name in ("get_user_name", "get_trade_name"):
+    identity_getters = (
+        ("get_user_name", (False,)),
+        ("get_trade_name", ()),
+    )
+    for getter_name, getter_args in identity_getters:
         getter = globals().get(getter_name)
         if getter is None:
             log.error("[state] %s unavailable; checkpoint disabled" % getter_name)
             return None
         try:
-            value = getter()
+            value = getter(*getter_args)
         except Exception as exc:
             log.error("[state] %s unavailable; checkpoint disabled: %s" % (
                 getter_name, exc))
@@ -495,7 +499,9 @@ def initialize(context):
     g.__data = None
     g.__is_live = is_live
     g.__mode_verified = mode_verified
-    g.__state_path = _live_state_path() if mode_verified and is_live else None
+    # get_trade_name is unavailable during PTrade's initialize phase. Resolve
+    # the instance-scoped checkpoint path in before_trading_start instead.
+    g.__state_path = None
     g.__state_restore_source = None
     g.__state_restore_generation = None
     g.__position_recovery_source = {}
@@ -534,6 +540,8 @@ def before_trading_start(context, data):
     g.__last_snapshot = {}
     if g.__is_live:
         g.__position_recovery_source = {}
+        if _cached_live_state_path() is None:
+            g.__state_path = _live_state_path()
         _restore_live_state()
     _lock_frozen_business_config()
     today = _as_date(get_context_datetime(context))
@@ -1008,17 +1016,54 @@ def _previous_day_from_result(result, today):
     return dates[-1] if dates else None
 
 
+def _calendar_payload_summary(result):
+    type_name = type(result).__name__
+    shape = getattr(result, "shape", None)
+    try:
+        value_text = repr(result)
+    except Exception:
+        value_text = "<unrepresentable>"
+    if len(value_text) > 240:
+        value_text = value_text[:237] + "..."
+    return "type=%s shape=%s value=%s" % (type_name, shape, value_text)
+
+
 def get_prev_trade_date(context):
     now = get_context_datetime(context)
     today = _as_date(now)
     if today is None:
         log.error("[trade-date] context current_dt unavailable; trading aborted")
         return None
+    trading_day_getter = globals().get("get_trading_day")
+    if trading_day_getter is not None:
+        try:
+            current_raw = trading_day_getter(0)
+            current_day = _as_date(current_raw)
+            if current_day is not None and current_day < today:
+                return current_day
+            if current_day == today:
+                previous_raw = trading_day_getter(-1)
+                previous_day = _as_date(previous_raw)
+                if previous_day is not None and previous_day < today:
+                    return previous_day
+                log.warning(
+                    "[trade-date] get_trading_day(-1) unusable: %s" %
+                    _calendar_payload_summary(previous_raw)
+                )
+            else:
+                log.warning(
+                    "[trade-date] get_trading_day unusable: %s" %
+                    _calendar_payload_summary(current_raw)
+                )
+        except Exception as exc:
+            log.warning("[trade-date] get_trading_day failed: %s" % exc)
     try:
         result = get_trade_days(end_date=_api_date_text(today), count=2)
         prev = _previous_day_from_result(result, today)
         if prev is not None:
             return prev
+        log.warning("[trade-date] get_trade_days unusable: %s" % (
+            _calendar_payload_summary(result)))
     except Exception as exc:
         log.warning("[trade-date] get_trade_days failed: %s" % exc)
     try:
@@ -1026,6 +1071,8 @@ def get_prev_trade_date(context):
         prev = _previous_day_from_result(result, today)
         if prev is not None:
             return prev
+        log.warning("[trade-date] get_all_trades_days unusable: %s" % (
+            _calendar_payload_summary(result)))
     except Exception as exc:
         log.warning("[trade-date] get_all_trades_days failed: %s" % exc)
     log.error("[trade-date] cannot prove T-1 trading day; trading aborted")
@@ -2236,12 +2283,6 @@ def _get_recovery_close_data(code, start_date, end_date):
     return frame
 
 
-def _is_proven_strategy_entry(score):
-    if not isinstance(score, dict):
-        return False
-    return bool(filter_buy_candidates([score], [], g.params))
-
-
 def _recover_position_from_broker(code, pos, records, prev_date):
     if code not in set(g.etf_pool):
         return False
@@ -2257,7 +2298,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
     if signal_date is None:
         return False
     score = calc_cross_signal_score(code, signal_date)
-    if not _is_proven_strategy_entry(score):
+    if not isinstance(score, dict):
         return False
     atr = score.get("atr")
     if not _is_positive_finite(atr):
@@ -2289,9 +2330,12 @@ def _recover_position_from_broker(code, pos, records, prev_date):
     if not isinstance(source_map, dict):
         source_map = {}
         g.__position_recovery_source = source_map
-    source_map[code] = open_position.get("recovery_source") or "get-deliver"
+    recovery_source = open_position.get("recovery_source") or "get-deliver"
+    if recovery_source == "get-deliver":
+        recovery_source = "account-takeover:get-deliver"
+    source_map[code] = recovery_source
     log.warning(
-        "[recovery] %s rebuilt from broker delivery: buy_date=%s "
+        "[recovery] %s adopted from broker facts: buy_date=%s "
         "signal_date=%s ATR=%.6f highest_close=%.6f cost=%.6f" % (
             code, buy_date, signal_date, atr, highest, cost)
     )
@@ -2314,7 +2358,7 @@ def _prune_closed_position_state(held):
 
 def recover_live_state(
         context, deliver_records=None, current_trade_records=None, prev_date=None):
-    """Verify persisted state, then rebuild only facts provable from broker data."""
+    """Verify state, then adopt account positions from provable broker facts."""
     held = set(current_hold_codes(context))
     _prune_closed_position_state(held)
     source_map = getattr(g, "__position_recovery_source", None)
