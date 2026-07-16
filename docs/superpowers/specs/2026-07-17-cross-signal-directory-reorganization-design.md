@@ -1,26 +1,23 @@
-# Cross-Signal Directory Reorganization Design
+# Cross-Signal 目录重组设计
 
-## Goal
+## 目标
 
-Make `cross_signal_strategy/` present the three supported entry surfaces clearly:
+整理 `cross_signal_strategy/`，清晰呈现三个受支持的入口：
 
-1. JoinQuant deployment strategy.
-2. Guojin PTrade deployment strategy.
-3. Local training-window replay entry.
+1. 聚宽部署策略。
+2. 国金证券 PTrade 部署策略。
+3. 本地训练期回放入口。
 
-The reorganization must preserve every historical experiment, diagnostic, probe,
-report, test, and Git history. It must not change strategy rules, ETF pools,
-parameters, data boundaries, or backtest results.
+本次整理必须保留所有历史实验、诊断工具、探针、报告、测试和 Git 历史，
+不得改变策略规则、ETF 池、参数、数据边界或回测结果。
 
-## Important Distinction
+## 重要区别
 
-The local replay is not a third independent strategy implementation. It reuses
-the frozen JoinQuant business logic through a local data adapter, order planner,
-and broker simulation. `local_training_run.py` remains visible at the top level
-as the public local replay entry, while its supporting modules move into a
-dedicated package.
+本地回放不是第三套独立的策略实现。它通过本地数据适配器、订单规划器和
+经纪商模拟复用已冻结的聚宽业务逻辑。`local_training_run.py` 继续保留在
+顶层，作为公开的本地回放入口；其支持模块移入专用包。
 
-## Target Layout
+## 目标目录结构
 
 ```text
 cross_signal_strategy/
@@ -38,42 +35,49 @@ cross_signal_strategy/
 |   `-- local_signal_adapter.py
 |-- research/
 |   |-- __init__.py
-|   `-- diagnostics and reporting tools
+|   `-- 诊断和报告工具
 |-- archive/
 |   |-- README.md
 |   |-- __init__.py
 |   |-- candidates/
 |   |   |-- __init__.py
-|   |   `-- rejected or superseded strategy candidates
+|   |   `-- 已否决或已被取代的策略候选版本
 |   `-- probes/
 |       |-- __init__.py
-|       `-- temporary no-order platform probes
+|       `-- 临时、无下单行为的平台探针
 |-- docs/
 `-- reports/
 ```
 
-The top-level Python-file whitelist is therefore exactly:
+因此，顶层 Python 文件白名单严格限定为：
 
 - `smart_trade_joinquant_cross_signal_etf.py`
 - `smart_trade_ptrade_cross_signal_etf.py`
 - `local_training_run.py`
 
-## File Classification
+## 文件分类
 
-### Local replay support
+### 本地回放支持模块
 
-Move the six `local_*` support modules into `local/` while keeping
-`local_training_run.py` at the top level. Update its imports and all dependent
-research/test imports to the new package path.
+将以下六个 `local_*` 支持模块移入 `local/`，同时保留顶层入口
+`local_training_run.py`：
 
-### Research and diagnostics
+- `local_adjustment.py`
+- `local_backtester.py`
+- `local_data_loader.py`
+- `local_data_quality.py`
+- `local_order_planner.py`
+- `local_signal_adapter.py`
 
-Move non-strategy analysis tools into `research/`. This includes baseline and
-trade reports, attribution and stability tools, friction/capital diagnostics,
-technical-indicator diagnostics, data-quality diagnostics, research-budget
-audits, and chart generation. These files remain executable and tested.
+同时更新入口文件、研究工具和测试中的导入路径，使其指向新的包路径。
 
-The exact research-module inventory is:
+### 研究与诊断工具
+
+将非策略分析工具移入 `research/`，包括基线与交易报告、归因与稳定性工具、
+摩擦成本与资金利用率诊断、技术指标诊断、数据质量诊断、研究预算审计和图表
+生成工具。这些文件迁移后仍需可执行并继续接受测试。
+
+研究模块的完整清单如下：
 
 - `attribution_diagnostics.py`
 - `baseline_report.py`
@@ -100,14 +104,13 @@ The exact research-module inventory is:
 - `training_stability.py`
 - `us_qdii_premium_diagnostics.py`
 
-### Archived candidates
+### 归档候选版本
 
-Move all rejected or superseded candidate implementations into
-`archive/candidates/`, including both local experiment candidates and temporary
-JoinQuant candidate strategy files. Archiving does not mean deletion: their
-tests remain active so failed experiments stay reproducible.
+将所有已否决或已被取代的候选实现移入 `archive/candidates/`，其中包括本地
+实验候选模块和临时聚宽候选策略。归档不等于删除：相关测试继续保留，以便
+失败实验仍然可以复现。
 
-The exact candidate inventory is:
+候选版本的完整清单如下：
 
 - `backup_fill_candidate.py`
 - `macd_parameter_candidate.py`
@@ -121,65 +124,60 @@ The exact candidate inventory is:
 - `smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
 - `smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py`
 
-### Archived probes
+### 归档探针
 
-Move the 513880 suspension probe and JoinQuant/PTrade IOPV capability probes
-into `archive/probes/`. They remain no-order diagnostic artifacts and are not
-part of either formal deployment strategy.
+将 513880 停牌探针以及聚宽/PTrade IOPV 能力探针移入 `archive/probes/`。
+它们继续作为无下单行为的诊断产物保留，不属于任何正式部署策略。
 
-The exact probe inventory is:
+探针的完整清单如下：
 
 - `smart_trade_joinquant_cross_signal_etf_probe_513880.py`
 - `smart_trade_joinquant_cross_signal_iopv_probe.py`
 - `smart_trade_ptrade_cross_signal_iopv_probe.py`
 
-### Tests, docs, and reports
+### 测试、文档与报告
 
-- Keep all 46 cross-signal tests in the repository-level `tests/` directory, as
-  approved by the user.
-- Update imports and direct file paths in tests to follow moved modules.
-- Keep `docs/` and `reports/` as dedicated directories.
-- Update current documentation references to the new paths. Preserve the
-  substance and outcome of historical experiment records.
-- Add an archive manifest mapping categories and explaining that archived code
-  must not be promoted without a new training-only protocol.
+- 按照用户已经确认的边界，将全部 46 个 cross-signal 测试继续保留在仓库级
+  `tests/` 目录中。
+- 更新测试中的导入路径和直接文件路径，使其指向迁移后的模块。
+- 保留 `docs/` 和 `reports/` 两个专用目录。
+- 更新现行文档中的路径引用，但保留历史实验记录的实质内容和结论。
+- 新增归档清单，说明各归档类别，并明确：未经新的训练期专用研究流程，不得
+  将归档代码提升为正式版本。
 
-## Migration Rules
+## 迁移规则
 
-1. Use `git mv` for tracked files so history remains traceable.
-2. Add package initializers only where needed for stable imports.
-3. Do not add compatibility shims at the old top-level paths; those would
-   recreate the clutter this change is intended to remove.
-4. Do not alter function bodies except for import/path adjustments required by
-   the move.
-5. Do not read, modify, or delete any market-data directory.
-6. Remove only the generated `cross_signal_strategy/__pycache__/` directory
-   after verifying its resolved path is inside the workspace.
+1. 对已跟踪文件使用 `git mv`，使历史记录保持可追溯。
+2. 仅在稳定导入所必需的位置添加包初始化文件。
+3. 不在旧的顶层路径保留兼容转发模块，否则会重新造成这次整理要解决的混乱。
+4. 除迁移所必需的导入和路径调整外，不修改函数体。
+5. 不读取、修改或删除任何市场数据目录。
+6. 只有在确认解析后的实际路径位于工作区内部后，才删除自动生成的
+   `cross_signal_strategy/__pycache__/` 目录。
 
-## Test-First Migration
+## 测试优先的迁移流程
 
-Before moving production or research files, add a failing structure-contract
-test that asserts the three-file top-level whitelist and the required archive,
-research, and local package locations. Then perform the moves and update imports
-until that test and all existing tests pass.
+移动正式策略或研究文件之前，先新增一个会在旧目录结构下失败的结构契约测试。
+该测试必须断言：顶层严格遵守三个 Python 文件的白名单，并且 `archive/`、
+`research/` 和 `local/` 中存在规定的包与文件。然后再执行文件迁移和导入路径
+更新，直至新测试与全部现有测试通过。
 
-Verification sequence:
+验证顺序如下：
 
-1. Structure-contract test fails against the old layout.
-2. Migrate files and update imports/paths.
-3. Run all cross-signal tests.
-4. Run the full repository test suite.
-5. Run `py_compile` over the three entries and all moved Python modules.
-6. Run `git diff --check` and confirm only the intended directory is affected.
-7. Remove generated bytecode caches and confirm a clean directory tree.
+1. 确认结构契约测试在旧目录结构下失败。
+2. 迁移文件并更新导入和路径引用。
+3. 运行全部 cross-signal 测试。
+4. 运行仓库完整测试套件。
+5. 对三个入口文件及全部迁移后的 Python 模块运行 `py_compile`。
+6. 运行 `git diff --check`，并确认只有预期目录受到影响。
+7. 清理生成的字节码缓存，并确认最终目录树符合设计。
 
-## Acceptance Criteria
+## 验收标准
 
-- Only the three approved Python entry files remain directly under
-  `cross_signal_strategy/`.
-- Formal JoinQuant and PTrade files are byte-for-byte unchanged by the move.
-- Local replay, research tools, candidates, and probes remain importable.
-- All existing tests plus the new structure test pass.
-- No production multi-factor file changes.
-- No market-data files are read for tuning or modified in any way.
-- The final commit provides a single rollback point for the reorganization.
+- `cross_signal_strategy/` 顶层只保留三个获准的 Python 入口文件。
+- 正式聚宽和 PTrade 策略文件在本次迁移中保持逐字节不变。
+- 本地回放、研究工具、候选版本和探针迁移后仍然可以导入。
+- 全部现有测试和新增结构测试通过。
+- 不改动生产多因子策略文件。
+- 不为调参读取任何市场数据，也不以任何方式修改市场数据文件。
+- 最终提交为整个目录重组提供一个单一、清晰的回滚点。
