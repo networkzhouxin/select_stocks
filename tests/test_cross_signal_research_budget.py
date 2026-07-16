@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 49
-    assert report.expected_failed_experiment_count == 49
+    assert report.failed_experiment_count == 50
+    assert report.expected_failed_experiment_count == 50
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -75,8 +75,7 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].planned_experiment is None
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert [family.key for family in open_families] == ["etf_share_flow_shadow"]
-    assert open_families[0].max_new_experiments == 1
+    assert open_families == []
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -197,10 +196,10 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
 
 
-def test_etf_share_flow_shadow_budget_is_one_fixed_training_only_observation():
+def test_etf_share_flow_shadow_budget_is_closed_after_one_fixed_observation():
     from cross_signal_strategy.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -215,8 +214,9 @@ def test_etf_share_flow_shadow_budget_is_one_fixed_training_only_observation():
         if item["key"] == "etf_share_flow_shadow"
     )
 
-    assert family.status == "open"
-    assert family.max_new_experiments == 1
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
     assert raw["lookback_observations"] == 5
     assert raw["grouping"] == "positive_vs_non_positive"
     assert raw["candidate_action"] == "observation_only"
@@ -232,11 +232,17 @@ def test_etf_share_flow_shadow_budget_is_one_fixed_training_only_observation():
     assert raw["validation_influence"] == "none"
     assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
     assert raw["prohibit_alternatives"] is True
+    assert raw["comparable_closed_trades"] == 52
+    assert raw["positive_closed_trades"] == 24
+    assert raw["non_positive_closed_trades"] == 28
+    assert raw["eligible_coverage"] == pytest.approx(1.0)
+    assert raw["observation_gate_passed"] is False
+    assert raw["annual_direction_consistent"] is False
     assert evaluate_experiment_request(
         budget,
         family_key=family.key,
         planned_variants=1,
-    ).allowed is True
+    ).allowed is False
     assert evaluate_experiment_request(
         budget,
         family_key=family.key,
@@ -359,7 +365,7 @@ def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 
     assert "research_budget.json" in text
-    assert "49" in text
+    assert "50" in text
     assert "cross-v0.3.2" in text
     assert "portfolio_dependence" in text
     assert "market_breadth" in text
@@ -369,6 +375,8 @@ def test_readable_research_map_matches_the_structured_budget():
     assert "controlled_breakout_anti_chase" in text
     assert "etf_share_flow_shadow" in text
     assert "positive_vs_non_positive" in text
+    assert "52" in text
+    assert "2019" in text and "2020" in text and "2021" in text
     assert "RSI6 >= 75" in text
     assert "MA20" in text and "10%" in text
     assert "MACD(6,13,5)" in text

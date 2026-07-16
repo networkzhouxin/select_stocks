@@ -37,6 +37,7 @@ indicators, remove ETFs, or search for a new validation-fitting variant.
 - Strictly avoid overfitting: do not use validation periods, full-period summaries, or final-period results to tune parameters, choose indicators, change thresholds, or select rules. Validation is allowed only after rules are frozen.
 - For local training, only read `G:\financial\history_data\cross_signal_train_2019_2021`.
 - For local warm-up, only read `G:\financial\history_data\cross_signal_warmup_2018`.
+- For the exhausted share-flow shadow diagnostic, only read `G:\financial\history_data\cross_signal_flow_train_2018_2021`; treat it as immutable and never extend its result with validation-period shares.
 - Do not read `G:\financial\history_data\按年份合并` or other non-training-period market data while designing, tuning, or debugging training-period behavior unless the user explicitly authorizes a validation/final-summary step.
 - Treat `G:\financial\history_data\cross_signal_train_2019_2021` as read-only: do not modify, overwrite, clean in place, delete, or generate derived files inside it.
 - Never run delete/remove commands against `G:\financial\history_data\cross_signal_train_2019_2021` or any file below it.
@@ -97,3 +98,4 @@ These are starting defaults, not optimized parameters.
 - `market_breadth_diagnostics.py`: rejected observation-only pool MA20/50% breadth attribution for mild-trend entries; it does not filter or resize orders.
 - `horizontal_structure_diagnostics.py`: rejected observation-only prior-20-day horizontal support/resistance attribution; levels end on T-2, distances use T-1 ATR, and the failed gate never changes orders.
 - `breakout_extension_diagnostics.py`: rejected observation-only controlled-versus-extended breakout attribution using prior-20-day resistance ending T-2; only 2 extended trades existed, so the failed gate never created a candidate or changed orders.
+- `share_flow_diagnostics.py`: rejected observation-only five-observation ETF shares-outstanding sign attribution. All 52 eligible domestic buys were covered, but the 2019/2020 relationship reversed in 2021; QDII remains blocked and no order-changing candidate was created.

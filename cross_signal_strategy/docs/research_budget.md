@@ -7,13 +7,12 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 49 real ledger entries.
+- Recorded failed or non-adopted experiments: 50 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: one. `etf_share_flow_shadow` permits exactly one fixed,
-  observation-only `positive_vs_non_positive` comparison over five share
-  observations; it cannot change orders.
+- New open budget: zero. The one fixed `etf_share_flow_shadow`
+  `positive_vs_non_positive` observation is complete and exhausted.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
 
 ## Frozen Families
@@ -35,7 +34,7 @@ it does not change any score, order, position, or risk rule.
 | `macd_half_cycle_user_authorized` | exhausted | The fixed `(6,13,5)` variant reduced return and most quality metrics; do not search neighboring MACD periods. |
 | `horizontal_price_structure` | exhausted | The fixed 20-day T-2-safe/one-ATR observation failed annual consistency; do not search alternate windows, thresholds, pivots, breakout rules, or volume profiles. |
 | `controlled_breakout_anti_chase` | exhausted | The fixed 20-day T-2-safe observation found only 2 extended breakouts, failed total and annual sample gates, and did not permit a candidate. Do not search another `RSI6 >= 75`, MA20 10%, window, AND rule, breakout reward, or sell change. |
-| `etf_share_flow_shadow` | open | Run one sign-only five-observation shares-outstanding attribution on the fixed five domestic ETFs. QDII and split-crossing windows are neutral; no strategy candidate is part of this experiment. |
+| `etf_share_flow_shadow` | exhausted | The fixed five-observation sign-only attribution covered all 52 eligible domestic buys, but non-positive flow led average return in 2019/2020 while positive flow led both metrics in 2021. No candidate was permitted. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -43,15 +42,15 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-`etf_share_flow_shadow` is the only open family. It uses the isolated read-only
-root `G:\financial\history_data\cross_signal_flow_train_2018_2021`, exactly
-five prior share observations, and the fixed `positive_vs_non_positive`
-grouping for `159915`, `512100`, `159928`, `518880`, and `159985`. The QDII
-codes `513100`, `513500`, `513880`, and `513050` are blocked because exact
-historical publication timing is unproven. Split-crossing and insufficient
-windows are neutral. No threshold, alternate period, magnitude bucket, fund
-size, NAV interaction, order-changing candidate, or validation influence is
-authorized.
+None. `etf_share_flow_shadow` consumed its only fixed observation. It used the
+isolated read-only root
+`G:\financial\history_data\cross_signal_flow_train_2018_2021`, exactly five
+prior share observations, and the fixed `positive_vs_non_positive` grouping.
+All 52 eligible domestic entries were comparable: 24 positive and 28
+non-positive. Non-positive flow led average return in 2019 and 2020, but
+positive flow led both average return and win rate in 2021. The annual gate
+therefore failed. Do not search another period, threshold, magnitude bucket,
+fund-size/NAV interaction, QDII extension, or sell rule from this result.
 
 ## Mandatory Sequence
 

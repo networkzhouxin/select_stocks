@@ -2620,6 +2620,36 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-16 ETF Share-Flow Shadow Diagnostic
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` closed-trade path with observation-only shares-outstanding attribution
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up, approved 2019-2021 training prices, and isolated read-only 2018-2021 share histories only
+
+Locked hypothesis and timing:
+- For `159915`, `512100`, `159928`, `518880`, and `159985`, calculate `log(shares[T-1] / shares[T-6])` over exactly five share observations.
+- Use only a share row whose date exactly matches the frozen T-1 signal date. QDII is blocked because exact historical publication timing is unproved.
+- Neutralize a window crossing the registered `159928` 2021-06-25 share split and resume only from a post-split baseline.
+- Compare `positive` against flat-or-negative `non_positive`; do not search periods, magnitudes, or interactions.
+- Add metadata to defensive score copies only. Scores, ranking, position sizing, orders, sells, and ATR logic are unchanged.
+
+Coverage and aggregate result:
+- All 52 eligible domestic closed buys were comparable (100% eligible coverage); 37 QDII buys were excluded.
+- Positive: 24 trades, +3795.30 PnL, +1.39% average return, 54.17% win rate, 3.398 profit/loss ratio.
+- Non-positive: 28 trades, +7422.60 PnL, +3.70% average return, 50.00% win rate, 3.624 profit/loss ratio.
+
+Annual result:
+- 2019 positive: 7 trades, +1.35% average return, 42.86% win rate. Non-positive: 8 trades, +8.10%, 50.00%.
+- 2020 positive: 9 trades, +1.24%, 55.56%. Non-positive: 7 trades, +5.92%, 57.14%.
+- 2021 positive: 8 trades, +1.59%, 62.50%. Non-positive: 13 trades, -0.20%, 46.15%.
+
+Decision:
+- Reject a shares-outstanding sign confirmation or veto before candidate creation. Non-positive flow led average return in 2019 and 2020, while positive flow led both average return and win rate in 2021.
+- The result is not sparse, but it is regime-dependent. Aggregate PnL cannot override the pre-registered annual-direction gate.
+- Do not search neighboring lookbacks, thresholds, z-scores, fund-size/NAV interactions, QDII assumptions, code exceptions, or sell rules.
+- Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
 ## 2026-07-14 Controlled-Breakout Anti-Chase Observation Gate
 
 Period: 2019-01-01 to 2021-12-31

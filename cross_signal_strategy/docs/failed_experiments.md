@@ -538,3 +538,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: Only two realized extended breakouts existed, they were split across two years with none in 2020, and their outcomes were mixed. This is insufficient to prove a stable anti-chase rule; rejecting them would be a decision based on two isolated trades rather than a repeated mechanism.
 Can it be revisited? no as a prior-20-day breakout with `RSI6 >= 75` or MA20-distance-at-least-10% veto
 Conditions for revisiting: Do not search neighboring RSI or MA20 thresholds, 10/30/60-day resistance windows, replace OR with AND, reward controlled breakouts, or alter sells. Reopening requires a genuinely new external market mechanism and explicit new research authorization.
+
+Date: 2026-07-16
+Version: `cross-v0.3.2` observation-only ETF share-flow shadow diagnostic
+Experiment: For the fixed five eligible domestic ETFs, calculate `log(shares[T-1] / shares[T-6])` over exactly five share observations and compare official closed upward-cross entries after positive versus non-positive shares-outstanding flow. Block QDII, neutralize registered split crossings, and leave every score and order unchanged.
+Hypothesis: Net primary-market creation may independently confirm that an oscillator cross is attracting durable demand, while flat or declining shares may identify weaker reversals.
+Training diagnostic result: All 52 eligible domestic closed buys had usable observations (100% eligible coverage); 37 QDII buys were correctly excluded. Positive flow had 24 trades, +3795.30 PnL, +1.39% average return, 54.17% win rate, and 3.398 profit/loss ratio. Non-positive flow had 28 trades, +7422.60 PnL, +3.70% average return, 50.00% win rate, and 3.624 profit/loss ratio. In 2019, positive versus non-positive averaged +1.35%/42.86% win rate versus +8.10%/50.00%. In 2020 the comparison was +1.24%/55.56% versus +5.92%/57.14%. In 2021 it reversed to +1.59%/62.50% versus -0.20%/46.15%.
+Candidate result: Not implemented because neither group had both higher average return and higher win rate in every training year. This experiment was observation-only and did not authorize an order-changing branch.
+JoinQuant training result: Not run because the local annual-consistency gate failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: Shares-outstanding direction is regime-dependent in this strategy path. Non-positive flow accompanied the stronger 2019-2020 trades, while positive flow was clearly better in 2021; using either sign as a universal confirmation or veto would remove valid entries in a non-trivial year.
+Can it be revisited? no as a five-observation shares-outstanding sign rule
+Conditions for revisiting: Do not search 3/10/20-day windows, non-zero magnitude thresholds, z-scores, fund-size or NAV interactions, QDII publication assumptions, code exceptions, or sell-side flow rules from this result. Reopening requires a new independent primary-market mechanism and explicit new research authorization.

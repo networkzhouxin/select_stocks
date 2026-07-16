@@ -5,8 +5,8 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 49,
-  "max_total_open_experiments": 1,
+  "expected_failed_experiment_count": 50,
+  "max_total_open_experiments": 0,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -123,10 +123,9 @@
     {
       "key": "etf_share_flow_shadow",
       "label": "User-authorized ETF shares-outstanding shadow diagnostic",
-      "status": "open",
-      "max_new_experiments": 1,
-      "rationale": "A newly isolated primary-market shares-outstanding dataset provides an independent market-structure dimension not covered by price, volume, or technical-indicator enumeration. Exactly one sign-only five-observation attribution is authorized; it is observation-only and cannot change orders.",
-      "planned_experiment": "Compare frozen cross-v0.3.2 closed upward-cross entries after positive versus non-positive log shares-outstanding change over exactly five trading observations, using only eligible domestic ETFs and neutralizing QDII, insufficient history, and registered split crossings.",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The one fixed five-observation sign-only attribution had complete coverage for all 52 eligible domestic closed buys, but its relationship reversed by year. Non-positive flow had higher average return in 2019 and 2020, while positive flow had higher average return and win rate in 2021; neither group dominated both metrics in every year. No candidate was permitted, and nearby periods, thresholds, magnitude buckets, fund-size/NAV interactions, QDII extensions, or sell rules are prohibited post hoc.",
       "lookback_observations": 5,
       "grouping": "positive_vs_non_positive",
       "candidate_action": "observation_only",
@@ -146,7 +145,13 @@
       ],
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
-      "prohibit_alternatives": true
+      "prohibit_alternatives": true,
+      "comparable_closed_trades": 52,
+      "positive_closed_trades": 24,
+      "non_positive_closed_trades": 28,
+      "eligible_coverage": 1.0,
+      "observation_gate_passed": false,
+      "annual_direction_consistent": false
     }
   ]
 }

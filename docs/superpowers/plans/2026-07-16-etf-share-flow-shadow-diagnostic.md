@@ -209,7 +209,7 @@ Expected: PASS.
 
 **Interfaces:**
 - Consumes: `python -m cross_signal_strategy.share_flow_diagnostics` output.
-- Produces: one exhausted research record and a multiple-testing lower bound increased from 49 to 50.
+- Produces: one exhausted research record, a failed/non-adopted count increased from 49 to 50, and a multiple-testing lower bound increased from 50 to 51 after including the selected mainline.
 
 - [ ] **Step 1: Run the training-only observation**
 
@@ -228,7 +228,8 @@ strategy file.
 
 Require the family to be exhausted with zero remaining experiments, the exact
 training evidence in its rationale, `max_total_open_experiments` restored to
-zero, and both expected failed-experiment/minimum-trial counts set to 50.
+zero, the expected failed-experiment count set to 50, and the minimum-trial
+count set to 51 because it includes the selected mainline.
 
 - [ ] **Step 4: Update records and verify closure tests**
 
