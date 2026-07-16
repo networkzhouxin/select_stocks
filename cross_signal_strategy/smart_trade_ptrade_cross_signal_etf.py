@@ -15,6 +15,8 @@ from datetime import datetime
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
+LIVE_STATE_SCHEMA_VERSION = 1
+LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
     "513500.SS",
@@ -150,20 +152,124 @@ def _cached_live_state_path(path=None):
     return getattr(g, "__state_path", None)
 
 
+def _live_state_slot_paths(path=None):
+    state_path = _cached_live_state_path(path)
+    if state_path is None:
+        return {}
+    return {
+        "a": state_path + ".a",
+        "b": state_path + ".b",
+    }
+
+
+def _live_state_checksum(schema_version, generation, producer_version, payload):
+    header = "%s|%s|%s|" % (
+        schema_version, generation, producer_version)
+    return hashlib.sha256(header.encode("utf-8") + payload).hexdigest()
+
+
+def _encode_live_state_envelope(state, generation):
+    generation = int(generation)
+    if generation <= 0:
+        raise ValueError("invalid state generation")
+    validated = _validated_live_state(state)
+    payload = pickle.dumps(
+        {"state": validated}, protocol=LIVE_STATE_PICKLE_PROTOCOL)
+    envelope = {
+        "schema_version": LIVE_STATE_SCHEMA_VERSION,
+        "generation": generation,
+        "producer_strategy_version": STRATEGY_VERSION,
+        "payload": payload,
+    }
+    envelope["checksum"] = _live_state_checksum(
+        envelope["schema_version"],
+        generation,
+        envelope["producer_strategy_version"],
+        payload,
+    )
+    return envelope
+
+
+def _decode_live_state_envelope(envelope):
+    if not isinstance(envelope, dict):
+        raise ValueError("invalid state envelope")
+    schema_version = envelope.get("schema_version")
+    if schema_version != LIVE_STATE_SCHEMA_VERSION:
+        raise ValueError("state schema mismatch")
+    generation = envelope.get("generation")
+    if not isinstance(generation, int) or generation <= 0:
+        raise ValueError("invalid state generation")
+    producer_version = envelope.get("producer_strategy_version")
+    if not isinstance(producer_version, str) or not producer_version:
+        raise ValueError("invalid producer strategy version")
+    payload = envelope.get("payload")
+    if not isinstance(payload, bytes):
+        raise ValueError("invalid state payload bytes")
+    expected = _live_state_checksum(
+        schema_version, generation, producer_version, payload)
+    if envelope.get("checksum") != expected:
+        raise ValueError("state checksum mismatch")
+    body = pickle.loads(payload)
+    if not isinstance(body, dict):
+        raise ValueError("invalid state payload")
+    return generation, _validated_live_state(body.get("state"))
+
+
+def _read_live_state_slot(slot_path):
+    try:
+        with open(slot_path, "rb") as handle:
+            envelope = pickle.load(handle)
+        generation, state = _decode_live_state_envelope(envelope)
+        return generation, state
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log.error("[state] invalid checkpoint slot %s: %s" % (slot_path, exc))
+        return None
+
+
+def _read_legacy_live_state(state_path):
+    try:
+        with open(state_path, "rb") as handle:
+            payload = pickle.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid state payload")
+        if payload.get("strategy_version") != STRATEGY_VERSION:
+            raise ValueError("strategy version mismatch")
+        return _validated_live_state(payload.get("state"))
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log.error("[state] restore failed: %s" % exc)
+        return None
+
+
 def _persist_live_state(path=None):
     state_path = _cached_live_state_path(path)
     if state_path is None:
         return False
-    payload = {
-        "strategy_version": STRATEGY_VERSION,
-        "state": {
-            field: getattr(g, field, None)
-            for field in LIVE_STATE_FIELDS
-        },
+    state = {
+        field: getattr(g, field, None)
+        for field in LIVE_STATE_FIELDS
     }
     try:
-        with open(state_path, "wb") as handle:
-            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        slot_paths = _live_state_slot_paths(path=state_path)
+        valid_slots = {}
+        for slot, slot_path in slot_paths.items():
+            loaded = _read_live_state_slot(slot_path)
+            if loaded is not None:
+                valid_slots[slot] = loaded[0]
+        if not valid_slots:
+            target_slot = "a"
+            generation = 1
+        else:
+            latest_slot = max(valid_slots, key=valid_slots.get)
+            target_slot = "b" if latest_slot == "a" else "a"
+            generation = max(valid_slots.values()) + 1
+        envelope = _encode_live_state_envelope(state, generation)
+        with open(slot_paths[target_slot], "wb") as handle:
+            pickle.dump(
+                envelope, handle, protocol=LIVE_STATE_PICKLE_PROTOCOL)
         return True
     except Exception as exc:
         log.error("[state] persist failed: %s" % exc)
@@ -206,22 +312,29 @@ def _restore_live_state(path=None):
     state_path = _cached_live_state_path(path)
     if state_path is None:
         return False
-    try:
-        with open(state_path, "rb") as handle:
-            payload = pickle.load(handle)
-        if not isinstance(payload, dict):
-            raise ValueError("invalid state payload")
-        if payload.get("strategy_version") != STRATEGY_VERSION:
-            raise ValueError("strategy version mismatch")
-        state = _validated_live_state(payload.get("state"))
-        for field in LIVE_STATE_FIELDS:
-            setattr(g, field, state[field])
-        return True
-    except FileNotFoundError:
+    g.__state_restore_source = None
+    g.__state_restore_generation = None
+    valid_slots = []
+    for slot, slot_path in _live_state_slot_paths(path=state_path).items():
+        loaded = _read_live_state_slot(slot_path)
+        if loaded is not None:
+            valid_slots.append((loaded[0], slot, loaded[1]))
+    if valid_slots:
+        generation, slot, state = max(valid_slots, key=lambda item: item[0])
+        restore_source = "checkpoint-%s" % slot
+    else:
+        state = _read_legacy_live_state(state_path)
+        generation = 0
+        restore_source = "legacy"
+    if state is None:
         return False
-    except Exception as exc:
-        log.error("[state] restore failed: %s" % exc)
-        return False
+    for field in LIVE_STATE_FIELDS:
+        setattr(g, field, state[field])
+    g.__state_restore_source = restore_source
+    g.__state_restore_generation = generation
+    if restore_source == "legacy":
+        _persist_live_state(path=state_path)
+    return True
 
 
 def get_a_share_etf_codes():

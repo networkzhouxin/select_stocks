@@ -60,6 +60,9 @@ def make_g(**overrides):
         "__mode_verified": True,
         "__data": None,
         "__state_path": None,
+        "__state_restore_source": None,
+        "__state_restore_generation": None,
+        "__position_recovery_source": {},
     }
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -374,6 +377,126 @@ def test_live_state_io_uses_initialize_cached_path(monkeypatch, tmp_path):
     pt.g.highest_since_buy = {"513100.SS": 9.9}
     assert pt._restore_live_state() is True
     assert pt.g.highest_since_buy == {}
+
+
+def test_live_state_dual_slots_alternate_generations_and_use_protocol4(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+
+    assert pt._persist_live_state(path=state_path) is True
+
+    slot_paths = pt._live_state_slot_paths(path=state_path)
+    first = pickle.loads(Path(slot_paths["a"]).read_bytes())
+    assert first["schema_version"] == pt.LIVE_STATE_SCHEMA_VERSION
+    assert first["generation"] == 1
+    assert first["payload"][:2] == b"\x80\x04"
+
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
+
+    second = pickle.loads(Path(slot_paths["b"]).read_bytes())
+    assert second["generation"] == 2
+    assert second["payload"][:2] == b"\x80\x04"
+
+
+def test_live_state_restore_falls_back_when_newest_slot_is_truncated(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+    assert pt._persist_live_state(path=state_path) is True
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
+
+    slot_paths = pt._live_state_slot_paths(path=state_path)
+    Path(slot_paths["b"]).write_bytes(b"truncated")
+    pt.g.highest_since_buy = {"513100.SS": 9.9}
+
+    assert pt._restore_live_state(path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
+    assert pt.g.__state_restore_source == "checkpoint-a"
+    assert pt.g.__state_restore_generation == 1
+
+
+def test_live_state_envelope_rejects_checksum_mismatch():
+    state = {
+        field: getattr(make_g(), field)
+        for field in pt.LIVE_STATE_FIELDS
+    }
+    envelope = pt._encode_live_state_envelope(state, generation=1)
+    envelope["checksum"] = "0" * 64
+
+    with pytest.raises(ValueError, match="checksum"):
+        pt._decode_live_state_envelope(envelope)
+
+
+def test_live_state_schema_accepts_compatible_producer_strategy_version(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    state = {
+        field: getattr(make_g(highest_since_buy={"513100.SS": 2.5}), field)
+        for field in pt.LIVE_STATE_FIELDS
+    }
+    envelope = pt._encode_live_state_envelope(state, generation=7)
+    envelope["producer_strategy_version"] = "cross-v0.3.1"
+    envelope["checksum"] = pt._live_state_checksum(
+        envelope["schema_version"],
+        envelope["generation"],
+        envelope["producer_strategy_version"],
+        envelope["payload"],
+    )
+    slot_path = pt._live_state_slot_paths(path=state_path)["a"]
+    Path(slot_path).write_bytes(pickle.dumps(envelope, protocol=4))
+    pt.g = make_g(highest_since_buy={"513100.SS": 9.9})
+
+    assert pt._restore_live_state(path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
+    assert pt.g.__state_restore_source == "checkpoint-a"
+    assert pt.g.__state_restore_generation == 7
+
+
+def test_live_state_unknown_schema_is_rejected_without_partial_restore(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    state = {
+        field: getattr(make_g(highest_since_buy={"513100.SS": 7.7}), field)
+        for field in pt.LIVE_STATE_FIELDS
+    }
+    envelope = pt._encode_live_state_envelope(state, generation=1)
+    envelope["schema_version"] = pt.LIVE_STATE_SCHEMA_VERSION + 1
+    envelope["checksum"] = pt._live_state_checksum(
+        envelope["schema_version"],
+        envelope["generation"],
+        envelope["producer_strategy_version"],
+        envelope["payload"],
+    )
+    slot_path = pt._live_state_slot_paths(path=state_path)["a"]
+    Path(slot_path).write_bytes(pickle.dumps(envelope, protocol=4))
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.5},
+        entry_atr={"513100.SS": 0.05},
+    )
+
+    assert pt._restore_live_state(path=state_path) is False
+    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
+    assert pt.g.entry_atr == {"513100.SS": 0.05}
+    assert pt.g.__state_restore_source is None
+
+
+def test_live_state_legacy_file_restores_and_migrates_to_dual_slots(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    legacy_state = {
+        field: getattr(make_g(highest_since_buy={"513100.SS": 2.5}), field)
+        for field in pt.LIVE_STATE_FIELDS
+    }
+    state_path.write_bytes(pickle.dumps({
+        "strategy_version": pt.STRATEGY_VERSION,
+        "state": legacy_state,
+    }, protocol=4))
+    pt.g = make_g(highest_since_buy={"513100.SS": 9.9})
+
+    assert pt._restore_live_state(path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
+    assert pt.g.__state_restore_source == "legacy"
+    assert pt.g.__state_restore_generation == 0
+    slot_paths = pt._live_state_slot_paths(path=state_path)
+    assert Path(slot_paths["a"]).exists()
 
 
 def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monkeypatch):
