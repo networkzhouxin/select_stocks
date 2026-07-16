@@ -129,6 +129,12 @@ of the requested time. That result must not be compared with the JoinQuant
   calls documented `get_trading_day_by_date(buy_date, -1)` as an observation
   probe. Its log is marked `non_binding=True`: the returned date is not used
   to verify state, calculate ATR, enable exits, or submit an order.
+- Guojin PTrade may return documented calendar results as a NumPy Unicode
+  array (`ndarray` with dtype such as `<U10`). Its elements are `numpy.str_`,
+  which some pandas versions reject when passed directly to `Timestamp`.
+  The adapter converts only that scalar type to native `str` before normal
+  date parsing. The calendar contents, API priority, and fail-closed rules are
+  unchanged; a usable `get_trade_days` result prevents all fallback probes.
 - Historical delivery statements are account-wide rather than explicitly
   strategy-owned. Account takeover is therefore enabled only under this
   deployment's explicit operating contract: one account runs one active

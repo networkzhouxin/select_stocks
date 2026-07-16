@@ -799,3 +799,15 @@ Risk: Diagnostics can establish where recovery fails but do not themselves prove
 Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; this is PTrade recovery observability work and no market-period data or validation result was read
 Status: adopted as diagnostics only; JoinQuant/local business logic, frozen parameters and ETF pool, and production multi-factor files remain unchanged
+
+### Normalize PTrade NumPy Calendar Strings
+
+Date: 2026-07-17
+Decision: Convert `numpy.str_` calendar scalars to native Python `str` at the shared PTrade date-normalization boundary before pandas parsing. Keep the documented calendar API order, historical-date comparison, recovery evidence gates, and non-binding probe policy unchanged.
+Reason: Guojin runtime logs proved that both `get_trade_days` and `get_all_trades_days` returned correct ISO dates inside NumPy Unicode arrays, yet every element became unparseable. The independent `get_trading_day_by_date` probe returned the same preceding dates as native strings and parsed successfully.
+Evidence: Local reproduction showed that the installed pandas raises `TypeError: Expected str, got numpy.str_` for `pd.Timestamp(np.str_('2026-07-15'))`. Tests were written first and failed for both `YYYY-MM-DD` and `YYYYMMDD` NumPy string scalars and for the exact `<U10 ndarray` payload observed in PTrade. The one-line scalar normalization makes all three cases pass and proves that the first documented calendar API succeeds without invoking either fallback API or the non-binding probe. The complete formal PTrade adapter suite passes 106 tests.
+Interpretation: The three inherited holdings had already passed delivery replay; their false `historical-calendar` rejection was a platform return-type compatibility defect, not missing market data or an unproved buy date. Recovery can now advance to the existing ATR, fill-price, and trailing-close evidence gates using the correct T-1 date.
+Risk: This fix removes only the demonstrated calendar parsing blocker. The next PTrade restart may expose a later independent recovery failure, which must be diagnosed from its stage-specific log rather than bypassed. No claim is made that all three positions are verified until runtime reports `status=VERIFIED`.
+Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; this is PTrade platform type compatibility work and no market-period data, strategy return, or validation result was read
+Status: adopted for the formal cross-signal PTrade adapter; JoinQuant/local business logic, frozen parameters and ETF pool, and production multi-factor files remain unchanged

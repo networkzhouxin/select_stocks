@@ -979,6 +979,8 @@ def get_context_datetime(context):
 def _as_date(value):
     if value is None:
         return None
+    if isinstance(value, np.str_):
+        value = str(value)
     if isinstance(value, datetime):
         return value.date()
     if hasattr(value, "date") and not isinstance(value, str):

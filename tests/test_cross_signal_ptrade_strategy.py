@@ -780,6 +780,40 @@ def test_ptrade_calendar_queries_use_documented_string_dates(monkeypatch):
     assert captured_end_dates == ["20260713", "20260713", "20260713"]
 
 
+@pytest.mark.parametrize("raw_date", ["2026-07-15", "20260715"])
+def test_as_date_accepts_ptrade_numpy_string_scalars(raw_date):
+    assert pt._as_date(pt.np.str_(raw_date)) == date(2026, 7, 15)
+
+
+def test_previous_trade_date_accepts_ptrade_unicode_ndarray(monkeypatch):
+    calls = []
+
+    def get_trade_days(**kwargs):
+        calls.append(("get_trade_days", kwargs))
+        return pt.np.array(["2026-07-15", "2026-07-16"], dtype="<U10")
+
+    monkeypatch.setattr(pt, "get_trade_days", get_trade_days, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "get_all_trades_days",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("first documented calendar result should be sufficient")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_trading_day_by_date",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("non-binding diagnostic probe should not run")
+        ),
+        raising=False,
+    )
+
+    assert pt._previous_trade_date_before(date(2026, 7, 16)) == date(2026, 7, 15)
+    assert calls == [("get_trade_days", {"end_date": "20260716", "count": 2})]
+
+
 def test_signal_sell_requires_verified_trading_calendar_for_five_day_hold():
     buy_date = date(2026, 7, 10)
     today = date(2026, 7, 15)
