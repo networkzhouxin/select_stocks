@@ -119,6 +119,16 @@ of the requested time. That result must not be compared with the JoinQuant
   `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
   Quantity mismatch, missing fill price, missing calendar evidence, or
   incomplete price history leaves the position unverified.
+- A failed takeover writes a stage-specific `[recovery-diagnostic]` line.
+  `delivery-replay` reports only ETF codes, dates, buy/sell direction,
+  quantities, prices, aggregate replay counts, and field names; account,
+  client, fund, and shareholder-account values are never emitted. Other
+  stages distinguish broker facts, historical calendar lookup, entry ATR,
+  weighted fill price, close-history reconstruction, and same-day handling.
+  When the existing historical calendar path cannot prove T-1, the adapter
+  calls documented `get_trading_day_by_date(buy_date, -1)` as an observation
+  probe. Its log is marked `non_binding=True`: the returned date is not used
+  to verify state, calculate ATR, enable exits, or submit an order.
 - Historical delivery statements are account-wide rather than explicitly
   strategy-owned. Account takeover is therefore enabled only under this
   deployment's explicit operating contract: one account runs one active
@@ -225,7 +235,10 @@ official authority for this port.
    is verified. Separately test first-start account takeover after stopping the
    previous strategy: every in-pool position must report
    `source=account-takeover:get-deliver`; no manual or second strategy may trade
-   the account while cross-signal is active.
+   the account while cross-signal is active. If takeover remains unverified,
+   retain all `[recovery-calendar]`, `[recovery-calendar-probe]`, and
+   `[recovery-diagnostic]` lines. A valid `by_date_probe` is evidence for the
+   next root-cause decision, not permission to trade.
 7. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
 8. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic

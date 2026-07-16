@@ -2167,6 +2167,118 @@ def _delivery_sort_key(record):
     return (trade_date, trade_time, serial)
 
 
+def _diagnostic_number(value):
+    number = _safe_float(value, np.nan)
+    if not np.isfinite(number):
+        return "nan"
+    rounded = round(number)
+    if abs(number - rounded) <= 1e-9:
+        return str(int(rounded))
+    return ("%.6f" % number).rstrip("0").rstrip(".")
+
+
+def _limited_diagnostic_values(values, limit=30):
+    ordered = sorted(set(str(value) for value in values if value not in (None, "")))
+    if len(ordered) <= limit:
+        return ",".join(ordered) if ordered else "none"
+    return "%s,+%d" % (",".join(ordered[:limit]), len(ordered) - limit)
+
+
+def _diagnose_delivery_replay(records, code, broker_amount):
+    """Return a broker-safe summary without account identifiers or raw rows."""
+    target = normalize_code(code)
+    all_records = list(records or [])
+    available_codes = []
+    field_keys = []
+    code_rows = []
+    valid_rows = []
+    side_values = []
+    for record in all_records:
+        if not isinstance(record, dict):
+            continue
+        if not field_keys:
+            field_keys = sorted(str(key) for key in record.keys())
+        raw_code = record.get("stock_code")
+        normalized = normalize_code(raw_code)
+        if normalized:
+            available_codes.append(normalized)
+        if normalized != target:
+            continue
+        code_rows.append(record)
+        side_values.append("%s/%s" % (
+            str(record.get("entrust_bs", "") or "").strip() or "blank",
+            str(record.get("business_name", "") or "").strip() or "blank",
+        ))
+        direction = _delivery_direction(record)
+        quantity = _delivery_quantity(record)
+        trade_date = _delivery_trade_date(record)
+        if direction != 0 and quantity > 0 and trade_date is not None:
+            valid_rows.append(record)
+
+    amount = 0.0
+    min_running = 0.0
+    buys = 0
+    sells = 0
+    dates = []
+    samples = []
+    ordered_valid = sorted(valid_rows, key=_delivery_sort_key)
+    for record in ordered_valid:
+        direction = _delivery_direction(record)
+        quantity = _delivery_quantity(record)
+        trade_date = _delivery_trade_date(record)
+        amount += direction * quantity
+        min_running = min(min_running, amount)
+        buys += int(direction > 0)
+        sells += int(direction < 0)
+        dates.append(trade_date)
+    sample_rows = ordered_valid
+    if len(sample_rows) > 6:
+        sample_rows = sample_rows[:3] + sample_rows[-3:]
+    for record in sample_rows:
+        direction = _delivery_direction(record)
+        trade_date = _delivery_trade_date(record)
+        quantity = _delivery_quantity(record)
+        price = _safe_float(record.get("business_price"), np.nan)
+        samples.append("%s:%s:%s@%s" % (
+            trade_date.isoformat() if trade_date is not None else "unknown-date",
+            "B" if direction > 0 else "S" if direction < 0 else "?",
+            _diagnostic_number(quantity),
+            _diagnostic_number(price),
+        ))
+
+    date_range = "none"
+    if dates:
+        date_range = "%s~%s" % (min(dates).isoformat(), max(dates).isoformat())
+    return (
+        "expected=%s total_records=%d code_rows=%d valid_rows=%d "
+        "buys=%d sells=%d net=%s min_running=%s date_range=%s "
+        "available_codes=%s side_values=%s field_keys=%s sample=%s" % (
+            _diagnostic_number(broker_amount),
+            len(all_records),
+            len(code_rows),
+            len(valid_rows),
+            buys,
+            sells,
+            _diagnostic_number(amount),
+            _diagnostic_number(min_running),
+            date_range,
+            _limited_diagnostic_values(available_codes),
+            _limited_diagnostic_values(side_values, limit=12),
+            _limited_diagnostic_values(field_keys, limit=40),
+            ";".join(samples) if samples else "none",
+        )
+    )
+
+
+def _log_recovery_failure(code, stage, reason, details=None):
+    message = "[recovery-diagnostic] code=%s stage=%s reason=%s" % (
+        normalize_code(code), stage, reason)
+    if details:
+        message += " " + str(details)
+    log.error(message)
+    return False
+
+
 def _reconstruct_open_position(records, code, broker_amount):
     """Rebuild the current open episode and require exact broker-quantity parity."""
     target = normalize_code(code)
@@ -2239,6 +2351,9 @@ def _previous_trade_date_before(value):
         previous = _previous_day_from_result(result, trade_date)
         if previous is not None:
             return previous
+        log.warning(
+            "[recovery-calendar] query=%s api=get_trade_days unusable %s" % (
+                trade_date.isoformat(), _calendar_payload_summary(result)))
     except Exception as exc:
         log.warning("[recovery] get_trade_days failed: %s" % exc)
     try:
@@ -2246,9 +2361,39 @@ def _previous_trade_date_before(value):
         previous = _previous_day_from_result(result, trade_date)
         if previous is not None:
             return previous
+        log.warning(
+            "[recovery-calendar] query=%s api=get_all_trades_days unusable %s" % (
+                trade_date.isoformat(), _calendar_payload_summary(result)))
     except Exception as exc:
         log.warning("[recovery] get_all_trades_days failed: %s" % exc)
     return None
+
+
+def _probe_previous_trade_date_by_date(value):
+    """Observe the documented historical calendar API without using its result."""
+    trade_date = _as_date(value)
+    getter = globals().get("get_trading_day_by_date")
+    if trade_date is None or getter is None:
+        return None
+    try:
+        raw = getter(trade_date.strftime("%Y%m%d"), -1)
+    except Exception as exc:
+        log.warning(
+            "[recovery-calendar-probe] query=%s api=get_trading_day_by_date "
+            "failed=%s non_binding=True" % (trade_date.isoformat(), exc))
+        return None
+    candidate = _as_date(raw)
+    valid = candidate is not None and candidate < trade_date
+    log.info(
+        "[recovery-calendar-probe] query=%s api=get_trading_day_by_date "
+        "candidate=%s valid=%s non_binding=True payload=%s" % (
+            trade_date.isoformat(),
+            candidate.isoformat() if candidate is not None else "None",
+            valid,
+            _calendar_payload_summary(raw),
+        )
+    )
+    return candidate if valid else None
 
 
 def _get_recovery_close_data(code, start_date, end_date):
@@ -2285,42 +2430,98 @@ def _get_recovery_close_data(code, start_date, end_date):
 
 def _recover_position_from_broker(code, pos, records, prev_date):
     if code not in set(g.etf_pool):
-        return False
+        return _log_recovery_failure(code, "pool", "outside-frozen-pool")
     amount = _pos_amount(pos)
     cost = _pos_cost(pos)
     if not _is_positive_finite(amount) or not _is_positive_finite(cost):
-        return False
+        return _log_recovery_failure(
+            code,
+            "broker-position",
+            "invalid-amount-or-cost",
+            "amount=%s cost=%s" % (
+                _diagnostic_number(amount), _diagnostic_number(cost)),
+        )
     open_position = _reconstruct_open_position(records, code, amount)
     if open_position is None:
-        return False
+        return _log_recovery_failure(
+            code,
+            "delivery-replay",
+            "unreconciled",
+            _diagnose_delivery_replay(records, code, amount),
+        )
     buy_date = open_position["buy_date"]
     signal_date = _previous_trade_date_before(buy_date)
     if signal_date is None:
-        return False
+        probe_date = _probe_previous_trade_date_by_date(buy_date)
+        return _log_recovery_failure(
+            code,
+            "historical-calendar",
+            "previous-trade-date-unresolved",
+            "buy_date=%s by_date_probe=%s non_binding=True" % (
+                buy_date.isoformat(),
+                probe_date.isoformat() if probe_date is not None else "None",
+            ),
+        )
     score = calc_cross_signal_score(code, signal_date)
     if not isinstance(score, dict):
-        return False
+        return _log_recovery_failure(
+            code,
+            "entry-atr",
+            "score-unavailable",
+            "signal_date=%s" % signal_date.isoformat(),
+        )
     atr = score.get("atr")
     if not _is_positive_finite(atr):
-        return False
+        return _log_recovery_failure(
+            code,
+            "entry-atr",
+            "atr-invalid",
+            "signal_date=%s atr=%s" % (
+                signal_date.isoformat(), _diagnostic_number(atr)),
+        )
     entry_price = open_position.get("entry_price")
     if not _is_positive_finite(entry_price):
-        return False
+        return _log_recovery_failure(
+            code,
+            "delivery-entry-price",
+            "weighted-fill-price-unavailable",
+            "buy_date=%s" % buy_date.isoformat(),
+        )
     prev_date = _as_date(prev_date)
     if prev_date is None:
-        return False
+        return _log_recovery_failure(
+            code, "current-calendar", "current-prev-date-unavailable")
     if buy_date <= prev_date:
         closes = _get_recovery_close_data(code, buy_date, prev_date)
         if closes is None or len(closes) == 0:
-            return False
+            return _log_recovery_failure(
+                code,
+                "trailing-high",
+                "close-history-unavailable",
+                "range=%s~%s" % (buy_date.isoformat(), prev_date.isoformat()),
+            )
         valid_closes = pd.to_numeric(closes["close"], errors="coerce")
         valid_closes = valid_closes[np.isfinite(valid_closes) & (valid_closes > 0)]
         if len(valid_closes) == 0:
-            return False
+            return _log_recovery_failure(
+                code,
+                "trailing-high",
+                "no-positive-closes",
+                "range=%s~%s" % (buy_date.isoformat(), prev_date.isoformat()),
+            )
         highest = max(float(entry_price), float(valid_closes.max()))
     else:
         if signal_date != prev_date:
-            return False
+            return _log_recovery_failure(
+                code,
+                "same-day-entry",
+                "signal-date-mismatch",
+                "buy_date=%s signal_date=%s current_prev_date=%s" % (
+                    buy_date.isoformat(),
+                    signal_date.isoformat(),
+                    prev_date.isoformat(),
+                ),
+            )
         highest = float(entry_price)
 
     g.buy_date[code] = buy_date

@@ -2086,6 +2086,172 @@ def test_delivery_reconstruction_rejects_quantity_mismatch():
     assert pt._reconstruct_open_position(records, "513100.SS", 400) is None
 
 
+def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
+    monkeypatch,
+):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g()
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 500,
+        "business_price": 1.18,
+        "init_date": 20260303,
+        "business_time": 93503,
+        "fund_account": "secret-account",
+        "stock_account": "secret-stock-account",
+    }]
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message % args if args else message),
+            warning=lambda message, *args: messages.append(message % args if args else message),
+            error=lambda message, *args: messages.append(message % args if args else message),
+        ),
+    )
+
+    pt.recover_live_state(
+        context,
+        deliver_records=records,
+        prev_date=date(2026, 7, 10),
+    )
+
+    summary = next(
+        message for message in messages
+        if "stage=delivery-replay" in message
+    )
+    assert "code=513100.SS" in summary
+    assert "expected=400" in summary
+    assert "total_records=1" in summary
+    assert "code_rows=1" in summary
+    assert "valid_rows=1" in summary
+    assert "buys=1" in summary
+    assert "sells=0" in summary
+    assert "net=500" in summary
+    assert "date_range=2026-03-03~2026-03-03" in summary
+    assert "available_codes=513100.SS" in summary
+    rendered = "\n".join(messages)
+    assert "secret-account" not in rendered
+    assert "secret-stock-account" not in rendered
+
+
+def test_live_recovery_probes_historical_calendar_without_adopting_probe(
+    monkeypatch,
+):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g()
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 400,
+        "business_price": 1.18,
+        "init_date": 20260303,
+    }]
+    messages = []
+    probe_calls = []
+    score_calls = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message % args if args else message),
+            warning=lambda message, *args: messages.append(message % args if args else message),
+            error=lambda message, *args: messages.append(message % args if args else message),
+        ),
+    )
+    monkeypatch.setattr(pt, "get_trade_days", lambda **kwargs: [], raising=False)
+    monkeypatch.setattr(pt, "get_all_trades_days", lambda **kwargs: [], raising=False)
+    monkeypatch.setattr(
+        pt,
+        "get_trading_day_by_date",
+        lambda query_date, day=0: probe_calls.append((query_date, day)) or "20260302",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda *args, **kwargs: score_calls.append((args, kwargs)) or make_buy_score(),
+    )
+
+    pt.recover_live_state(
+        context,
+        deliver_records=records,
+        prev_date=date(2026, 7, 10),
+    )
+
+    assert probe_calls == [("20260303", -1)]
+    assert score_calls == []
+    assert pt.g.unverified_positions == {"513100.SS"}
+    assert any(
+        "api=get_trade_days" in message
+        and "unusable" in message
+        and "type=list" in message
+        for message in messages
+    )
+    failure = next(
+        message for message in messages
+        if "stage=historical-calendar" in message
+    )
+    assert "buy_date=2026-03-03" in failure
+    assert "by_date_probe=2026-03-02" in failure
+    assert "non_binding=True" in failure
+
+
+def test_live_recovery_logs_entry_atr_stage_when_score_is_unavailable(monkeypatch):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g()
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 400,
+        "business_price": 1.18,
+        "init_date": 20260303,
+    }]
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message % args if args else message),
+            warning=lambda message, *args: messages.append(message % args if args else message),
+            error=lambda message, *args: messages.append(message % args if args else message),
+        ),
+    )
+    monkeypatch.setattr(
+        pt,
+        "_previous_trade_date_before",
+        lambda value: date(2026, 3, 2),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "calc_cross_signal_score", lambda *args: None)
+
+    pt.recover_live_state(
+        context,
+        deliver_records=records,
+        prev_date=date(2026, 7, 10),
+    )
+
+    failure = next(
+        message for message in messages
+        if "stage=entry-atr" in message
+    )
+    assert "code=513100.SS" in failure
+    assert "reason=score-unavailable" in failure
+    assert "signal_date=2026-03-02" in failure
+    assert pt.g.unverified_positions == {"513100.SS"}
+
+
 def test_live_recovery_adopts_account_position_from_broker_facts(monkeypatch):
     position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
     context = types.SimpleNamespace(
