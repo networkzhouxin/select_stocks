@@ -82,6 +82,25 @@ def make_buy_score(code="513100.SS"):
     }
 
 
+def make_sell_score(code="513100.SS"):
+    score = make_buy_score(code)
+    score.update({
+        "buy_allowed": False,
+        "buy_score": 20,
+        "sell_score": 35,
+        "close_below_ma20": True,
+        "close_below_boll_mid": True,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+        "adx": 10.0,
+        "plus_di": 10.0,
+        "minus_di": 20.0,
+        "ma20_slope_non_negative": False,
+    })
+    return score
+
+
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
     assert pt.get_default_params() == jq.get_default_params()
@@ -942,6 +961,54 @@ def test_trading_aborts_when_broker_order_state_is_unknown(monkeypatch):
     pt.do_trading(context)
 
 
+def test_0935_defers_paused_pool_codes_but_processes_open_codes(monkeypatch):
+    paused = "513100.SS"
+    open_code = "159985.SZ"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(etf_pool=[paused, open_code])
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    stop_checks = []
+    scored = []
+    buys = []
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "is_paused", lambda code: code == paused)
+    monkeypatch.setattr(
+        pt,
+        "check_atr_stops",
+        lambda context: stop_checks.append(True) or [],
+    )
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (
+            scored.append((code, end_date)) or {
+                **make_buy_score(code), "close": 1.0}, None),
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda end_date, count: [prev_date, today],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "execute_buy_candidates",
+        lambda context, scores, execution_date: (
+            buys.append([score["code"] for score in scores]) or 0),
+    )
+
+    pt.do_trading(context)
+
+    assert stop_checks == [True]
+    assert pt.g.paused_pool_codes == {paused}
+    assert scored == [(open_code, prev_date)]
+    assert buys == [[open_code]]
+
+
 def test_buy_execution_waits_for_submitted_sells_to_finish(monkeypatch):
     position = types.SimpleNamespace(amount=500, cost_basis=1.0, last_sale_price=1.1)
     context = types.SimpleNamespace(
@@ -1104,7 +1171,7 @@ def test_buy_submission_failure_does_not_create_guard(monkeypatch):
     assert pt.g.__pending_orders == {}
 
 
-def test_halt_recovery_only_merges_resumed_scores_and_executes_deferred_buys(monkeypatch):
+def test_halt_recovery_merges_resumed_scores_without_second_portfolio_pass(monkeypatch):
     pt.g = make_g(
         paused_pool_codes={"513100.SS"},
         execution_date=date(2026, 7, 13),
@@ -1144,6 +1211,177 @@ def test_halt_recovery_only_merges_resumed_scores_and_executes_deferred_buys(mon
     assert scored == [("513100.SS", date(2026, 7, 10))]
     assert executed == [["159985.SZ", "513100.SS"]]
     assert pt.g.paused_pool_codes == set()
+
+
+def test_halt_recovery_runs_atr_stop_for_resumed_holding(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(
+        paused_pool_codes={code},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        highest_since_buy={code: 10.0},
+        entry_atr={code: 0.5},
+        buy_date={code: date(2026, 6, 30)},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=10.0,
+                    last_sale_price=8.5,
+                )
+            }
+        ),
+    )
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 8.5)
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda candidate, end_date, return_reason=False: (
+            make_buy_score(candidate), None),
+    )
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda candidate, context, reason: sold.append((candidate, reason)) or True,
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert len(sold) == 1
+    assert sold[0][0] == code
+    assert sold[0][1].startswith("atr_stop ")
+
+
+def test_halt_recovery_runs_signal_sell_only_for_resumed_holding(monkeypatch):
+    resumed = "513100.SS"
+    already_open = "159985.SZ"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(
+        paused_pool_codes={resumed},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        deferred_scores=[make_sell_score(already_open)],
+        highest_since_buy={resumed: 10.0, already_open: 10.0},
+        entry_atr={resumed: 0.2, already_open: 0.2},
+        buy_date={
+            resumed: date(2026, 6, 30),
+            already_open: date(2026, 6, 30),
+        },
+    )
+    positions = {
+        resumed: types.SimpleNamespace(amount=100, cost_basis=10.0, last_sale_price=10.0),
+        already_open: types.SimpleNamespace(amount=100, cost_basis=10.0, last_sale_price=10.0),
+    }
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(positions=positions),
+    )
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 10.0)
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda candidate, end_date, return_reason=False: (
+            make_sell_score(candidate), None),
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda end_date, count: [
+            date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8),
+            date(2026, 7, 9), date(2026, 7, 10), today,
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda candidate, context, reason: sold.append((candidate, reason)) or True,
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert sold == [(resumed, "sell_score 35")]
+
+
+def test_halt_recovery_keeps_minimum_hold_protection_for_resumed_holding(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(
+        paused_pool_codes={code},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        highest_since_buy={code: 10.0},
+        entry_atr={code: 0.2},
+        buy_date={code: date(2026, 7, 10)},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=10.0,
+                    last_sale_price=10.0,
+                )
+            }
+        ),
+    )
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 10.0)
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda candidate, end_date, return_reason=False: (
+            make_sell_score(candidate), None),
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda end_date, count: [date(2026, 7, 10), today],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda candidate, context, reason: sold.append((candidate, reason)) or True,
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert sold == []
 
 
 def test_new_trading_day_clears_date_scoped_deferred_state(monkeypatch):
@@ -1640,3 +1878,5 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "PTrade" in notes
     assert "configuration lock" in notes
     assert "explicit state checkpoint" in notes
+    assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
+    assert "does not rerun already processed ETFs" in notes

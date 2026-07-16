@@ -1441,10 +1441,13 @@ def execute_sell(code, context, reason):
     return True
 
 
-def check_atr_stops(context):
+def check_atr_stops(context, codes=None):
     triggered = []
     today = _as_date(get_context_datetime(context))
+    allowed = None if codes is None else set(normalize_code(code) for code in codes)
     for code in current_hold_codes(context):
+        if allowed is not None and code not in allowed:
+            continue
         if code in g.unverified_positions:
             continue
         if g.buy_date.get(code) == today:
@@ -1464,6 +1467,48 @@ def check_atr_stops(context):
         if price <= stop_price:
             triggered.append((code, stop_price, price))
     return triggered
+
+
+def _get_signal_hold_days(today, params=None):
+    p = params or g.params
+    try:
+        return get_trade_days(
+            end_date=today,
+            count=max(2, int(p.get("min_signal_hold_days", 1)) + 1),
+        )
+    except Exception as exc:
+        log.warning("[min-hold] trade-day query failed; signal sells blocked: %s" % exc)
+        return None
+
+
+def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
+    code = normalize_code(code)
+    p = g.params
+    if g.sold_today.get(code) or code in getattr(g, "__pending_sells", {}):
+        return False
+    if code in g.unverified_positions:
+        log.error("[hold] %s risk state unverified; automatic signal sell blocked" % code)
+        return False
+    if is_paused(code):
+        log.info("[hold] %s paused, skip signal sell" % code)
+        return False
+    if not can_sell_with_verified_calendar(
+        g.buy_date.get(code),
+        today,
+        min_hold_days=p.get("min_signal_hold_days", 1),
+        trade_days=signal_hold_days,
+    ):
+        log.info("[hold] %s min-hold, skip signal sell" % code)
+        return False
+    if score["buy_score"] >= p["strong_buy_threshold"] and score["sell_score"] < p["sell_threshold"]:
+        log.info("[hold] %s strong buy_score %.0f sell_score %.0f" % (
+            code, score["buy_score"], score["sell_score"]))
+        return False
+    if should_force_sell(score, False, p):
+        return execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
+    if score["sell_score"] >= p["risk_tighten_threshold"]:
+        log.info("[risk-tighten] %s sell_score %.0f" % (code, score["sell_score"]))
+    return False
 
 
 def execute_buy_candidates(context, all_scores, today):
@@ -1638,40 +1683,12 @@ def do_trading(context):
                     format_indicator_values(item)))
 
     held = current_hold_codes(context)
-    try:
-        signal_hold_days = get_trade_days(
-            end_date=today,
-            count=max(2, int(p.get("min_signal_hold_days", 1)) + 1),
-        )
-    except Exception as exc:
-        signal_hold_days = None
-        log.warning("[min-hold] trade-day query failed; signal sells blocked: %s" % exc)
+    signal_hold_days = _get_signal_hold_days(today, p)
     for code in list(held):
         if code not in score_map:
             continue
-        if code in g.unverified_positions:
-            log.error("[hold] %s risk state unverified; automatic signal sell blocked" % code)
-            continue
-        if is_paused(code):
-            log.info("[hold] %s paused, skip signal sell" % code)
-            continue
-        score = score_map[code]
-        if not can_sell_with_verified_calendar(
-            g.buy_date.get(code),
-            today,
-            min_hold_days=p.get("min_signal_hold_days", 1),
-            trade_days=signal_hold_days,
-        ):
-            log.info("[hold] %s min-hold, skip signal sell" % code)
-            continue
-        if score["buy_score"] >= p["strong_buy_threshold"] and score["sell_score"] < p["sell_threshold"]:
-            log.info("[hold] %s strong buy_score %.0f sell_score %.0f" % (
-                code, score["buy_score"], score["sell_score"]))
-            continue
-        if should_force_sell(score, False, p):
-            execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
-        elif score["sell_score"] >= p["risk_tighten_threshold"]:
-            log.info("[risk-tighten] %s sell_score %.0f" % (code, score["sell_score"]))
+        _evaluate_signal_sell(
+            context, code, score_map[code], today, signal_hold_days)
 
     g.deferred_scores = list(all_scores)
     execute_buy_candidates(context, all_scores, today)
@@ -1730,6 +1747,10 @@ def halt_recover(context):
     still_paused = set(code for code in previous if is_paused(code))
     recovered = sorted(previous - still_paused)
     g.paused_pool_codes = still_paused
+    atr_stopped = set()
+    for code, stop_price, price in check_atr_stops(context, recovered):
+        if execute_sell(code, context, "atr_stop %.3f<=%.3f" % (price, stop_price)):
+            atr_stopped.add(code)
     scores = list(getattr(g, "deferred_scores", []))
     if recovered:
         by_code = {item["code"]: item for item in scores}
@@ -1742,7 +1763,14 @@ def halt_recover(context):
                 log.warning("[halt-recover] %s score unavailable: %s" % (code, reason))
         scores = sort_candidates(list(by_code.values()))
         g.deferred_scores = scores
-        log.info("[halt-recover] resumed=%s; evaluate deferred buys only" % ",".join(recovered))
+        resumed_holds = set(current_hold_codes(context)) & set(recovered)
+        signal_hold_days = _get_signal_hold_days(today, g.params) if resumed_holds else None
+        for code in sorted(resumed_holds - atr_stopped):
+            score = by_code.get(code)
+            if score is not None:
+                _evaluate_signal_sell(
+                    context, code, score, today, signal_hold_days)
+        log.info("[halt-recover] resumed=%s; evaluated deferred sells and buys" % ",".join(recovered))
     elif previous:
         log.info("[halt-recover] no tracked ETF resumed")
     if scores:

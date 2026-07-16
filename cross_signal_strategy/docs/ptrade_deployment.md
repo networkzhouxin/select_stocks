@@ -26,11 +26,15 @@ server restart.
 PTrade live mode registers three tasks, below the platform limit of five:
 
 - `09:35`: run the complete cross-signal strategy using T-1 daily bars.
-- `10:35`: recheck ETFs that were halted at 09:35, add T-1 scores only for
-  newly resumed ETFs, and execute deferred buys after earlier sells are
-  confirmed. It does not rerun portfolio-wide stop or signal-sell decisions.
-  Deferred scores are stored in pickle-eligible `g` fields with both the
-  execution date and T-1 signal date; a date mismatch blocks execution.
+- `10:35`: recheck ETFs that were halted at 09:35. For newly resumed ETFs,
+  resumed holdings repeat the 09:35 ATR-stop and signal-sell checks using the
+  current execution price and the same T-1 score, minimum-hold, trend, and
+  risk-state guards. Newly resumed non-holdings receive their missing T-1
+  score and join deferred buy execution after earlier sells are confirmed.
+  The recovery pass is limited to the ETFs delayed by the 09:35 halt.
+  It does not rerun already processed ETFs. Deferred scores are stored in
+  pickle-eligible `g` fields with both the execution date and T-1 signal date;
+  a date mismatch blocks execution.
 - `15:30`: update the highest closing price since entry and print the position
   risk summary.
 
