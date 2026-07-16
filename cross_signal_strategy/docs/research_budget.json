@@ -6,7 +6,7 @@
   },
   "validation_tuning_forbidden": true,
   "expected_failed_experiment_count": 49,
-  "max_total_open_experiments": 0,
+  "max_total_open_experiments": 1,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -116,6 +116,34 @@
       "rsi6_extension": 75,
       "ma20_extension": 0.1,
       "candidate_action": "reject_extended_breakout_only",
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
+    {
+      "key": "etf_share_flow_shadow",
+      "label": "User-authorized ETF shares-outstanding shadow diagnostic",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "A newly isolated primary-market shares-outstanding dataset provides an independent market-structure dimension not covered by price, volume, or technical-indicator enumeration. Exactly one sign-only five-observation attribution is authorized; it is observation-only and cannot change orders.",
+      "planned_experiment": "Compare frozen cross-v0.3.2 closed upward-cross entries after positive versus non-positive log shares-outstanding change over exactly five trading observations, using only eligible domestic ETFs and neutralizing QDII, insufficient history, and registered split crossings.",
+      "lookback_observations": 5,
+      "grouping": "positive_vs_non_positive",
+      "candidate_action": "observation_only",
+      "approved_root": "G:\\financial\\history_data\\cross_signal_flow_train_2018_2021",
+      "eligible_codes": [
+        "159915",
+        "512100",
+        "159928",
+        "518880",
+        "159985"
+      ],
+      "blocked_qdii_codes": [
+        "513100",
+        "513500",
+        "513880",
+        "513050"
+      ],
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true

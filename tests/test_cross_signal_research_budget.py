@@ -75,7 +75,8 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].planned_experiment is None
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
+    assert [family.key for family in open_families] == ["etf_share_flow_shadow"]
+    assert open_families[0].max_new_experiments == 1
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -161,6 +162,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     controlled_breakout.pop("planned_experiment", None)
+    share_flow = next(
+        item for item in payload["families"]
+        if item["key"] == "etf_share_flow_shadow"
+    )
+    share_flow.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    share_flow.pop("planned_experiment", None)
     market = next(item for item in payload["families"] if item["key"] == "market_breadth")
     market.update({
         "status": "open",
@@ -187,7 +197,51 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
+
+
+def test_etf_share_flow_shadow_budget_is_one_fixed_training_only_observation():
+    from cross_signal_strategy.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["etf_share_flow_shadow"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "etf_share_flow_shadow"
+    )
+
+    assert family.status == "open"
+    assert family.max_new_experiments == 1
+    assert raw["lookback_observations"] == 5
+    assert raw["grouping"] == "positive_vs_non_positive"
+    assert raw["candidate_action"] == "observation_only"
+    assert raw["approved_root"] == (
+        r"G:\financial\history_data\cross_signal_flow_train_2018_2021"
+    )
+    assert raw["eligible_codes"] == [
+        "159915", "512100", "159928", "518880", "159985",
+    ]
+    assert raw["blocked_qdii_codes"] == [
+        "513100", "513500", "513880", "513050",
+    ]
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=2,
+    ).allowed is False
 
 
 def test_user_authorized_controlled_breakout_budget_is_consumed_after_one_observation():
@@ -313,6 +367,8 @@ def test_readable_research_map_matches_the_structured_budget():
     assert "macd_half_cycle_user_authorized" in text
     assert "horizontal_price_structure" in text
     assert "controlled_breakout_anti_chase" in text
+    assert "etf_share_flow_shadow" in text
+    assert "positive_vs_non_positive" in text
     assert "RSI6 >= 75" in text
     assert "MA20" in text and "10%" in text
     assert "MACD(6,13,5)" in text
