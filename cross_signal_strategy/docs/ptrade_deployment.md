@@ -23,7 +23,7 @@ server restart.
 
 ## Live Schedule
 
-PTrade live mode registers three tasks, below the platform limit of five:
+PTrade live mode registers two tasks, below the platform limit of five:
 
 - `09:35`: run the complete cross-signal strategy using T-1 daily bars.
 - `10:35`: recheck ETFs that were halted at 09:35. For newly resumed ETFs,
@@ -35,8 +35,15 @@ PTrade live mode registers three tasks, below the platform limit of five:
   It does not rerun already processed ETFs. Deferred scores are stored in
   pickle-eligible `g` fields with both the execution date and T-1 signal date;
   a date mismatch blocks execution.
-- `15:30`: update the highest closing price since entry and print the position
-  risk summary.
+- `after_trading_end` (normally around `15:30`): use PTrade's official
+  lifecycle callback to reconcile state, update the highest closing price
+  since entry, print the position risk summary, and write the closing
+  checkpoint. This is not an additional `run_daily` thread task.
+
+Initialization must prove the runtime mode with `is_trade()` before applying
+mode-specific settings. Live mode receives only live platform parameters;
+backtest mode receives only commission and slippage settings. If mode detection
+raises, neither branch is configured and all `handle_data` trading is blocked.
 
 Daily PTrade backtests execute scheduled work at the platform close regardless
 of the requested time. That result must not be compared with the JoinQuant
@@ -46,6 +53,10 @@ of the requested time. That result must not be compared with the JoinQuant
 
 - Signals use pre-adjusted daily bars ending at the proven previous trading
   day. Zero-volume daily rows are removed to match JoinQuant `skip_paused=True`.
+- The `get_history` fallback accepts both the Python 3.11 long DataFrame and
+  legacy code-column shape. Its index must be provably date-like so rows can be
+  bounded by T-1; an integer, malformed, or otherwise unprovable index rejects
+  the entire response instead of allowing an unbounded history window.
 - The current-day snapshot price is used only for execution and ATR-stop
   evaluation. It never enters the T-1 signal calculation.
 - If both PTrade trading-calendar APIs fail, the strategy submits no orders. It
@@ -94,13 +105,14 @@ of the requested time. That result must not be compared with the JoinQuant
   on the current day. It allows a same-day restart to reconstruct filled
   quantity, weighted entry price, buy date, T-1 entry ATR, and the initial
   highest-price baseline without waiting for the next delivery statement.
-- `get_deliver()` is called only in `before_trading_start`, as required by the
-  official API. Records from `20100101` through the proven T-1 date are replayed
-  by signed quantity; the reconstructed open quantity must exactly match the
-  current broker position. The entry date must also reproduce an eligible
-  frozen `cross-v0.3.2` T-1 buy signal. Entry ATR is recalculated only on that
-  proven signal date, and the trailing peak is rebuilt from the actual weighted
-  fill price plus pre-adjusted non-zero-volume closing prices since entry.
+- `get_deliver()` is called only from documented lifecycle callbacks:
+  `before_trading_start` and `after_trading_end`. Records from `20100101`
+  through the proven T-1 date are replayed by signed quantity; the
+  reconstructed open quantity must exactly match the current broker position.
+  The entry date must also reproduce an eligible frozen `cross-v0.3.2` T-1 buy
+  signal. Entry ATR is recalculated only on that proven signal date, and the
+  trailing peak is rebuilt from the actual weighted fill price plus
+  pre-adjusted non-zero-volume closing prices since entry.
 - The adapter never uses the multi-factor fallback guesses such as
   `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
   Quantity mismatch, missing fill price, missing calendar evidence, ineligible
@@ -119,12 +131,16 @@ of the requested time. That result must not be compared with the JoinQuant
   simulation and live instances cannot overwrite each other's state. The file
   contains risk state, execution dates, deferred T-1 scores, and halt/recovery
   state, but deliberately excludes strategy parameters and the ETF pool.
-  If the account/trade identity cannot be obtained, checkpointing fails closed
-  instead of falling back to a shared filename.
-- State checkpoints run after the 09:35, 10:35, and 15:30 tasks and after
-  order/trade callbacks. On restart, the file is restored before broker order
-  reconciliation and position verification. A version mismatch or malformed
-  file is rejected instead of partially restoring state.
+  Both the account identity and trade name are mandatory. If either value
+  cannot be obtained, checkpointing fails closed instead of falling back to a
+  partial-identity or shared filename.
+  Its path is resolved and cached during initialize, the lifecycle phase where
+  the required account, trade, and research-path APIs are documented.
+- State checkpoints run after the 09:35 and 10:35 tasks, from
+  `after_trading_end`, and after order/trade callbacks. On restart, the file is
+  restored before broker order reconciliation and position verification. A
+  version mismatch or malformed file is rejected instead of partially
+  restoring state.
 
 ## Observation-Only IOPV Log
 
@@ -164,11 +180,12 @@ official authority for this port.
 1. Copy the complete PTrade deployment file into a new Guojin PTrade strategy.
 2. Run a PTrade backtest only to confirm that the script starts and completes
    without an API or syntax error.
-3. Use simulation trading before live capital. Confirm the 09:35, 10:35, and
-   15:30 logs, callback code format, halt status, partial fills, and rejected
-   orders. For every submitted QDII buy, confirm exactly one `[iopv-observe]`
-   line appears before the `[buy]` submission log; both `valid=True` and
-   `valid=False` must leave the submitted quantity unchanged.
+3. Use simulation trading before live capital. Confirm the 09:35 and 10:35
+   task logs plus the approximately 15:30 `after_trading_end` log, callback
+   code format, halt status, partial fills, and rejected orders. For every
+   submitted QDII buy, confirm exactly one `[iopv-observe]` line appears before
+   the `[buy]` submission log; both `valid=True` and `valid=False` must leave
+   the submitted quantity unchanged.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
    Verify that the explicit state checkpoint restores `execution_date`,
    `deferred_signal_date`, `deferred_scores`, `paused_pool_codes`, buy dates,

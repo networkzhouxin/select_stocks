@@ -57,7 +57,9 @@ def make_g(**overrides):
         "__pending_sells": {},
         "__order_state_unknown": False,
         "__is_live": True,
+        "__mode_verified": True,
         "__data": None,
+        "__state_path": None,
     }
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -273,6 +275,20 @@ def test_automatic_live_state_path_fails_closed_without_instance_identity(
     assert pt._live_state_path() is None
 
 
+@pytest.mark.parametrize(
+    ("user_name", "trade_name"),
+    [(None, "live"), ("account-a", None), ("", "live"), ("account-a", "")],
+)
+def test_automatic_live_state_path_requires_complete_instance_identity(
+    monkeypatch, tmp_path, user_name, trade_name
+):
+    monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "get_user_name", lambda: user_name, raising=False)
+    monkeypatch.setattr(pt, "get_trade_name", lambda: trade_name, raising=False)
+
+    assert pt._live_state_path() is None
+
+
 def state_parent(path):
     return str(Path(path).parent)
 
@@ -297,29 +313,52 @@ def test_malformed_live_state_is_rejected_without_partial_restore(tmp_path):
     assert pt.g.entry_atr == {"513100.SS": 0.05}
 
 
-def test_live_schedule_wrappers_checkpoint_state(monkeypatch):
+def test_live_state_io_uses_initialize_cached_path(monkeypatch, tmp_path):
+    state_path = tmp_path / "cached-cross-signal-state.pkl"
+    pt.g = make_g(__state_path=str(state_path))
+    monkeypatch.setattr(
+        pt,
+        "_live_state_path",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("platform path APIs must not run after initialize")
+        ),
+    )
+
+    assert pt._persist_live_state() is True
+    pt.g.highest_since_buy = {"513100.SS": 9.9}
+    assert pt._restore_live_state() is True
+    assert pt.g.highest_since_buy == {}
+
+
+def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monkeypatch):
     calls = []
     monkeypatch.setattr(pt, "do_trading", lambda context: calls.append("trade"))
     monkeypatch.setattr(pt, "halt_recover", lambda context: calls.append("recover"))
     monkeypatch.setattr(pt, "after_close", lambda context: calls.append("close"))
     monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: calls.append(("state-recovery", allow_deliver)),
+    )
+    monkeypatch.setattr(
         pt, "_persist_live_state", lambda: calls.append("persist") or True,
         raising=False,
     )
-    pt.g = make_g()
+    pt.g = make_g(sold_today={"513100.SS": True})
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={})
     )
 
     pt._do_trading_wrapper(context)
     pt._halt_recover_wrapper(context)
-    pt._after_close_wrapper(context)
+    pt.after_trading_end(context, data=None)
 
     assert calls == [
         "trade", "persist",
         "recover", "persist",
-        "close", "persist",
+        ("state-recovery", True), "close", "persist",
     ]
+    assert pt.g.sold_today == {}
 
 
 def test_order_and_trade_callbacks_checkpoint_state(monkeypatch):
@@ -429,6 +468,28 @@ def test_prev_trade_date_does_not_guess_weekdays_when_apis_fail(monkeypatch):
     assert pt.get_prev_trade_date(context) is None
 
 
+def test_ptrade_calendar_queries_use_documented_string_dates(monkeypatch):
+    captured_end_dates = []
+    pt.g = make_g()
+
+    def fake_get_trade_days(**kwargs):
+        captured_end_dates.append(kwargs.get("end_date"))
+        return [date(2026, 7, 10), date(2026, 7, 13)]
+
+    monkeypatch.setattr(pt, "get_trade_days", fake_get_trade_days, raising=False)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35))
+    )
+
+    assert pt.get_prev_trade_date(context) == date(2026, 7, 10)
+    assert pt._get_signal_hold_days(date(2026, 7, 13)) == [
+        date(2026, 7, 10),
+        date(2026, 7, 13),
+    ]
+    assert pt._previous_trade_date_before(date(2026, 7, 13)) == date(2026, 7, 10)
+    assert captured_end_dates == ["20260713", "20260713", "20260713"]
+
+
 def test_signal_sell_requires_verified_trading_calendar_for_five_day_hold():
     buy_date = date(2026, 7, 10)
     today = date(2026, 7, 15)
@@ -471,6 +532,112 @@ def test_daily_signal_loader_uses_pre_adjusted_data_ending_at_t_minus_one(monkey
     assert captured["end_date"] == "2021-12-30"
     assert captured["frequency"] == "1d"
     assert captured["fq"] == "pre"
+
+
+def test_signal_loader_supports_python311_long_get_history_fallback(monkeypatch):
+    code = "510300.SS"
+    index = pt.pd.to_datetime(["2026-07-09", "2026-07-10"])
+    values = {
+        "open": [4.0, 4.1],
+        "high": [4.2, 4.3],
+        "low": [3.9, 4.0],
+        "close": [4.1, 4.2],
+        "volume": [1000.0, 1200.0],
+    }
+
+    def fail_get_price(*args, **kwargs):
+        raise RuntimeError("force documented get_history fallback")
+
+    def fake_get_history(count, frequency, field, security_list, fq, include, **kwargs):
+        return pt.pd.DataFrame(
+            {"code": [code, code], field: values[field]},
+            index=index,
+        )
+
+    monkeypatch.setattr(pt, "get_price", fail_get_price, raising=False)
+    monkeypatch.setattr(pt, "get_history", fake_get_history, raising=False)
+
+    frame = pt.get_price_data(code, date(2026, 7, 10), 2)
+
+    assert frame is not None
+    assert list(frame.columns) == ["open", "close", "high", "low", "volume"]
+    assert frame.index.tolist() == index.tolist()
+    assert frame["close"].tolist() == [4.1, 4.2]
+
+
+def test_signal_loader_supports_legacy_wide_get_history_fallback(monkeypatch):
+    code = "510300.SS"
+    index = pt.pd.to_datetime(["2026-07-09", "2026-07-10"])
+    values = {
+        "open": [4.0, 4.1],
+        "high": [4.2, 4.3],
+        "low": [3.9, 4.0],
+        "close": [4.1, 4.2],
+        "volume": [1000.0, 1200.0],
+    }
+
+    monkeypatch.setattr(
+        pt,
+        "get_price",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fallback")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_history",
+        lambda count, frequency, field, security_list, fq, include, **kwargs:
+            pt.pd.DataFrame({code: values[field]}, index=index),
+        raising=False,
+    )
+
+    frame = pt.get_price_data(code, date(2026, 7, 10), 2)
+
+    assert frame is not None
+    assert frame["close"].tolist() == [4.1, 4.2]
+
+
+def test_signal_loader_rejects_history_without_provable_date_index(monkeypatch):
+    code = "510300.SS"
+    values = {
+        "open": [4.0, 4.1],
+        "high": [4.2, 4.3],
+        "low": [3.9, 4.0],
+        "close": [4.1, 4.2],
+        "volume": [1000.0, 1200.0],
+    }
+
+    monkeypatch.setattr(
+        pt,
+        "get_price",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fallback")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_history",
+        lambda count, frequency, field, security_list, fq, include, **kwargs:
+            pt.pd.DataFrame(
+                {"code": [code, code], field: values[field]}
+            ),
+        raising=False,
+    )
+
+    assert pt.get_price_data(code, date(2026, 7, 10), 2) is None
+
+
+def test_backtest_current_price_supports_python311_long_history_fallback(monkeypatch):
+    code = "510300.SS"
+    pt.g = make_g(__is_live=False, __data=None)
+
+    def fake_get_history(count, frequency, field, security_list, fq, include, **kwargs):
+        return pt.pd.DataFrame(
+            {"code": [code], "close": [4.23]},
+            index=pt.pd.to_datetime(["2026-07-10"]),
+        )
+
+    monkeypatch.setattr(pt, "get_history", fake_get_history, raising=False)
+
+    assert pt.get_current_price(code) == pytest.approx(4.23)
 
 
 def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
@@ -1830,10 +1997,24 @@ def test_live_recovery_rejects_malformed_or_nonfinite_risk_state(atr, highest):
 def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     scheduled = []
     platform_parameters = []
+    commission_calls = []
+    slippage_calls = []
+    state_path_calls = []
+    cached_state_path = "C:/ptrade/cross-signal-state.pkl"
     pt.g = types.SimpleNamespace()
     monkeypatch.setattr(pt, "set_benchmark", lambda *args, **kwargs: None, raising=False)
-    monkeypatch.setattr(pt, "set_commission", lambda *args, **kwargs: None, raising=False)
-    monkeypatch.setattr(pt, "set_slippage", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "set_commission",
+        lambda *args, **kwargs: commission_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "set_slippage",
+        lambda *args, **kwargs: slippage_calls.append((args, kwargs)),
+        raising=False,
+    )
     monkeypatch.setattr(pt, "set_universe", lambda *args, **kwargs: None, raising=False)
     monkeypatch.setattr(
         pt,
@@ -1842,6 +2023,11 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(pt, "is_trade", lambda: True, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "_live_state_path",
+        lambda: state_path_calls.append(True) or cached_state_path,
+    )
     monkeypatch.setattr(
         pt,
         "run_daily",
@@ -1854,7 +2040,6 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     assert scheduled == [
         ("_do_trading_wrapper", "09:35"),
         ("_halt_recover_wrapper", "10:35"),
-        ("_after_close_wrapper", "15:30"),
     ]
     assert pt.g.params == jq.get_default_params()
     assert not hasattr(pt.g, "base_weights")
@@ -1863,6 +2048,107 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
         "not_restart_trade": "0",
         "server_restart_not_do_before": "0",
     }]
+    assert commission_calls == []
+    assert slippage_calls == []
+    assert state_path_calls == [True]
+    assert pt.g.__state_path == cached_state_path
+    assert pt.g.__mode_verified is True
+
+
+def test_initialize_backtest_uses_only_backtest_cost_configuration(monkeypatch):
+    scheduled = []
+    platform_parameters = []
+    commission_calls = []
+    slippage_calls = []
+    pt.g = types.SimpleNamespace()
+    monkeypatch.setattr(pt, "set_benchmark", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "set_commission",
+        lambda *args, **kwargs: commission_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "set_slippage",
+        lambda *args, **kwargs: slippage_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "set_universe", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "set_parameters",
+        lambda **kwargs: platform_parameters.append(kwargs),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "is_trade", lambda: False, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "run_daily",
+        lambda context, func, time: scheduled.append((func.__name__, time)),
+        raising=False,
+    )
+
+    pt.initialize(types.SimpleNamespace())
+
+    assert scheduled == []
+    assert platform_parameters == []
+    assert len(commission_calls) == 1
+    assert len(slippage_calls) == 1
+    assert pt.g.__mode_verified is True
+
+
+def test_initialize_mode_detection_failure_blocks_all_trading(monkeypatch):
+    scheduled = []
+    platform_parameters = []
+    commission_calls = []
+    slippage_calls = []
+    trading_calls = []
+    pt.g = types.SimpleNamespace()
+    monkeypatch.setattr(pt, "set_benchmark", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "is_trade",
+        lambda: (_ for _ in ()).throw(RuntimeError("mode unavailable")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "set_parameters",
+        lambda **kwargs: platform_parameters.append(kwargs),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "set_commission",
+        lambda *args, **kwargs: commission_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "set_slippage",
+        lambda *args, **kwargs: slippage_calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "set_universe", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "run_daily",
+        lambda context, func, time: scheduled.append((func.__name__, time)),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "do_trading", lambda context: trading_calls.append(True))
+
+    context = types.SimpleNamespace()
+    pt.initialize(context)
+    pt.handle_data(context, data=object())
+
+    assert pt.g.__mode_verified is False
+    assert scheduled == []
+    assert platform_parameters == []
+    assert commission_calls == []
+    assert slippage_calls == []
+    assert trading_calls == []
 
 
 def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
@@ -1878,5 +2164,8 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "PTrade" in notes
     assert "configuration lock" in notes
     assert "explicit state checkpoint" in notes
+    assert "two tasks" in notes
+    assert "after_trading_end" in notes
+    assert "cached during initialize" in notes
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes

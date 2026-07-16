@@ -127,23 +127,31 @@ def _live_state_path(path=None):
     for getter_name in ("get_user_name", "get_trade_name"):
         getter = globals().get(getter_name)
         if getter is None:
-            continue
+            log.error("[state] %s unavailable; checkpoint disabled" % getter_name)
+            return None
         try:
             value = getter()
-            if value not in (None, ""):
-                identity.append(str(value))
         except Exception as exc:
-            log.warning("[state] %s unavailable: %s" % (getter_name, exc))
-    if not identity:
-        log.error("[state] account/trade identity unavailable; checkpoint disabled")
-        return None
+            log.error("[state] %s unavailable; checkpoint disabled: %s" % (
+                getter_name, exc))
+            return None
+        if value in (None, ""):
+            log.error("[state] %s is empty; checkpoint disabled" % getter_name)
+            return None
+        identity.append(str(value))
     identity_text = "|".join(identity)
     identity_hash = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:12]
     return os.path.join(str(root), LIVE_STATE_FILENAME % identity_hash)
 
 
+def _cached_live_state_path(path=None):
+    if path is not None:
+        return os.fspath(path)
+    return getattr(g, "__state_path", None)
+
+
 def _persist_live_state(path=None):
-    state_path = _live_state_path(path)
+    state_path = _cached_live_state_path(path)
     if state_path is None:
         return False
     payload = {
@@ -202,7 +210,7 @@ def _validated_live_state(state):
 
 
 def _restore_live_state(path=None):
-    state_path = _live_state_path(path)
+    state_path = _cached_live_state_path(path)
     if state_path is None or not os.path.exists(state_path):
         return False
     try:
@@ -338,18 +346,27 @@ def format_cross_flags(item):
 def initialize(context):
     set_benchmark("000300.SS")
     try:
-        set_parameters(
-            receive_cancel_response="1",
-            not_restart_trade="0",
-            server_restart_not_do_before="0",
-        )
+        is_live = bool(is_trade())
+        mode_verified = True
     except Exception as exc:
-        log.warning("[initialize] platform parameter setup failed: %s" % exc)
-    try:
-        set_commission(commission_ratio=0.0003, min_commission=5.0, type="ETF")
-        set_slippage(slippage=0.001)
-    except Exception as exc:
-        log.warning("[initialize] commission/slippage setup failed: %s" % exc)
+        is_live = False
+        mode_verified = False
+        log.error("[initialize] trade-mode detection failed; trading disabled: %s" % exc)
+    if mode_verified and is_live:
+        try:
+            set_parameters(
+                receive_cancel_response="1",
+                not_restart_trade="0",
+                server_restart_not_do_before="0",
+            )
+        except Exception as exc:
+            log.warning("[initialize] platform parameter setup failed: %s" % exc)
+    elif mode_verified:
+        try:
+            set_commission(commission_ratio=0.0003, min_commission=5.0, type="ETF")
+            set_slippage(slippage=0.001)
+        except Exception as exc:
+            log.warning("[initialize] commission/slippage setup failed: %s" % exc)
 
     g.params = get_default_params()
     g.etf_pool = get_default_etf_pool()
@@ -368,21 +385,18 @@ def initialize(context):
     g.__pending_sells = {}
     g.__order_state_unknown = False
     g.__data = None
+    g.__is_live = is_live
+    g.__mode_verified = mode_verified
+    g.__state_path = _live_state_path() if mode_verified and is_live else None
 
     try:
         set_universe(g.etf_pool)
     except Exception as exc:
         log.warning("[initialize] set_universe failed: %s" % exc)
 
-    try:
-        g.__is_live = bool(is_trade())
-    except Exception:
-        g.__is_live = False
-
     if g.__is_live:
         run_daily(context, _do_trading_wrapper, time="09:35")
         run_daily(context, _halt_recover_wrapper, time="10:35")
-        run_daily(context, _after_close_wrapper, time="15:30")
 
     log.info("[%s] initialized: max_hold=%d base_ratio=%.2f min_signal_hold=%d" % (
         STRATEGY_VERSION,
@@ -396,6 +410,9 @@ def initialize(context):
 def handle_data(context, data):
     """PTrade backtest entry; daily backtests execute at the platform close."""
     g.__data = data
+    if not getattr(g, "__mode_verified", False):
+        log.error("[handle-data] trade mode unverified; trading blocked")
+        return
     if g.__is_live:
         return
     do_trading(context)
@@ -430,8 +447,10 @@ def before_trading_start(context, data):
 
 
 def after_trading_end(context, data):
-    if not g.__is_live:
-        after_close(context)
+    g.__data = data
+    if g.__is_live:
+        _recover_live_state_with_available_sources(context, allow_deliver=True)
+    after_close(context)
     g.sold_today = {}
     if g.__is_live:
         _persist_live_state()
@@ -444,13 +463,6 @@ def _do_trading_wrapper(context):
 
 def _halt_recover_wrapper(context):
     halt_recover(context)
-    _persist_live_state()
-
-
-def _after_close_wrapper(context):
-    _recover_live_state_with_available_sources(context, allow_deliver=False)
-    after_close(context)
-    g.sold_today = {}
     _persist_live_state()
 
 
@@ -859,6 +871,11 @@ def _as_date(value):
         return None
 
 
+def _api_date_text(value):
+    trade_date = _as_date(value)
+    return trade_date.strftime("%Y%m%d") if trade_date is not None else None
+
+
 def _previous_day_from_result(result, today):
     if result is None:
         return None
@@ -885,7 +902,7 @@ def get_prev_trade_date(context):
         log.error("[trade-date] context current_dt unavailable; trading aborted")
         return None
     try:
-        result = get_trade_days(end_date=today, count=2)
+        result = get_trade_days(end_date=_api_date_text(today), count=2)
         prev = _previous_day_from_result(result, today)
         if prev is not None:
             return prev
@@ -935,21 +952,74 @@ def get_price_data(code, end_date, count):
                 fq="pre",
                 include=False,
             )
-            if isinstance(raw, pd.DataFrame):
-                series[field] = raw[code]
-            elif isinstance(raw, dict):
-                series[field] = pd.Series(raw[code])
-            else:
+            values = _extract_history_field_series(raw, code, field)
+            if values is None:
                 raise ValueError("unsupported get_history result")
+            series[field] = values
         frame = pd.DataFrame(series)
-        try:
-            frame = frame[frame.index <= pd.Timestamp(end_date_str)]
-        except Exception:
-            pass
+        frame = _history_frame_through_end_date(frame, end_date_str)
         return frame[frame["volume"] > 0]
     except Exception as exc:
         log.error("[daily-data] unavailable %s: %s" % (code, exc))
         return None
+
+
+def _extract_history_field_series(raw, code, field):
+    """Normalize documented Python 3.11 and legacy PTrade history shapes."""
+    normalized_code = normalize_code(code)
+    if isinstance(raw, pd.Series):
+        return raw.copy()
+    if isinstance(raw, pd.DataFrame):
+        if field in raw.columns:
+            selected = raw
+            if "code" in selected.columns:
+                selected = selected[
+                    selected["code"].map(normalize_code) == normalized_code
+                ]
+            return selected[field].copy()
+        for column in raw.columns:
+            if isinstance(column, tuple):
+                parts = [str(part) for part in column]
+                if field in parts and any(
+                    normalize_code(part) == normalized_code for part in parts
+                ):
+                    return raw[column].copy()
+            elif normalize_code(column) == normalized_code:
+                return raw[column].copy()
+        return None
+    if isinstance(raw, dict):
+        for key, values in raw.items():
+            if normalize_code(key) != normalized_code:
+                continue
+            if isinstance(values, pd.DataFrame):
+                if field not in values.columns:
+                    return None
+                return values[field].copy()
+            if isinstance(values, pd.Series):
+                return values.copy()
+            return pd.Series(values)
+    return None
+
+
+def _history_frame_through_end_date(frame, end_date):
+    index = frame.index
+    if isinstance(index, pd.DatetimeIndex):
+        timestamps = index
+    else:
+        values = list(index)
+        if any(isinstance(value, (int, float, np.integer, np.floating)) for value in values):
+            raise ValueError("history index is not date-like")
+        if any(_as_date(value) is None for value in values):
+            raise ValueError("history index contains an unprovable date")
+        timestamps = pd.DatetimeIndex(pd.to_datetime(values, errors="coerce"))
+    if timestamps.isna().any():
+        raise ValueError("history index contains an invalid date")
+    if timestamps.tz is not None:
+        timestamps = timestamps.tz_localize(None)
+    end_timestamp = pd.Timestamp(end_date)
+    result = frame.copy()
+    result.index = timestamps
+    return result[result.index <= end_timestamp]
 
 
 def build_signal_snapshot(df, params):
@@ -1341,7 +1411,10 @@ def get_current_price(code):
             pass
     try:
         raw = get_history(1, "1d", "close", [code], fq="pre", include=True)
-        price = float(raw[code].iloc[-1])
+        values = _extract_history_field_series(raw, code, "close")
+        if values is None or len(values) == 0:
+            return None
+        price = float(values.iloc[-1])
         return price if price > 0 else None
     except Exception:
         return None
@@ -1473,7 +1546,7 @@ def _get_signal_hold_days(today, params=None):
     p = params or g.params
     try:
         return get_trade_days(
-            end_date=today,
+            end_date=_api_date_text(today),
             count=max(2, int(p.get("min_signal_hold_days", 1)) + 1),
         )
     except Exception as exc:
@@ -1807,7 +1880,7 @@ def _recover_live_state_with_available_sources(context, allow_deliver):
 
 
 def _fetch_deliver_records(prev_date):
-    """Fetch broker delivery records once, only from the supported pre-open phase."""
+    """Fetch broker delivery records only from documented lifecycle callbacks."""
     end_date = _as_date(prev_date)
     if end_date is None:
         return []
@@ -1983,7 +2056,7 @@ def _previous_trade_date_before(value):
     if trade_date is None:
         return None
     try:
-        result = get_trade_days(end_date=trade_date, count=2)
+        result = get_trade_days(end_date=_api_date_text(trade_date), count=2)
         previous = _previous_day_from_result(result, trade_date)
         if previous is not None:
             return previous
