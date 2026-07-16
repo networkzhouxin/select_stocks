@@ -125,22 +125,40 @@ of the requested time. That result must not be compared with the JoinQuant
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
-- An explicit state checkpoint is written atomically to
-  `cross_signal_v032_live_state_<identity>.pkl` under PTrade's research path.
-  The anonymous identity is derived from the account and trade name so
-  simulation and live instances cannot overwrite each other's state. The file
-  contains risk state, execution dates, deferred T-1 scores, and halt/recovery
-  state, but deliberately excludes strategy parameters and the ETF pool.
-  Both the account identity and trade name are mandatory. If either value
-  cannot be obtained, checkpointing fails closed instead of falling back to a
-  partial-identity or shared filename.
-  Its path is resolved and cached during initialize, the lifecycle phase where
-  the required account, trade, and research-path APIs are documented.
+- The explicit state checkpoint uses two independent files, `.pkl.a` and `.pkl.b`,
+  under PTrade's research path. Each envelope contains a separate
+  state-schema version, a monotonically increasing generation, the producer
+  strategy version, a SHA256 checksum, and a protocol-4 pickle payload. Each
+  save overwrites only the older valid slot; no `os` call or rename operation
+  is required.
+- Restore validates both slots and selects the highest valid generation. If the
+  newest slot is truncated, malformed, or has a checksum mismatch, the previous
+  valid slot remains available. A producer strategy-version difference is
+  accepted only when the state-schema version is supported. An unknown schema
+  or missing required field is rejected without partially applying state.
+- The anonymous checkpoint identity is derived from the account and trade name
+  so simulation and live instances cannot overwrite each other's state. The
+  payload contains risk state, execution dates, deferred T-1 scores, and
+  halt/recovery state, but deliberately excludes strategy parameters and the
+  ETF pool. Both identity values are mandatory; otherwise checkpointing fails
+  closed instead of using a shared filename. The path is resolved and cached during initialize,
+  where these APIs are documented to be available.
+- The old `cross_signal_v032_live_state_<identity>.pkl` remains a read-only
+  legacy single-file checkpoint. It is considered only when neither dual slot
+  is valid. A successful legacy restore is immediately migrated by writing a
+  new A/B checkpoint; the legacy file is never deleted by the strategy.
 - State checkpoints run after the 09:35 and 10:35 tasks, from
-  `after_trading_end`, and after order/trade callbacks. On restart, the file is
-  restored before broker order reconciliation and position verification. A
-  version mismatch or malformed file is rejected instead of partially
-  restoring state.
+  `after_trading_end`, and after order/trade callbacks. On restart, state is
+  restored before broker order reconciliation and position verification.
+- After reconciliation, one `[state-recovery]` checkpoint line and one line per
+  held ETF report quantity, broker cost, buy date, entry ATR, highest close,
+  `VERIFIED`/`UNVERIFIED` status, and evidence source. Valid sources are
+  `checkpoint-a`, `checkpoint-b`, `legacy`, `ptrade-g`, `get-trades`,
+  `get-deliver`, and `unverified`.
+- An unverified holding continues to block its own automatic ATR and signal
+  exits. In addition, all new buys are blocked while any currently held ETF is
+  unverified. Verified holdings retain their normal exit behavior, so recovery
+  uncertainty cannot expand exposure or disable unrelated risk reduction.
 
 ## Observation-Only IOPV Log
 
@@ -187,15 +205,20 @@ official authority for this port.
    the `[buy]` submission log; both `valid=True` and `valid=False` must leave
    the submitted quantity unchanged.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
-   Verify that the explicit state checkpoint restores `execution_date`,
-   `deferred_signal_date`, `deferred_scores`, `paused_pool_codes`, buy dates,
-   entry ATR values, and trailing highs. Confirm that the configuration lock
-   still reports the formal parameters and nine-ETF pool after restoration.
-5. Delete only a simulation copy of the explicit state checkpoint after a
-   filled same-day buy, restart, and verify that `get_trades()` reconstructs
-   the exact fill price/date/ATR. On a later day, test delivery reconstruction
-   only in an account with no manual or second-strategy trades in the pool.
-6. Confirm broker-side ETF commission and minimum-fee settings separately.
+   Verify that an `[state-recovery] checkpoint` line identifies the selected
+   slot and generation, and every held ETF is listed with the expected source
+   and `VERIFIED` status. Confirm that `execution_date`, deferred state, buy
+   dates, entry ATR values, and trailing highs are unchanged.
+5. In simulation only, back up and then truncate the newest A/B slot. Restart
+   and verify that the log selects the older valid generation. Never perform
+   this drill on the live checkpoint files. A checksum/schema error or any
+   `UNVERIFIED` line requires operator review before enabling live capital.
+6. After a filled same-day simulation buy, make both A/B slots unavailable and
+   restart. Verify that `get_trades()` reconstructs the exact fill
+   price/date/ATR and that new buys remain blocked until every existing holding
+   is verified. Test `get_deliver()` reconstruction only in an account with no
+   manual or second-strategy trades in the ETF pool.
+7. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
-7. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
+8. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
    reference for future parity reviews.

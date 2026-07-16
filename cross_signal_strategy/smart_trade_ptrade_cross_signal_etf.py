@@ -496,6 +496,9 @@ def initialize(context):
     g.__is_live = is_live
     g.__mode_verified = mode_verified
     g.__state_path = _live_state_path() if mode_verified and is_live else None
+    g.__state_restore_source = None
+    g.__state_restore_generation = None
+    g.__position_recovery_source = {}
 
     try:
         set_universe(g.etf_pool)
@@ -530,6 +533,7 @@ def before_trading_start(context, data):
     g.__data = data
     g.__last_snapshot = {}
     if g.__is_live:
+        g.__position_recovery_source = {}
         _restore_live_state()
     _lock_frozen_business_config()
     today = _as_date(get_context_datetime(context))
@@ -546,6 +550,7 @@ def before_trading_start(context, data):
     if g.__is_live:
         _reconcile_open_orders(context)
         _recover_live_state_with_available_sources(context, allow_deliver=True)
+        _log_live_recovery_summary(context)
     else:
         g.__pending_orders = {}
         g.__pending_sells = {}
@@ -1387,6 +1392,9 @@ def _clear_position_state(code):
     g.buy_date.pop(code, None)
     g.last_scores.pop(code, None)
     g.unverified_positions.discard(code)
+    source_map = getattr(g, "__position_recovery_source", {})
+    if isinstance(source_map, dict):
+        source_map.pop(code, None)
 
 
 def _snapshot_record(raw, code):
@@ -1702,6 +1710,11 @@ def execute_buy_candidates(context, all_scores, today):
         return 0
 
     held = set(current_hold_codes(context))
+    unverified_held = held & set(getattr(g, "unverified_positions", set()))
+    if unverified_held:
+        log.error("[buy] unverified held positions=%s; all new buys blocked" % (
+            ",".join(sorted(unverified_held))))
+        return 0
     pending_buys = set(getattr(g, "__pending_orders", {}).keys())
     slots = g.params["max_hold"] - len(held | pending_buys)
     if slots <= 0:
@@ -2007,7 +2020,13 @@ def _fetch_deliver_records(prev_date):
         return []
     log.info("[recovery] delivery records=%d range=%s~%s" % (
         len(records), DELIVER_RECOVERY_START_DATE, end_text))
-    return list(records)
+    tagged = []
+    for record in records:
+        if isinstance(record, dict):
+            record = dict(record)
+            record["_recovery_source"] = "get-deliver"
+        tagged.append(record)
+    return tagged
 
 
 def _fetch_current_strategy_trades():
@@ -2051,6 +2070,7 @@ def _fetch_current_strategy_trades():
                 "init_date": trade_time.strftime("%Y%m%d"),
                 "business_time": trade_time.strftime("%H%M%S"),
                 "order_id": str(order_id),
+                "_recovery_source": "get-trades",
             })
     log.info("[recovery] current strategy trades=%d" % len(records))
     return records
@@ -2125,6 +2145,7 @@ def _reconstruct_open_position(records, code, broker_amount):
     buy_date = None
     entry_quantity = 0.0
     entry_value = 0.0
+    entry_source = None
     tolerance = max(1e-6, expected * 1e-8)
     for record in sorted(matched, key=_delivery_sort_key):
         direction = _delivery_direction(record)
@@ -2134,6 +2155,7 @@ def _reconstruct_open_position(records, code, broker_amount):
                 buy_date = _delivery_trade_date(record)
                 entry_quantity = 0.0
                 entry_value = 0.0
+                entry_source = record.get("_recovery_source")
             price = _safe_float(record.get("business_price"), np.nan)
             if _is_positive_finite(price):
                 entry_quantity += quantity
@@ -2148,6 +2170,7 @@ def _reconstruct_open_position(records, code, broker_amount):
                 buy_date = None
                 entry_quantity = 0.0
                 entry_value = 0.0
+                entry_source = None
 
     if buy_date is None or abs(amount - expected) > tolerance:
         return None
@@ -2156,6 +2179,7 @@ def _reconstruct_open_position(records, code, broker_amount):
         "buy_date": buy_date,
         "amount": amount,
         "entry_price": entry_price,
+        "recovery_source": entry_source,
     }
 
 
@@ -2261,6 +2285,11 @@ def _recover_position_from_broker(code, pos, records, prev_date):
     g.buy_date[code] = buy_date
     g.entry_atr[code] = float(atr)
     g.highest_since_buy[code] = highest
+    source_map = getattr(g, "__position_recovery_source", None)
+    if not isinstance(source_map, dict):
+        source_map = {}
+        g.__position_recovery_source = source_map
+    source_map[code] = open_position.get("recovery_source") or "get-deliver"
     log.warning(
         "[recovery] %s rebuilt from broker delivery: buy_date=%s "
         "signal_date=%s ATR=%.6f highest_close=%.6f cost=%.6f" % (
@@ -2276,6 +2305,11 @@ def _prune_closed_position_state(held):
             if normalize_code(code) not in held:
                 mapping.pop(code, None)
     g.unverified_positions.intersection_update(held)
+    source_map = getattr(g, "__position_recovery_source", {})
+    if isinstance(source_map, dict):
+        for code in list(source_map.keys()):
+            if normalize_code(code) not in held:
+                source_map.pop(code, None)
 
 
 def recover_live_state(
@@ -2283,9 +2317,22 @@ def recover_live_state(
     """Verify persisted state, then rebuild only facts provable from broker data."""
     held = set(current_hold_codes(context))
     _prune_closed_position_state(held)
+    source_map = getattr(g, "__position_recovery_source", None)
+    if not isinstance(source_map, dict):
+        source_map = {}
+        g.__position_recovery_source = source_map
     recovery_records = None
     if deliver_records is not None or current_trade_records is not None:
-        recovery_records = list(deliver_records or []) + list(current_trade_records or [])
+        recovery_records = []
+        for records, source in (
+            (deliver_records, "get-deliver"),
+            (current_trade_records, "get-trades"),
+        ):
+            for record in records or []:
+                if isinstance(record, dict):
+                    record = dict(record)
+                    record.setdefault("_recovery_source", source)
+                recovery_records.append(record)
     for code in held:
         pos = _get_position(context, code)
         buy_date = _as_date(g.buy_date.get(code))
@@ -2302,12 +2349,62 @@ def recover_live_state(
             )
         if complete:
             g.unverified_positions.discard(code)
+            if code not in source_map:
+                source_map[code] = (
+                    getattr(g, "__state_restore_source", None) or "ptrade-g")
         else:
             g.unverified_positions.add(code)
+            source_map[code] = "unverified"
             log.error(
                 "[recovery] %s historical buy date/ATR/high or broker cost "
                 "cannot be proved; automatic exits blocked" % code
             )
+
+
+def _log_live_recovery_summary(context):
+    source = getattr(g, "__state_restore_source", None) or "ptrade-g"
+    generation = getattr(g, "__state_restore_generation", None)
+    generation_text = generation if generation is not None else "n/a"
+    log.info("[state-recovery] checkpoint source=%s generation=%s" % (
+        source, generation_text))
+
+    source_map = getattr(g, "__position_recovery_source", {})
+    if not isinstance(source_map, dict):
+        source_map = {}
+    unverified = set(getattr(g, "unverified_positions", set()))
+    for code in sorted(current_hold_codes(context)):
+        pos = _get_position(context, code)
+        amount = _pos_amount(pos) if pos is not None else 0.0
+        cost = _pos_cost(pos) if pos is not None else np.nan
+        buy_date = _as_date(getattr(g, "buy_date", {}).get(code))
+        atr = _safe_float(getattr(g, "entry_atr", {}).get(code), np.nan)
+        highest = _safe_float(
+            getattr(g, "highest_since_buy", {}).get(code), np.nan)
+        verified = (
+            code not in unverified and
+            pos is not None and
+            _is_positive_finite(cost) and
+            buy_date is not None and
+            _is_positive_finite(atr) and
+            _is_positive_finite(highest)
+        )
+        status = "VERIFIED" if verified else "UNVERIFIED"
+        position_source = source_map.get(code)
+        if not position_source:
+            position_source = source if verified else "unverified"
+        log.info(
+            "[state-recovery] code=%s amount=%.0f cost=%.6f buy_date=%s "
+            "atr=%.6f high=%.6f status=%s source=%s" % (
+                code,
+                amount,
+                cost,
+                buy_date.isoformat() if buy_date is not None else "None",
+                atr,
+                highest,
+                status,
+                position_source,
+            )
+        )
 
 
 def _safe_float(value, default=0.0):
@@ -2352,8 +2449,18 @@ def _apply_buy_fill_state(code, pending):
     if verified:
         g.highest_since_buy[code] = average
         g.unverified_positions.discard(code)
+        source_map = getattr(g, "__position_recovery_source", None)
+        if not isinstance(source_map, dict):
+            source_map = {}
+            g.__position_recovery_source = source_map
+        source_map[code] = "get-trades"
     else:
         g.unverified_positions.add(code)
+        source_map = getattr(g, "__position_recovery_source", None)
+        if not isinstance(source_map, dict):
+            source_map = {}
+            g.__position_recovery_source = source_map
+        source_map[code] = "unverified"
         log.error("[fill] %s entry fill baseline unverified; automatic exits blocked" % code)
 
 

@@ -1394,6 +1394,73 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert pt.g.__pending_orders["513100.SS"]["order_id"] == "buy-order-1"
 
 
+def test_unverified_held_position_blocks_every_new_buy(monkeypatch):
+    position = types.SimpleNamespace(amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={"159915.SZ": position}, portfolio_value=20000, cash=15000
+        )
+    )
+    pt.g = make_g(unverified_positions={"159915.SZ"})
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: orders.append((args, kwargs)) or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context, [make_buy_score("513100.SS")], date(2026, 7, 13)
+    ) == 0
+    assert orders == []
+
+
+def test_unverified_holding_does_not_block_verified_holding_signal_exit(monkeypatch):
+    today = date(2026, 7, 13)
+    verified_buy_date = date(2026, 6, 1)
+    positions = {
+        "513100.SS": types.SimpleNamespace(
+            amount=500, cost_basis=1.0, last_sale_price=0.9),
+        "159915.SZ": types.SimpleNamespace(
+            amount=500, cost_basis=1.0, last_sale_price=0.9),
+    }
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions=positions)
+    )
+    pt.g = make_g(
+        buy_date={"159915.SZ": verified_buy_date},
+        entry_atr={"159915.SZ": 0.05},
+        highest_since_buy={"159915.SZ": 1.1},
+        unverified_positions={"513100.SS"},
+    )
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda code, context, reason: sold.append((code, reason)) or True,
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        "159915.SZ",
+        make_sell_score("159915.SZ"),
+        today,
+        [
+            verified_buy_date,
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 4),
+            date(2026, 6, 5),
+            today,
+        ],
+    ) is True
+    assert sold == [("159915.SZ", "sell_score 35")]
+
+
 @pytest.mark.parametrize(
     ("iopv", "expected_valid"),
     [("1.95", "valid=True"), (0, "valid=False")],
@@ -1911,6 +1978,7 @@ def test_live_recovery_rebuilds_proven_entry_state_from_broker_facts(monkeypatch
         "init_date": 20260303,
         "business_time": 93503,
         "business_price": 1.18,
+        "_recovery_source": "get-deliver",
     }]
     score = make_buy_score()
     monkeypatch.setattr(
@@ -1944,6 +2012,7 @@ def test_live_recovery_rebuilds_proven_entry_state_from_broker_facts(monkeypatch
     assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
     assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.35)
     assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source == {"513100.SS": "get-deliver"}
 
 
 def test_live_recovery_rejects_manual_or_unproven_entry_signal(monkeypatch):
@@ -2081,10 +2150,52 @@ def test_live_recovery_rebuilds_same_day_buy_from_strategy_trades(monkeypatch):
 
     assert current_records[0]["stock_code"] == "513100.XSHG"
     assert current_records[0]["entrust_bs"] == "1"
+    assert current_records[0]["_recovery_source"] == "get-trades"
     assert pt.g.buy_date["513100.SS"] == today
     assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
     assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.18)
     assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source == {"513100.SS": "get-trades"}
+
+
+def test_live_recovery_summary_logs_checkpoint_and_each_holding(monkeypatch):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g(
+        buy_date={"513100.SS": date(2026, 3, 3)},
+        entry_atr={"513100.SS": 0.05},
+        highest_since_buy={"513100.SS": 1.35},
+        __state_restore_source="checkpoint-b",
+        __state_restore_generation=8,
+        __position_recovery_source={"513100.SS": "checkpoint-b"},
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message % args if args else message),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+
+    pt._log_live_recovery_summary(context)
+
+    assert any(
+        "checkpoint source=checkpoint-b generation=8" in message
+        for message in messages
+    )
+    holding = next(message for message in messages if "code=513100.SS" in message)
+    assert "amount=400" in holding
+    assert "cost=1.180000" in holding
+    assert "buy_date=2026-03-03" in holding
+    assert "atr=0.050000" in holding
+    assert "high=1.350000" in holding
+    assert "status=VERIFIED" in holding
+    assert "source=checkpoint-b" in holding
 
 
 @pytest.mark.parametrize(
@@ -2338,3 +2449,19 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "cached during initialize" in notes
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
+
+
+def test_release_docs_describe_resilient_ptrade_state_recovery():
+    deployment = (
+        ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
+    ).read_text(encoding="utf-8")
+    decisions = (
+        ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
+    ).read_text(encoding="utf-8")
+
+    assert "`.pkl.a` and `.pkl.b`" in deployment
+    assert "state-schema version" in deployment
+    assert "legacy single-file checkpoint" in deployment
+    assert "all new buys are blocked" in deployment
+    assert "[state-recovery]" in deployment
+    assert "Harden PTrade Checkpoints And Recovery Gating" in decisions
