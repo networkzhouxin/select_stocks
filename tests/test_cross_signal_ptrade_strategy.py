@@ -119,6 +119,28 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     ]
 
 
+def test_ptrade_strategy_does_not_use_platform_forbidden_os_module():
+    path = (
+        ROOT
+        / "cross_signal_strategy"
+        / "smart_trade_ptrade_cross_signal_etf.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported_modules = set()
+    os_reference_lines = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Name) and node.id == "os":
+            os_reference_lines.append(node.lineno)
+
+    assert "os" not in imported_modules
+    assert os_reference_lines == []
+
+
 def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
     function_names = {
         "_as_float_array",
@@ -257,11 +279,18 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
     monkeypatch.setattr(pt, "get_trade_name", lambda: "simulation", raising=False)
 
     simulation_path = pt._live_state_path()
+    monkeypatch.setattr(pt, "get_user_name", lambda: "account-b", raising=False)
+    other_account_path = pt._live_state_path()
+    monkeypatch.setattr(pt, "get_user_name", lambda: "account-a", raising=False)
     monkeypatch.setattr(pt, "get_trade_name", lambda: "live", raising=False)
     live_path = pt._live_state_path()
 
-    assert simulation_path != live_path
-    assert state_parent(simulation_path) == state_parent(live_path) == str(tmp_path)
+    assert len({simulation_path, other_account_path, live_path}) == 3
+    assert {
+        state_parent(simulation_path),
+        state_parent(other_account_path),
+        state_parent(live_path),
+    } == {str(tmp_path)}
     assert "account-a" not in simulation_path
 
 
@@ -291,6 +320,23 @@ def test_automatic_live_state_path_requires_complete_instance_identity(
 
 def state_parent(path):
     return str(Path(path).parent)
+
+
+def test_missing_live_state_is_a_clean_first_start(monkeypatch, tmp_path):
+    errors = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda *args, **kwargs: None,
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: errors.append(args),
+        ),
+    )
+    pt.g = make_g()
+
+    assert pt._restore_live_state(path=tmp_path / "not-created.pkl") is False
+    assert errors == []
 
 
 def test_malformed_live_state_is_rejected_without_partial_restore(tmp_path):

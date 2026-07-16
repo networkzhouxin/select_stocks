@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 import builtins as _builtins
 import hashlib
-import os
 import pickle
 from datetime import datetime
 
@@ -114,7 +113,7 @@ def _lock_frozen_business_config():
 
 def _live_state_path(path=None):
     if path is not None:
-        return os.fspath(path)
+        return str(path)
     try:
         root = get_research_path()
     except Exception as exc:
@@ -141,12 +140,13 @@ def _live_state_path(path=None):
         identity.append(str(value))
     identity_text = "|".join(identity)
     identity_hash = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:12]
-    return os.path.join(str(root), LIVE_STATE_FILENAME % identity_hash)
+    root_text = str(root).rstrip("/\\")
+    return root_text + "/" + (LIVE_STATE_FILENAME % identity_hash)
 
 
 def _cached_live_state_path(path=None):
     if path is not None:
-        return os.fspath(path)
+        return str(path)
     return getattr(g, "__state_path", None)
 
 
@@ -161,19 +161,12 @@ def _persist_live_state(path=None):
             for field in LIVE_STATE_FIELDS
         },
     }
-    temp_path = state_path + ".tmp"
     try:
-        with open(temp_path, "wb") as handle:
+        with open(state_path, "wb") as handle:
             pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(temp_path, state_path)
         return True
     except Exception as exc:
         log.error("[state] persist failed: %s" % exc)
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except Exception:
-            pass
         return False
 
 
@@ -211,7 +204,7 @@ def _validated_live_state(state):
 
 def _restore_live_state(path=None):
     state_path = _cached_live_state_path(path)
-    if state_path is None or not os.path.exists(state_path):
+    if state_path is None:
         return False
     try:
         with open(state_path, "rb") as handle:
@@ -224,6 +217,8 @@ def _restore_live_state(path=None):
         for field in LIVE_STATE_FIELDS:
             setattr(g, field, state[field])
         return True
+    except FileNotFoundError:
+        return False
     except Exception as exc:
         log.error("[state] restore failed: %s" % exc)
         return False
