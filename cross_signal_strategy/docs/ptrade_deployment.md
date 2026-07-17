@@ -119,7 +119,7 @@ of the requested time. That result must not be compared with the JoinQuant
   `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
   Quantity mismatch, missing fill price, missing calendar evidence, or
   incomplete price history leaves the position unverified.
-- A failed takeover writes a stage-specific `[recovery-diagnostic]` line.
+- A failed takeover writes a stage-specific `[恢复诊断]` line.
   `delivery-replay` reports only ETF codes, dates, buy/sell direction,
   quantities, prices, aggregate replay counts, and field names; account,
   client, fund, and shareholder-account values are never emitted. Other
@@ -127,7 +127,7 @@ of the requested time. That result must not be compared with the JoinQuant
   weighted fill price, close-history reconstruction, and same-day handling.
   When the existing historical calendar path cannot prove T-1, the adapter
   calls documented `get_trading_day_by_date(buy_date, -1)` as an observation
-  probe. Its log is marked `non_binding=True`: the returned date is not used
+  probe. Its log is marked `不参与交易判断=是`: the returned date is not used
   to verify state, calculate ATR, enable exits, or submit an order.
 - Guojin PTrade may return documented calendar results as a NumPy Unicode
   array (`ndarray` with dtype such as `<U10`). Its elements are `numpy.str_`,
@@ -172,11 +172,11 @@ of the requested time. That result must not be compared with the JoinQuant
 - State checkpoints run after the 09:35 and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   restored before broker order reconciliation and position verification.
-- After reconciliation, one `[state-recovery]` checkpoint line and one line per
+- After reconciliation, one `[状态恢复汇总]` checkpoint line and one line per
   held ETF report quantity, broker cost, buy date, entry ATR, highest close,
-  `VERIFIED`/`UNVERIFIED` status, and evidence source. Valid sources are
-  `checkpoint-a`, `checkpoint-b`, `legacy`, `ptrade-g`, `get-trades`,
-  `account-takeover:get-deliver`, and `unverified`.
+  `已验证`/`未验证` status, and evidence source. Displayed sources include
+  `检查点-a`, `检查点-b`, `legacy`, `PTrade持久状态`, `当前策略成交`,
+  `账户接管:交割单`, and `未验证`.
 - An unverified holding continues to block its own automatic ATR and signal
   exits. In addition, all new buys are blocked while any currently held ETF is
   unverified. Verified holdings retain their normal exit behavior, so recovery
@@ -185,13 +185,13 @@ of the requested time. That result must not be compared with the JoinQuant
 ## Observation-Only IOPV Log
 
 For `513100.SS`, `513500.SS`, `513880.SS`, and `513050.SS`, the adapter writes
-one `[iopv-observe]` line immediately before an actual buy submission. It reuses
+one `[IOPV观察]` line immediately before an actual buy submission. It reuses
 the same cached `get_snapshot()` record that supplied the live buy price and
 does not issue another market-data request.
 
 The line records the callback time, code, execution reference price, positive
 IOPV when available, descriptive premium percentage, raw `hsTimeStamp`, and
-snapshot age. `valid=False` means that a positive price/IOPV pair was not
+snapshot age. `有效=False` means that a positive price/IOPV pair was not
 available. The observation return value is never consumed by candidate
 filtering, ranking, position sizing, or order submission.
 
@@ -223,27 +223,27 @@ official authority for this port.
 3. Use simulation trading before live capital. Confirm the 09:35 and 10:35
    task logs plus the approximately 15:30 `after_trading_end` log, callback
    code format, halt status, partial fills, and rejected orders. For every
-   submitted QDII buy, confirm exactly one `[iopv-observe]` line appears before
-   the `[buy]` submission log; both `valid=True` and `valid=False` must leave
+   submitted QDII buy, confirm exactly one `[IOPV观察]` line appears before
+   the `[买入]` submission log; both `有效=True` and `有效=False` must leave
    the submitted quantity unchanged.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
-   Verify that an `[state-recovery] checkpoint` line identifies the selected
+   Verify that a `[状态恢复汇总]` checkpoint line identifies the selected
    slot and generation, and every held ETF is listed with the expected source
-   and `VERIFIED` status. Confirm that `execution_date`, deferred state, buy
+   and `已验证` status. Confirm that `execution_date`, deferred state, buy
    dates, entry ATR values, and trailing highs are unchanged.
 5. In simulation only, back up and then truncate the newest A/B slot. Restart
    and verify that the log selects the older valid generation. Never perform
    this drill on the live checkpoint files. A checksum/schema error or any
-   `UNVERIFIED` line requires operator review before enabling live capital.
+   `未验证` line requires operator review before enabling live capital.
 6. After a filled same-day simulation buy, make both A/B slots unavailable and
    restart. Verify that `get_trades()` reconstructs the exact fill
    price/date/ATR and that new buys remain blocked until every existing holding
    is verified. Separately test first-start account takeover after stopping the
    previous strategy: every in-pool position must report
-   `source=account-takeover:get-deliver`; no manual or second strategy may trade
+   `来源=账户接管:交割单`; no manual or second strategy may trade
    the account while cross-signal is active. If takeover remains unverified,
-   retain all `[recovery-calendar]`, `[recovery-calendar-probe]`, and
-   `[recovery-diagnostic]` lines. A valid `by_date_probe` is evidence for the
+   retain all `[恢复交易日历]`, `[恢复交易日历探针]`, and
+   `[恢复诊断]` lines. A valid `日期探针` is evidence for the
    next root-cause decision, not permission to trade.
 7. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.

@@ -110,7 +110,7 @@ def _lock_frozen_business_config():
     try:
         set_universe(g.etf_pool)
     except Exception as exc:
-        log.warning("[config-lock] set_universe failed: %s" % exc)
+        log.warning("[配置锁定] 设置标的池失败: %s" % exc)
 
 
 def _live_state_path(path=None):
@@ -119,10 +119,10 @@ def _live_state_path(path=None):
     try:
         root = get_research_path()
     except Exception as exc:
-        log.warning("[state] research path unavailable: %s" % exc)
+        log.warning("[状态] 无法获取研究路径: %s" % exc)
         return None
     if not root:
-        log.warning("[state] research path is empty")
+        log.warning("[状态] 研究路径为空")
         return None
     identity = []
     identity_getters = (
@@ -132,16 +132,16 @@ def _live_state_path(path=None):
     for getter_name, getter_args in identity_getters:
         getter = globals().get(getter_name)
         if getter is None:
-            log.error("[state] %s unavailable; checkpoint disabled" % getter_name)
+            log.error("[状态] 接口%s不可用，检查点已停用" % getter_name)
             return None
         try:
             value = getter(*getter_args)
         except Exception as exc:
-            log.error("[state] %s unavailable; checkpoint disabled: %s" % (
+            log.error("[状态] 接口%s调用失败，检查点已停用: %s" % (
                 getter_name, exc))
             return None
         if value in (None, ""):
-            log.error("[state] %s is empty; checkpoint disabled" % getter_name)
+            log.error("[状态] 接口%s返回空值，检查点已停用" % getter_name)
             return None
         identity.append(str(value))
     identity_text = "|".join(identity)
@@ -228,7 +228,7 @@ def _read_live_state_slot(slot_path):
     except FileNotFoundError:
         return None
     except Exception as exc:
-        log.error("[state] invalid checkpoint slot %s: %s" % (slot_path, exc))
+        log.error("[状态] 检查点槽位无效 %s: %s" % (slot_path, exc))
         return None
 
 
@@ -244,7 +244,7 @@ def _read_legacy_live_state(state_path):
     except FileNotFoundError:
         return None
     except Exception as exc:
-        log.error("[state] restore failed: %s" % exc)
+        log.error("[状态] 恢复失败: %s" % exc)
         return None
 
 
@@ -276,7 +276,7 @@ def _persist_live_state(path=None):
                 envelope, handle, protocol=LIVE_STATE_PICKLE_PROTOCOL)
         return True
     except Exception as exc:
-        log.error("[state] persist failed: %s" % exc)
+        log.error("[状态] 保存失败: %s" % exc)
         return False
 
 
@@ -455,6 +455,88 @@ def format_cross_flags(item):
     )
 
 
+def _format_self_check_for_log():
+    text = format_self_check()
+    replacements = (
+        ("positional-diff-cross enabled", "位置差值上穿已启用"),
+        ("diff_cross_self_check=", "自检="),
+        ("expected=", "预期="),
+        ("self_rev=", "自检反转分="),
+        ("True", "通过"),
+        ("False", "未通过"),
+    )
+    for source, target in replacements:
+        text = text.replace(source, target)
+    return text
+
+
+def _format_indicator_values_for_log(item):
+    return format_indicator_values(item).replace("(prev ", "(前值 ")
+
+
+def _format_cross_flags_for_log(item):
+    text = format_cross_flags(item)
+    replacements = (
+        ("RSI12_UP", "RSI12上穿"),
+        ("RSI24_UP", "RSI24上穿"),
+        ("MACD_UP", "MACD上穿"),
+        ("KDJ_K_UP", "KDJ_K上穿"),
+        ("KDJ_J_UP", "KDJ_J上穿"),
+        ("RSI12_DOWN", "RSI12下穿"),
+        ("RSI24_DOWN", "RSI24下穿"),
+        ("MACD_DOWN", "MACD下穿"),
+        ("KDJ_K_DOWN", "KDJ_K下穿"),
+        ("KDJ_J_DOWN", "KDJ_J下穿"),
+        ("True", "是"),
+        ("False", "否"),
+        ("None", "未知"),
+    )
+    for source, target in replacements:
+        text = text.replace(source, target)
+    return text
+
+
+def _format_reason_for_log(reason):
+    text = str(reason or "")
+    exact = {
+        "no_data": "无数据",
+        "zero_recent_volume": "近期成交量为零",
+        "paused": "停牌",
+        "unknown": "未知原因",
+        "recovered_open_order": "恢复的未完成委托",
+    }
+    if text in exact:
+        return exact[text]
+    prefixes = (
+        ("short_data:", "数据长度不足:"),
+        ("invalid_close:", "收盘价无效:"),
+        ("nan_fields:", "指标缺失:"),
+        ("exception:", "异常:"),
+        ("sell_score ", "卖出分 "),
+        ("atr_stop ", "ATR止损 "),
+    )
+    for source, target in prefixes:
+        if text.startswith(source):
+            return target + text[len(source):]
+    return text or "无"
+
+
+def _format_recovery_source_for_log(source):
+    text = str(source or "")
+    if text.startswith("account-takeover:"):
+        suffix = text.split(":", 1)[1]
+        suffix = {"get-deliver": "交割单"}.get(suffix, suffix)
+        return "账户接管:" + suffix
+    if text.startswith("checkpoint-"):
+        return "检查点-" + text.split("-", 1)[1]
+    return {
+        "get-trades": "当前策略成交",
+        "get-deliver": "交割单",
+        "unverified": "未验证",
+        "ptrade-g": "PTrade持久状态",
+    }.get(text, text or "无")
+
+
 def initialize(context):
     set_benchmark("000300.SS")
     try:
@@ -463,7 +545,7 @@ def initialize(context):
     except Exception as exc:
         is_live = False
         mode_verified = False
-        log.error("[initialize] trade-mode detection failed; trading disabled: %s" % exc)
+        log.error("[初始化] 交易模式检测失败，交易已停用: %s" % exc)
     if mode_verified and is_live:
         try:
             set_parameters(
@@ -472,13 +554,13 @@ def initialize(context):
                 server_restart_not_do_before="0",
             )
         except Exception as exc:
-            log.warning("[initialize] platform parameter setup failed: %s" % exc)
+            log.warning("[初始化] 平台参数设置失败: %s" % exc)
     elif mode_verified:
         try:
             set_commission(commission_ratio=0.0003, min_commission=5.0, type="ETF")
             set_slippage(slippage=0.001)
         except Exception as exc:
-            log.warning("[initialize] commission/slippage setup failed: %s" % exc)
+            log.warning("[初始化] 佣金或滑点设置失败: %s" % exc)
 
     g.params = get_default_params()
     g.etf_pool = get_default_etf_pool()
@@ -509,26 +591,26 @@ def initialize(context):
     try:
         set_universe(g.etf_pool)
     except Exception as exc:
-        log.warning("[initialize] set_universe failed: %s" % exc)
+        log.warning("[初始化] 设置标的池失败: %s" % exc)
 
     if g.__is_live:
         run_daily(context, _do_trading_wrapper, time="09:35")
         run_daily(context, _halt_recover_wrapper, time="10:35")
 
-    log.info("[%s] initialized: max_hold=%d base_ratio=%.2f min_signal_hold=%d" % (
+    log.info("[%s] 初始化完成: 最大持仓=%d 基础仓位比例=%.2f 普通信号最短持有=%d" % (
         STRATEGY_VERSION,
         g.params["max_hold"],
         g.params["base_ratio"],
         g.params["min_signal_hold_days"]))
-    log.info(format_self_check())
-    log.info("[indicator params] %s" % format_indicator_params(g.params))
+    log.info(_format_self_check_for_log())
+    log.info("[指标参数] %s" % format_indicator_params(g.params))
 
 
 def handle_data(context, data):
     """PTrade backtest entry; daily backtests execute at the platform close."""
     g.__data = data
     if not getattr(g, "__mode_verified", False):
-        log.error("[handle-data] trade mode unverified; trading blocked")
+        log.error("[数据处理] 交易模式未验证，交易已阻止")
         return
     if g.__is_live:
         return
@@ -547,7 +629,7 @@ def before_trading_start(context, data):
     today = _as_date(get_context_datetime(context))
     if today is None:
         g.__order_state_unknown = True
-        log.error("[day-reset] current trading date unavailable; trading blocked")
+        log.error("[每日重置] 无法确定当前交易日，交易已阻止")
         return
     if g.execution_date != today:
         g.execution_date = today
@@ -1027,14 +1109,14 @@ def _calendar_payload_summary(result):
         value_text = "<unrepresentable>"
     if len(value_text) > 240:
         value_text = value_text[:237] + "..."
-    return "type=%s shape=%s value=%s" % (type_name, shape, value_text)
+    return "类型=%s 形状=%s 值=%s" % (type_name, shape, value_text)
 
 
 def get_prev_trade_date(context):
     now = get_context_datetime(context)
     today = _as_date(now)
     if today is None:
-        log.error("[trade-date] context current_dt unavailable; trading aborted")
+        log.error("[交易日] 上下文当前时间不可用，交易已中止")
         return None
     trading_day_getter = globals().get("get_trading_day")
     if trading_day_getter is not None:
@@ -1049,35 +1131,35 @@ def get_prev_trade_date(context):
                 if previous_day is not None and previous_day < today:
                     return previous_day
                 log.warning(
-                    "[trade-date] get_trading_day(-1) unusable: %s" %
+                    "[交易日] get_trading_day(-1)返回值不可用: %s" %
                     _calendar_payload_summary(previous_raw)
                 )
             else:
                 log.warning(
-                    "[trade-date] get_trading_day unusable: %s" %
+                    "[交易日] get_trading_day返回值不可用: %s" %
                     _calendar_payload_summary(current_raw)
                 )
         except Exception as exc:
-            log.warning("[trade-date] get_trading_day failed: %s" % exc)
+            log.warning("[交易日] get_trading_day调用失败: %s" % exc)
     try:
         result = get_trade_days(end_date=_api_date_text(today), count=2)
         prev = _previous_day_from_result(result, today)
         if prev is not None:
             return prev
-        log.warning("[trade-date] get_trade_days unusable: %s" % (
+        log.warning("[交易日] get_trade_days返回值不可用: %s" % (
             _calendar_payload_summary(result)))
     except Exception as exc:
-        log.warning("[trade-date] get_trade_days failed: %s" % exc)
+        log.warning("[交易日] get_trade_days调用失败: %s" % exc)
     try:
         result = get_all_trades_days(date=today.strftime("%Y%m%d"))
         prev = _previous_day_from_result(result, today)
         if prev is not None:
             return prev
-        log.warning("[trade-date] get_all_trades_days unusable: %s" % (
+        log.warning("[交易日] get_all_trades_days返回值不可用: %s" % (
             _calendar_payload_summary(result)))
     except Exception as exc:
-        log.warning("[trade-date] get_all_trades_days failed: %s" % exc)
-    log.error("[trade-date] cannot prove T-1 trading day; trading aborted")
+        log.warning("[交易日] get_all_trades_days调用失败: %s" % exc)
+    log.error("[交易日] 无法证实T-1交易日，交易已中止")
     return None
 
 
@@ -1101,7 +1183,7 @@ def get_price_data(code, end_date, count):
             if all(field in frame.columns for field in fields):
                 return frame[frame["volume"] > 0][fields]
     except Exception as exc:
-        log.warning("[daily-data] get_price failed %s: %s" % (code, exc))
+        log.warning("[日线数据] get_price调用失败 %s: %s" % (code, exc))
 
     try:
         series = {}
@@ -1122,7 +1204,7 @@ def get_price_data(code, end_date, count):
         frame = _history_frame_through_end_date(frame, end_date_str)
         return frame[frame["volume"] > 0]
     except Exception as exc:
-        log.error("[daily-data] unavailable %s: %s" % (code, exc))
+        log.error("[日线数据] 数据不可用 %s: %s" % (code, exc))
         return None
 
 
@@ -1369,12 +1451,12 @@ def _reconcile_open_orders(context):
         open_orders = get_open_orders()
     except Exception as exc:
         g.__order_state_unknown = True
-        log.error("[order-recovery] get_open_orders failed; trading blocked: %s" % exc)
+        log.error("[委托恢复] get_open_orders调用失败，交易已阻止: %s" % exc)
         return False
 
     if not isinstance(open_orders, (list, tuple)):
         g.__order_state_unknown = True
-        log.error("[order-recovery] invalid get_open_orders response; trading blocked")
+        log.error("[委托恢复] get_open_orders返回值无效，交易已阻止")
         return False
 
     today = _as_date(get_context_datetime(context))
@@ -1395,11 +1477,11 @@ def _reconcile_open_orders(context):
         )
         if not code or not order_id or not quantities_valid:
             g.__order_state_unknown = True
-            log.error("[order-recovery] malformed open order; trading blocked")
+            log.error("[委托恢复] 未完成委托格式异常，交易已阻止")
             return False
         if code in pending_buys or code in pending_sells:
             g.__order_state_unknown = True
-            log.error("[order-recovery] multiple open orders for %s; trading blocked" % code)
+            log.error("[委托恢复] %s存在多笔未完成委托，交易已阻止" % code)
             return False
         if amount > 0:
             score = g.last_scores.get(code, {})
@@ -1429,7 +1511,7 @@ def _reconcile_open_orders(context):
     g.__pending_sells = pending_sells
     g.sold_today.update(sold_guards)
     if g.__pending_orders or g.__pending_sells:
-        log.warning("[order-recovery] open buys=%d open sells=%d" % (
+        log.warning("[委托恢复] 未完成买单=%d 未完成卖单=%d" % (
             len(g.__pending_orders), len(g.__pending_sells)))
     return True
 
@@ -1533,8 +1615,8 @@ def log_iopv_buy_observation(context, code, execution_price):
             else None
         )
         log.info(
-            "[iopv-observe] event=buy dt=%s code=%s valid=%s price=%s "
-            "iopv=%s premium_pct=%s hsTimeStamp=%s age_seconds=%s"
+            "[IOPV观察] 事件=买入 时间=%s 代码=%s 有效=%s 市价=%s "
+            "IOPV=%s 溢价率百分比=%s 行情时间戳=%s 行情延迟秒数=%s"
             % (
                 get_context_datetime(context),
                 observation["code"],
@@ -1548,7 +1630,7 @@ def log_iopv_buy_observation(context, code, execution_price):
         )
     except Exception as exc:
         try:
-            log.warning("[iopv-observe] code=%s unavailable: %s" % (code, exc))
+            log.warning("[IOPV观察] 代码=%s 数据不可用: %s" % (code, exc))
         except Exception:
             pass
 
@@ -1563,7 +1645,7 @@ def get_current_price(code):
                 g.__last_snapshot[code] = snapshot
                 return price
         except Exception as exc:
-            log.warning("[snapshot] price unavailable %s: %s" % (code, exc))
+            log.warning("[行情快照] %s价格不可用: %s" % (code, exc))
         return None
 
     data = getattr(g, "__data", None)
@@ -1595,10 +1677,10 @@ def is_paused(code):
                     if normalize_code(key) == code:
                         if isinstance(value, (bool, np.bool_)):
                             return bool(value)
-                        log.warning("[status] unknown halt value %s=%r" % (code, value))
+                        log.warning("[交易状态] %s停牌值无法识别=%r" % (code, value))
                         return True
         except Exception as exc:
-            log.warning("[status] halt query failed %s: %s" % (code, exc))
+            log.warning("[交易状态] %s停牌查询失败: %s" % (code, exc))
         snapshot = getattr(g, "__last_snapshot", {}).get(code)
         if snapshot:
             status = str(snapshot.get("trade_status", "")).upper()
@@ -1653,18 +1735,18 @@ def execute_sell(code, context, reason):
         return False
     price = get_current_price(code)
     if price is None or price <= 0:
-        log.warning("[sell] %s price unavailable; order skipped" % code)
+        log.warning("[卖出] %s价格不可用，已跳过委托" % code)
         return False
     limit_price = get_sell_limit_price(code, price)
-    log.info("[sell] %s reason=%s amount=%s limit=%.3f" % (
-        code, reason, amount, limit_price))
+    log.info("[卖出] %s 原因=%s 数量=%s 限价=%.3f" % (
+        code, _format_reason_for_log(reason), amount, limit_price))
     try:
         order_id = order_target(code, 0, limit_price=limit_price)
     except Exception as exc:
-        log.error("[sell] %s submission failed: %s" % (code, exc))
+        log.error("[卖出] %s委托提交失败: %s" % (code, exc))
         return False
     if order_id is None:
-        log.error("[sell] %s submission returned no order id" % code)
+        log.error("[卖出] %s委托提交后未返回委托编号" % code)
         return False
     if getattr(g, "__is_live", False):
         g.sold_today[code] = True
@@ -1715,7 +1797,7 @@ def _get_signal_hold_days(today, params=None):
             count=max(2, int(p.get("min_signal_hold_days", 1)) + 1),
         )
     except Exception as exc:
-        log.warning("[min-hold] trade-day query failed; signal sells blocked: %s" % exc)
+        log.warning("[最短持有] 交易日查询失败，信号卖出已阻止: %s" % exc)
         return None
 
 
@@ -1725,10 +1807,10 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
     if g.sold_today.get(code) or code in getattr(g, "__pending_sells", {}):
         return False
     if code in g.unverified_positions:
-        log.error("[hold] %s risk state unverified; automatic signal sell blocked" % code)
+        log.error("[持仓] %s风险状态未验证，自动信号卖出已阻止" % code)
         return False
     if is_paused(code):
-        log.info("[hold] %s paused, skip signal sell" % code)
+        log.info("[持仓] %s处于停牌，已跳过信号卖出" % code)
         return False
     if not can_sell_with_verified_calendar(
         g.buy_date.get(code),
@@ -1736,32 +1818,32 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
         min_hold_days=p.get("min_signal_hold_days", 1),
         trade_days=signal_hold_days,
     ):
-        log.info("[hold] %s min-hold, skip signal sell" % code)
+        log.info("[持仓] %s尚未满足最短持有期，已跳过信号卖出" % code)
         return False
     if score["buy_score"] >= p["strong_buy_threshold"] and score["sell_score"] < p["sell_threshold"]:
-        log.info("[hold] %s strong buy_score %.0f sell_score %.0f" % (
+        log.info("[持仓] %s买入评分较强 买入评分=%.0f 卖出评分=%.0f" % (
             code, score["buy_score"], score["sell_score"]))
         return False
     if should_force_sell(score, False, p):
         return execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
     if score["sell_score"] >= p["risk_tighten_threshold"]:
-        log.info("[risk-tighten] %s sell_score %.0f" % (code, score["sell_score"]))
+        log.info("[风险收紧] %s卖出评分=%.0f" % (code, score["sell_score"]))
     return False
 
 
 def execute_buy_candidates(context, all_scores, today):
     """Submit buys only against broker-confirmed holdings and cash."""
     if getattr(g, "__order_state_unknown", False):
-        log.error("[buy] broker order state unknown; deferred buys blocked")
+        log.error("[买入] 券商委托状态无法确认，延后买入已阻止")
         return 0
     if getattr(g, "__pending_sells", {}):
-        log.info("[buy deferred] waiting for %d sell order(s)" % len(g.__pending_sells))
+        log.info("[买入延后] 正在等待%d笔卖出委托完成" % len(g.__pending_sells))
         return 0
 
     held = set(current_hold_codes(context))
     unverified_held = held & set(getattr(g, "unverified_positions", set()))
     if unverified_held:
-        log.error("[buy] unverified held positions=%s; all new buys blocked" % (
+        log.error("[买入] 存在未验证持仓=%s，全部新买入已阻止" % (
             ",".join(sorted(unverified_held))))
         return 0
     pending_buys = set(getattr(g, "__pending_orders", {}).keys())
@@ -1770,7 +1852,7 @@ def execute_buy_candidates(context, all_scores, today):
         return 0
     candidates = filter_buy_candidates(all_scores, held | pending_buys, g.params)
     if not candidates:
-        log.info("[%s] no buy candidates above threshold" % STRATEGY_VERSION)
+        log.info("[%s] 没有达到阈值的买入候选" % STRATEGY_VERSION)
         return 0
 
     available = _available_cash(context)
@@ -1785,27 +1867,27 @@ def execute_buy_candidates(context, all_scores, today):
             continue
         price = get_current_price(code)
         if price is None or price <= 0:
-            log.warning("[buy skip] %s current price unavailable" % code)
+            log.warning("[买入跳过] %s当前价格不可用" % code)
             continue
         target_value = min(calc_buy_target_value(_total_value(context), score, g.params), available)
         shares = int(target_value / price / 100) * 100
         if shares < 100:
-            log.info("[buy skip] %s insufficient cash %.0f" % (code, available))
+            log.info("[买入跳过] %s可用资金不足 当前可用=%.0f" % (code, available))
             continue
         log_iopv_buy_observation(context, code, price)
         log.info(
-            "[buy] %s buy=%.0f rev=%.0f loc=%.0f trend=%.0f vol=%.0f "
-            "target=%.0f shares=%d" % (
+            "[买入] %s 买入评分=%.0f 反转评分=%.0f 位置评分=%.0f "
+            "趋势评分=%.0f 量能评分=%.0f 目标金额=%.0f 股数=%d" % (
                 code, score["buy_score"], score["reversal_score"],
                 score["location_score"], score["trend_score"],
                 score["volume_score"], target_value, shares))
         try:
             order_id = order(code, shares, limit_price=round(price, 3))
         except Exception as exc:
-            log.error("[buy] %s submission failed: %s" % (code, exc))
+            log.error("[买入] %s委托提交失败: %s" % (code, exc))
             continue
         if order_id is None:
-            log.error("[buy] %s submission returned no order id" % code)
+            log.error("[买入] %s委托提交后未返回委托编号" % code)
             continue
         if getattr(g, "__is_live", False):
             g.__pending_orders[code] = {
@@ -1829,12 +1911,12 @@ def execute_buy_candidates(context, all_scores, today):
 def do_trading(context):
     p = g.params
     if getattr(g, "__is_live", False) and getattr(g, "__order_state_unknown", False):
-        log.error("[trade] broker order state unknown; no orders submitted")
+        log.error("[交易] 券商委托状态无法确认，本次不提交委托")
         return
     today = _as_date(get_context_datetime(context))
     prev_date = get_prev_trade_date(context)
     if today is None or prev_date is None:
-        log.error("[trade] date boundary unavailable; no orders submitted")
+        log.error("[交易] 日期边界不可用，本次不提交委托")
         return
     g.execution_date = today
     g.deferred_signal_date = prev_date
@@ -1842,8 +1924,8 @@ def do_trading(context):
     is_rebalance = today.weekday() in p["rebalance_weekdays"]
     g.paused_pool_codes = _find_paused_pool_codes(g.etf_pool, is_paused)
 
-    log.info("[%s] date=%s signal_date=%s rebalance=%s" % (
-        STRATEGY_VERSION, today, prev_date, is_rebalance))
+    log.info("[%s] 执行日期=%s 信号日期=%s 是否调仓=%s" % (
+        STRATEGY_VERSION, today, prev_date, "是" if is_rebalance else "否"))
 
     stop_hits = check_atr_stops(context)
     for code, stop_price, price in stop_hits:
@@ -1851,7 +1933,7 @@ def do_trading(context):
 
     if not is_rebalance:
         if not stop_hits:
-            log.info("[cross-v0.1] non-rebalance day: stop check passed")
+            log.info("[cross-v0.1] 非调仓日，止损检查完成且未触发")
         return
 
     all_scores = []
@@ -1869,61 +1951,67 @@ def do_trading(context):
     if not all_scores:
         reason_counts = {}
         for reason in skip_reasons.values():
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            label = _format_reason_for_log(reason)
+            reason_counts[label] = reason_counts.get(label, 0) + 1
         summary = " | ".join("%s=%d" % (k, v) for k, v in sorted(reason_counts.items()))
-        samples = " | ".join("%s:%s" % (c, r) for c, r in sorted(skip_reasons.items())[:6])
-        log.info("[cross-v0.1] no valid scores")
-        log.info("[score skip summary] %s" % summary)
-        log.info("[score skip samples] %s" % samples)
+        samples = " | ".join(
+            "%s:%s" % (c, _format_reason_for_log(r))
+            for c, r in sorted(skip_reasons.items())[:6]
+        )
+        log.info("[cross-v0.1] 没有有效评分")
+        log.info("[评分跳过汇总] %s" % summary)
+        log.info("[评分跳过样例] %s" % samples)
         return
 
     if skip_reasons:
         reason_counts = {}
         for reason in skip_reasons.values():
-            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            label = _format_reason_for_log(reason)
+            reason_counts[label] = reason_counts.get(label, 0) + 1
         summary = " | ".join("%s=%d" % (k, v) for k, v in sorted(reason_counts.items()))
-        log.info("[score skip summary] %s" % summary)
+        log.info("[评分跳过汇总] %s" % summary)
 
     all_scores = sort_candidates(all_scores)
     score_map = {s["code"]: s for s in all_scores}
     g.last_scores = score_map
 
-    log.info("[top candidates]")
+    log.info("[候选排名]")
     for item in all_scores[:5]:
         log.info(
-            "  %s buy=%.0f rev=%.0f loc=%.0f trend=%.0f vol=%.0f sell=%.0f "
-            "close=%.3f %s" % (
+            "  %s 买入评分=%.0f 反转评分=%.0f 位置评分=%.0f 趋势评分=%.0f "
+            "量能评分=%.0f 卖出评分=%.0f 收盘价=%.3f %s" % (
                 item["code"], item["buy_score"], item["reversal_score"],
                 item["location_score"], item["trend_score"], item["volume_score"],
-                item["sell_score"], item["close"], format_indicator_values(item)))
+                item["sell_score"], item["close"], _format_indicator_values_for_log(item)))
 
     cross_summary = summarize_cross_signal_candidates(all_scores)
     if cross_summary["count"] == 0:
-        log.info("[cross signals] none in full pool")
+        log.info("[上穿信号] 全部标的均未出现")
     else:
-        log.info("[cross signals] count=%d" % cross_summary["count"])
+        log.info("[上穿信号] 数量=%d" % cross_summary["count"])
         for item in cross_summary["items"]:
             log.info(
-                "  %s rev=%.0f buy=%.0f sell=%.0f %s %s" % (
+                "  %s 反转评分=%.0f 买入评分=%.0f 卖出评分=%.0f %s %s" % (
                     item["code"], item["reversal_score"], item["buy_score"], item["sell_score"],
-                    format_cross_flags(item),
-                    format_indicator_values(item)))
+                    _format_cross_flags_for_log(item),
+                    _format_indicator_values_for_log(item)))
 
     loose_summary = summarize_loose_reversal_candidates(all_scores)
     if loose_summary["count"] == 0:
-        log.info("[loose reversal] none in full pool")
+        log.info("[宽松反转] 全部标的均未出现")
     else:
-        log.info("[loose reversal] count=%d" % loose_summary["count"])
+        log.info("[宽松反转] 数量=%d" % loose_summary["count"])
         for item in loose_summary["items"]:
             log.info(
-                "  %s loose=%d buy=%.0f rev=%.0f "
-                "RSI_UP=%s dRSI=%.2f MACD_UP=%s dDIF=%.4f KDJ_UP=%s dK=%.2f dJ=%.2f %s" % (
+                "  %s 宽松反转数=%d 买入评分=%.0f 反转评分=%.0f "
+                "RSI转强=%s RSI变化=%.2f MACD转强=%s DIF变化=%.4f "
+                "KDJ转强=%s K值变化=%.2f J值变化=%.2f %s" % (
                     item["code"], item["loose_reversal_count"],
                     item["buy_score"], item["reversal_score"],
                     item["rsi_turn_up"], item["rsi6_delta"],
                     item["macd_turn_up"], item["dif_delta"],
                     item["kdj_turn_up"], item["k_delta"], item["j_delta"],
-                    format_indicator_values(item)))
+                    _format_indicator_values_for_log(item)))
 
     held = current_hold_codes(context)
     signal_hold_days = _get_signal_hold_days(today, p)
@@ -1942,11 +2030,11 @@ def after_close(context):
     cash = _available_cash(context)
     holds = current_hold_codes(context)
     log.info("=" * 60)
-    log.info("[%s close] total=%.2f cash=%.2f holdings=%d/%d" % (
+    log.info("[%s 收盘] 总资产=%.2f 可用资金=%.2f 持仓数=%d/%d" % (
         STRATEGY_VERSION, total, cash, len(holds), g.params["max_hold"]))
     for code in holds:
         if code in g.unverified_positions:
-            log.error("  %s risk state unverified; close/ATR state not updated" % code)
+            log.error("  %s风险状态未验证，收盘价和ATR状态未更新" % code)
             continue
         price = get_current_price(code)
         pos = _get_position(context, code)
@@ -1964,7 +2052,8 @@ def after_close(context):
             if not pd.isna(atr_val) else np.nan
         pnl = (price - cost) / cost if cost > 0 else 0
         score = g.last_scores.get(code, {})
-        log.info("  %s cost=%.3f price=%.3f high=%.3f pnl=%.1f%% buy=%.0f sell=%.0f stop=%.3f" % (
+        log.info("  %s 成本价=%.3f 当前价=%.3f 持仓最高收盘价=%.3f "
+                 "收益率=%.1f%% 买入评分=%.0f 卖出评分=%.0f 止损价=%.3f" % (
             code, cost, price, g.highest_since_buy[code], pnl * 100,
             score.get("buy_score", 0), score.get("sell_score", 0), stop_price))
     log.info("=" * 60)
@@ -1972,7 +2061,7 @@ def after_close(context):
 
 def halt_recover(context):
     if getattr(g, "__order_state_unknown", False):
-        log.error("[halt-recover] broker order state unknown; no orders submitted")
+        log.error("[复牌补偿] 券商委托状态无法确认，本次不提交委托")
         return
     today = _as_date(get_context_datetime(context))
     prev_date = get_prev_trade_date(context) if today is not None else None
@@ -1981,7 +2070,7 @@ def halt_recover(context):
         g.execution_date != today or
         g.deferred_signal_date != prev_date
     ):
-        log.error("[halt-recover] deferred score date mismatch; no orders submitted")
+        log.error("[复牌补偿] 延后评分日期不匹配，本次不提交委托")
         return
     if not _reconcile_open_orders(context):
         return
@@ -2003,7 +2092,8 @@ def halt_recover(context):
                 by_code[code] = score
                 g.last_scores[code] = score
             else:
-                log.warning("[halt-recover] %s score unavailable: %s" % (code, reason))
+                log.warning("[复牌补偿] %s评分不可用: %s" % (
+                    code, _format_reason_for_log(reason)))
         scores = sort_candidates(list(by_code.values()))
         g.deferred_scores = scores
         resumed_holds = set(current_hold_codes(context)) & set(recovered)
@@ -2013,9 +2103,9 @@ def halt_recover(context):
             if score is not None:
                 _evaluate_signal_sell(
                     context, code, score, today, signal_hold_days)
-        log.info("[halt-recover] resumed=%s; evaluated deferred sells and buys" % ",".join(recovered))
+        log.info("[复牌补偿] 已复牌=%s，已执行延后卖出与买入评估" % ",".join(recovered))
     elif previous:
-        log.info("[halt-recover] no tracked ETF resumed")
+        log.info("[复牌补偿] 受跟踪的ETF均未复牌")
     if scores:
         execute_buy_candidates(context, scores, today)
 
@@ -2056,18 +2146,18 @@ def _fetch_deliver_records(prev_date):
         return []
     getter = globals().get("get_deliver")
     if getter is None:
-        log.error("[recovery] get_deliver unavailable")
+        log.error("[状态恢复] get_deliver接口不可用")
         return []
     end_text = end_date.strftime("%Y%m%d")
     try:
         records = getter(DELIVER_RECOVERY_START_DATE, end_text)
     except Exception as exc:
-        log.error("[recovery] get_deliver failed: %s" % exc)
+        log.error("[状态恢复] get_deliver调用失败: %s" % exc)
         return []
     if not isinstance(records, (list, tuple)):
-        log.error("[recovery] invalid get_deliver response")
+        log.error("[状态恢复] get_deliver返回值无效")
         return []
-    log.info("[recovery] delivery records=%d range=%s~%s" % (
+    log.info("[状态恢复] 交割记录数=%d 查询范围=%s~%s" % (
         len(records), DELIVER_RECOVERY_START_DATE, end_text))
     tagged = []
     for record in records:
@@ -2082,15 +2172,15 @@ def _fetch_current_strategy_trades():
     """Normalize PTrade's strategy-only current-day fills into delivery rows."""
     getter = globals().get("get_trades")
     if getter is None:
-        log.error("[recovery] get_trades unavailable")
+        log.error("[状态恢复] get_trades接口不可用")
         return []
     try:
         payload = getter()
     except Exception as exc:
-        log.error("[recovery] get_trades failed: %s" % exc)
+        log.error("[状态恢复] get_trades调用失败: %s" % exc)
         return []
     if not isinstance(payload, dict):
-        log.error("[recovery] invalid get_trades response")
+        log.error("[状态恢复] get_trades返回值无效")
         return []
 
     records = []
@@ -2121,7 +2211,7 @@ def _fetch_current_strategy_trades():
                 "order_id": str(order_id),
                 "_recovery_source": "get-trades",
             })
-    log.info("[recovery] current strategy trades=%d" % len(records))
+    log.info("[状态恢复] 当前策略成交记录数=%d" % len(records))
     return records
 
 
@@ -2172,7 +2262,7 @@ def _delivery_sort_key(record):
 def _diagnostic_number(value):
     number = _safe_float(value, np.nan)
     if not np.isfinite(number):
-        return "nan"
+        return "非数值"
     rounded = round(number)
     if abs(number - rounded) <= 1e-9:
         return str(int(rounded))
@@ -2182,7 +2272,7 @@ def _diagnostic_number(value):
 def _limited_diagnostic_values(values, limit=30):
     ordered = sorted(set(str(value) for value in values if value not in (None, "")))
     if len(ordered) <= limit:
-        return ",".join(ordered) if ordered else "none"
+        return ",".join(ordered) if ordered else "无"
     return "%s,+%d" % (",".join(ordered[:limit]), len(ordered) - limit)
 
 
@@ -2208,8 +2298,8 @@ def _diagnose_delivery_replay(records, code, broker_amount):
             continue
         code_rows.append(record)
         side_values.append("%s/%s" % (
-            str(record.get("entrust_bs", "") or "").strip() or "blank",
-            str(record.get("business_name", "") or "").strip() or "blank",
+            str(record.get("entrust_bs", "") or "").strip() or "空",
+            str(record.get("business_name", "") or "").strip() or "空",
         ))
         direction = _delivery_direction(record)
         quantity = _delivery_quantity(record)
@@ -2242,19 +2332,19 @@ def _diagnose_delivery_replay(records, code, broker_amount):
         quantity = _delivery_quantity(record)
         price = _safe_float(record.get("business_price"), np.nan)
         samples.append("%s:%s:%s@%s" % (
-            trade_date.isoformat() if trade_date is not None else "unknown-date",
-            "B" if direction > 0 else "S" if direction < 0 else "?",
+            trade_date.isoformat() if trade_date is not None else "未知日期",
+            "买" if direction > 0 else "卖" if direction < 0 else "未知",
             _diagnostic_number(quantity),
             _diagnostic_number(price),
         ))
 
-    date_range = "none"
+    date_range = "无"
     if dates:
         date_range = "%s~%s" % (min(dates).isoformat(), max(dates).isoformat())
     return (
-        "expected=%s total_records=%d code_rows=%d valid_rows=%d "
-        "buys=%d sells=%d net=%s min_running=%s date_range=%s "
-        "available_codes=%s side_values=%s field_keys=%s sample=%s" % (
+        "券商持仓=%s 总记录数=%d 标的记录数=%d 有效记录数=%d "
+        "买入笔数=%d 卖出笔数=%d 净数量=%s 最低累计数量=%s 日期范围=%s "
+        "可用代码=%s 方向值=%s 字段名=%s 样例=%s" % (
             _diagnostic_number(broker_amount),
             len(all_records),
             len(code_rows),
@@ -2267,14 +2357,38 @@ def _diagnose_delivery_replay(records, code, broker_amount):
             _limited_diagnostic_values(available_codes),
             _limited_diagnostic_values(side_values, limit=12),
             _limited_diagnostic_values(field_keys, limit=40),
-            ";".join(samples) if samples else "none",
+            ";".join(samples) if samples else "无",
         )
     )
 
 
 def _log_recovery_failure(code, stage, reason, details=None):
-    message = "[recovery-diagnostic] code=%s stage=%s reason=%s" % (
-        normalize_code(code), stage, reason)
+    stage_text = {
+        "pool": "标的池",
+        "broker-position": "券商持仓",
+        "delivery-replay": "交割单重放",
+        "historical-calendar": "历史交易日历",
+        "entry-atr": "入场ATR",
+        "delivery-entry-price": "交割单入场价",
+        "current-calendar": "当前交易日历",
+        "trailing-high": "持仓最高价",
+        "same-day-entry": "当日买入",
+    }.get(stage, str(stage))
+    reason_text = {
+        "outside-frozen-pool": "不在锁定标的池内",
+        "invalid-amount-or-cost": "数量或成本无效",
+        "unreconciled": "无法与券商持仓核对一致",
+        "previous-trade-date-unresolved": "无法确定前一交易日",
+        "score-unavailable": "评分不可用",
+        "atr-invalid": "ATR无效",
+        "weighted-fill-price-unavailable": "成交加权价不可用",
+        "current-prev-date-unavailable": "当前前一交易日不可用",
+        "close-history-unavailable": "收盘价历史不可用",
+        "no-positive-closes": "没有有效正收盘价",
+        "signal-date-mismatch": "信号日期不匹配",
+    }.get(reason, str(reason))
+    message = "[恢复诊断] 代码=%s 阶段=%s 原因=%s" % (
+        normalize_code(code), stage_text, reason_text)
     if details:
         message += " " + str(details)
     log.error(message)
@@ -2354,20 +2468,20 @@ def _previous_trade_date_before(value):
         if previous is not None:
             return previous
         log.warning(
-            "[recovery-calendar] query=%s api=get_trade_days unusable %s" % (
+            "[恢复交易日历] 查询日期=%s 接口=get_trade_days 返回值不可用 %s" % (
                 trade_date.isoformat(), _calendar_payload_summary(result)))
     except Exception as exc:
-        log.warning("[recovery] get_trade_days failed: %s" % exc)
+        log.warning("[状态恢复] get_trade_days调用失败: %s" % exc)
     try:
         result = get_all_trades_days(date=trade_date.strftime("%Y%m%d"))
         previous = _previous_day_from_result(result, trade_date)
         if previous is not None:
             return previous
         log.warning(
-            "[recovery-calendar] query=%s api=get_all_trades_days unusable %s" % (
+            "[恢复交易日历] 查询日期=%s 接口=get_all_trades_days 返回值不可用 %s" % (
                 trade_date.isoformat(), _calendar_payload_summary(result)))
     except Exception as exc:
-        log.warning("[recovery] get_all_trades_days failed: %s" % exc)
+        log.warning("[状态恢复] get_all_trades_days调用失败: %s" % exc)
     return None
 
 
@@ -2381,17 +2495,17 @@ def _probe_previous_trade_date_by_date(value):
         raw = getter(trade_date.strftime("%Y%m%d"), -1)
     except Exception as exc:
         log.warning(
-            "[recovery-calendar-probe] query=%s api=get_trading_day_by_date "
-            "failed=%s non_binding=True" % (trade_date.isoformat(), exc))
+            "[恢复交易日历探针] 查询日期=%s 接口=get_trading_day_by_date "
+            "调用失败=%s 不参与交易判断=是" % (trade_date.isoformat(), exc))
         return None
     candidate = _as_date(raw)
     valid = candidate is not None and candidate < trade_date
     log.info(
-        "[recovery-calendar-probe] query=%s api=get_trading_day_by_date "
-        "candidate=%s valid=%s non_binding=True payload=%s" % (
+        "[恢复交易日历探针] 查询日期=%s 接口=get_trading_day_by_date "
+        "候选日期=%s 有效=%s 不参与交易判断=是 返回值=%s" % (
             trade_date.isoformat(),
-            candidate.isoformat() if candidate is not None else "None",
-            valid,
+            candidate.isoformat() if candidate is not None else "无",
+            "是" if valid else "否",
             _calendar_payload_summary(raw),
         )
     )
@@ -2415,7 +2529,7 @@ def _get_recovery_close_data(code, start_date, end_date):
         )
         frame = pd.DataFrame(frame).copy()
     except Exception as exc:
-        log.error("[recovery] close history unavailable %s: %s" % (code, exc))
+        log.error("[状态恢复] %s收盘价历史不可用: %s" % (code, exc))
         return None
     if "code" in frame.columns:
         frame = frame[frame["code"].map(normalize_code) == normalize_code(code)]
@@ -2440,7 +2554,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
             code,
             "broker-position",
             "invalid-amount-or-cost",
-            "amount=%s cost=%s" % (
+            "数量=%s 成本=%s" % (
                 _diagnostic_number(amount), _diagnostic_number(cost)),
         )
     open_position = _reconstruct_open_position(records, code, amount)
@@ -2459,9 +2573,9 @@ def _recover_position_from_broker(code, pos, records, prev_date):
             code,
             "historical-calendar",
             "previous-trade-date-unresolved",
-            "buy_date=%s by_date_probe=%s non_binding=True" % (
+            "买入日期=%s 日期探针=%s 不参与交易判断=是" % (
                 buy_date.isoformat(),
-                probe_date.isoformat() if probe_date is not None else "None",
+                probe_date.isoformat() if probe_date is not None else "无",
             ),
         )
     score = calc_cross_signal_score(code, signal_date)
@@ -2470,7 +2584,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
             code,
             "entry-atr",
             "score-unavailable",
-            "signal_date=%s" % signal_date.isoformat(),
+            "信号日期=%s" % signal_date.isoformat(),
         )
     atr = score.get("atr")
     if not _is_positive_finite(atr):
@@ -2478,7 +2592,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
             code,
             "entry-atr",
             "atr-invalid",
-            "signal_date=%s atr=%s" % (
+            "信号日期=%s ATR=%s" % (
                 signal_date.isoformat(), _diagnostic_number(atr)),
         )
     entry_price = open_position.get("entry_price")
@@ -2487,7 +2601,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
             code,
             "delivery-entry-price",
             "weighted-fill-price-unavailable",
-            "buy_date=%s" % buy_date.isoformat(),
+            "买入日期=%s" % buy_date.isoformat(),
         )
     prev_date = _as_date(prev_date)
     if prev_date is None:
@@ -2500,7 +2614,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
                 code,
                 "trailing-high",
                 "close-history-unavailable",
-                "range=%s~%s" % (buy_date.isoformat(), prev_date.isoformat()),
+                "日期范围=%s~%s" % (buy_date.isoformat(), prev_date.isoformat()),
             )
         valid_closes = pd.to_numeric(closes["close"], errors="coerce")
         valid_closes = valid_closes[np.isfinite(valid_closes) & (valid_closes > 0)]
@@ -2509,7 +2623,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
                 code,
                 "trailing-high",
                 "no-positive-closes",
-                "range=%s~%s" % (buy_date.isoformat(), prev_date.isoformat()),
+                "日期范围=%s~%s" % (buy_date.isoformat(), prev_date.isoformat()),
             )
         highest = max(float(entry_price), float(valid_closes.max()))
     else:
@@ -2518,7 +2632,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
                 code,
                 "same-day-entry",
                 "signal-date-mismatch",
-                "buy_date=%s signal_date=%s current_prev_date=%s" % (
+                "买入日期=%s 信号日期=%s 当前前一交易日=%s" % (
                     buy_date.isoformat(),
                     signal_date.isoformat(),
                     prev_date.isoformat(),
@@ -2538,8 +2652,8 @@ def _recover_position_from_broker(code, pos, records, prev_date):
         recovery_source = "account-takeover:get-deliver"
     source_map[code] = recovery_source
     log.warning(
-        "[recovery] %s adopted from broker facts: buy_date=%s "
-        "signal_date=%s ATR=%.6f highest_close=%.6f cost=%.6f" % (
+        "[状态恢复] %s已依据券商事实接管: 买入日期=%s "
+        "信号日期=%s ATR=%.6f 持仓最高收盘价=%.6f 成本=%.6f" % (
             code, buy_date, signal_date, atr, highest, cost)
     )
     return True
@@ -2603,17 +2717,17 @@ def recover_live_state(
             g.unverified_positions.add(code)
             source_map[code] = "unverified"
             log.error(
-                "[recovery] %s historical buy date/ATR/high or broker cost "
-                "cannot be proved; automatic exits blocked" % code
+                "[状态恢复] %s历史买入日期、ATR、最高价或券商成本无法证实，"
+                "自动卖出已阻止" % code
             )
 
 
 def _log_live_recovery_summary(context):
     source = getattr(g, "__state_restore_source", None) or "ptrade-g"
     generation = getattr(g, "__state_restore_generation", None)
-    generation_text = generation if generation is not None else "n/a"
-    log.info("[state-recovery] checkpoint source=%s generation=%s" % (
-        source, generation_text))
+    generation_text = generation if generation is not None else "无"
+    log.info("[状态恢复汇总] 检查点来源=%s 代次=%s" % (
+        _format_recovery_source_for_log(source), generation_text))
 
     source_map = getattr(g, "__position_recovery_source", {})
     if not isinstance(source_map, dict):
@@ -2635,21 +2749,21 @@ def _log_live_recovery_summary(context):
             _is_positive_finite(atr) and
             _is_positive_finite(highest)
         )
-        status = "VERIFIED" if verified else "UNVERIFIED"
+        status = "已验证" if verified else "未验证"
         position_source = source_map.get(code)
         if not position_source:
             position_source = source if verified else "unverified"
         log.info(
-            "[state-recovery] code=%s amount=%.0f cost=%.6f buy_date=%s "
-            "atr=%.6f high=%.6f status=%s source=%s" % (
+            "[状态恢复汇总] 代码=%s 数量=%.0f 成本=%.6f 买入日期=%s "
+            "ATR=%.6f 持仓最高收盘价=%.6f 状态=%s 来源=%s" % (
                 code,
                 amount,
                 cost,
-                buy_date.isoformat() if buy_date is not None else "None",
+                buy_date.isoformat() if buy_date is not None else "无",
                 atr,
                 highest,
                 status,
-                position_source,
+                _format_recovery_source_for_log(position_source),
             )
         )
 
@@ -2708,7 +2822,7 @@ def _apply_buy_fill_state(code, pending):
             source_map = {}
             g.__position_recovery_source = source_map
         source_map[code] = "unverified"
-        log.error("[fill] %s entry fill baseline unverified; automatic exits blocked" % code)
+        log.error("[成交回报] %s入场成交基线未验证，自动卖出已阻止" % code)
 
 
 def _pending_completion_qty(pending):
@@ -2729,7 +2843,7 @@ def _finish_terminal_sell(code, pending):
         _clear_position_state(code)
     else:
         g.sold_today.pop(code, None)
-        log.warning("[sell residual] %s partial fill retained; risk state preserved" % code)
+        log.warning("[卖出余量] %s部分成交后仍有持仓，风险状态已保留" % code)
     return True
 
 
@@ -2749,33 +2863,33 @@ def on_order_response(context, order_list):
 
         if buy_pending is not None:
             if not _response_matches_pending(response, buy_pending):
-                log.warning("[order callback] ignored unmatched buy order %s" % code)
+                log.warning("[委托回报] 已忽略无法匹配的买入委托 %s" % code)
                 continue
             if filled > 0 and status in ("5", "6"):
                 buy_pending["terminal_qty"] = filled
                 if buy_pending.get("filled_qty", 0.0) >= filled:
                     _complete_buy(code, buy_pending)
-                log.warning("[buy partial/cancel] %s filled=%.0f reason=%s" % (
+                log.warning("[买入部分成交或撤单] %s 已成交=%.0f 原因=%s" % (
                     code, filled, error))
             else:
                 g.__pending_orders.pop(code, None)
-                log.warning("[buy rejected/cancelled] %s status=%s reason=%s" % (
+                log.warning("[买入拒绝或撤单] %s 状态=%s 原因=%s" % (
                     code, status, error))
             continue
 
         if sell_pending is not None:
             if not _response_matches_pending(response, sell_pending):
-                log.warning("[order callback] ignored unmatched sell order %s" % code)
+                log.warning("[委托回报] 已忽略无法匹配的卖出委托 %s" % code)
                 continue
             if filled > 0 and status in ("5", "6"):
                 sell_pending["terminal_qty"] = filled
                 _finish_terminal_sell(code, sell_pending)
-                log.warning("[sell partial/cancel] %s filled=%.0f reason=%s" % (
+                log.warning("[卖出部分成交或撤单] %s 已成交=%.0f 原因=%s" % (
                     code, filled, error))
             else:
                 g.__pending_sells.pop(code, None)
                 g.sold_today.pop(code, None)
-                log.error("[sell rejected/cancelled] %s status=%s reason=%s" % (
+                log.error("[卖出拒绝或撤单] %s 状态=%s 原因=%s" % (
                     code, status, error))
     _persist_live_state()
 
@@ -2786,7 +2900,7 @@ def on_trade_response(context, trade_list):
     trades = trade_list if isinstance(trade_list, list) else [trade_list]
     for trade in trades:
         if str(trade.get("real_type", "")) == "2":
-            log.info("[fill] cancellation push ignored")
+            log.info("[成交回报] 已忽略撤单推送")
             continue
         code = normalize_code(trade.get("stock_code"))
         direction = str(trade.get("entrust_bs", ""))
@@ -2798,10 +2912,10 @@ def on_trade_response(context, trade_list):
         if direction == "1":
             pending = getattr(g, "__pending_orders", {}).get(code)
             if pending is None:
-                log.warning("[fill] unmatched buy %s qty=%.0f" % (code, quantity))
+                log.warning("[成交回报] 无法匹配的买入成交 %s 数量=%.0f" % (code, quantity))
                 continue
             if not _response_matches_pending(trade, pending):
-                log.warning("[fill] ignored old/unmatched buy order %s" % code)
+                log.warning("[成交回报] 已忽略旧的或无法匹配的买入委托 %s" % code)
                 continue
             pending["filled_qty"] = pending.get("filled_qty", 0.0) + quantity
             if _is_positive_finite(price):
@@ -2811,19 +2925,19 @@ def on_trade_response(context, trade_list):
             _apply_buy_fill_state(code, pending)
             if pending["filled_qty"] >= _pending_completion_qty(pending):
                 g.__pending_orders.pop(code, None)
-            log.info("[fill] buy %s qty=%.0f @%.3f cumulative=%.0f" % (
+            log.info("[成交回报] 买入 %s 数量=%.0f 价格=%.3f 累计成交=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
 
         elif direction == "2":
             pending = getattr(g, "__pending_sells", {}).get(code)
             if pending is None:
-                log.warning("[fill] unmatched sell %s qty=%.0f" % (code, quantity))
+                log.warning("[成交回报] 无法匹配的卖出成交 %s 数量=%.0f" % (code, quantity))
                 continue
             if not _response_matches_pending(trade, pending):
-                log.warning("[fill] ignored old/unmatched sell order %s" % code)
+                log.warning("[成交回报] 已忽略旧的或无法匹配的卖出委托 %s" % code)
                 continue
             pending["filled_qty"] = pending.get("filled_qty", 0.0) + quantity
             _finish_terminal_sell(code, pending)
-            log.info("[fill] sell %s qty=%.0f @%.3f cumulative=%.0f" % (
+            log.info("[成交回报] 卖出 %s 数量=%.0f 价格=%.3f 累计成交=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
     _persist_live_state()

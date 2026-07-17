@@ -6,6 +6,7 @@ import ast
 import importlib.util
 from pathlib import Path
 import pickle
+import re
 import sys
 import types
 
@@ -142,6 +143,83 @@ def test_ptrade_strategy_does_not_use_platform_forbidden_os_module():
 
     assert "os" not in imported_modules
     assert os_reference_lines == []
+
+
+def test_ptrade_direct_log_templates_are_chinese():
+    path = (
+        ROOT
+        / "cross_signal_strategy"
+        / "smart_trade_ptrade_cross_signal_etf.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    banned_words = {
+        "initialized", "failed", "unavailable", "empty", "invalid",
+        "disabled", "blocked", "unverified", "unknown", "unusable",
+        "aborted", "skipped", "ignored", "reason", "amount", "limit",
+        "price", "order", "paused", "deferred", "waiting", "positions",
+        "candidates", "threshold", "date", "rebalance", "scores",
+        "summary", "samples", "count", "none", "full", "pool", "loose",
+        "close", "total", "cash", "holdings", "cost", "high", "pnl",
+        "stop", "resumed", "evaluated", "tracked", "delivery", "records",
+        "range", "current", "strategy", "trades", "query", "candidate",
+        "source", "generation", "status", "baseline", "partial", "fill",
+        "retained", "preserved", "unmatched", "buy", "sell", "qty",
+        "cumulative", "valid", "payload", "event", "age_seconds",
+    }
+
+    def static_template(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            return static_template(node.left)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = static_template(node.left)
+            right = static_template(node.right)
+            return left + right if left is not None and right is not None else None
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            return static_template(node.left) or static_template(node.right)
+        return None
+
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "log":
+            continue
+        if node.func.attr not in {"info", "warning", "error"} or not node.args:
+            continue
+        template = static_template(node.args[0])
+        if template is None or set(template) <= {"="}:
+            continue
+        words = {word.lower() for word in re.findall(r"[A-Za-z][A-Za-z_-]*", template)}
+        if not re.search(r"[\u4e00-\u9fff]", template) or words & banned_words:
+            violations.append((node.lineno, template))
+
+    assert violations == []
+
+
+def test_ptrade_dynamic_log_formatters_translate_business_text():
+    self_check = pt._format_self_check_for_log()
+    assert "位置差值上穿已启用" in self_check
+    assert "自检=通过" in self_check
+    assert "enabled" not in self_check
+
+    values = pt._format_indicator_values_for_log(make_buy_score())
+    assert "前值" in values
+    assert "prev" not in values
+
+    flags = pt._format_cross_flags_for_log({
+        "rsi6_cross_rsi12_up": True,
+        "rsi6_cross_rsi24_down": False,
+    })
+    assert "RSI12上穿=是" in flags
+    assert "RSI24下穿=否" in flags
+    assert "_UP" not in flags
+    assert "_DOWN" not in flags
+
+    assert pt._format_reason_for_log("short_data:10<110") == "数据长度不足:10<110"
+    assert pt._format_reason_for_log("sell_score 35") == "卖出分 35"
+    assert pt._format_reason_for_log("atr_stop 1.000<=1.100") == "ATR止损 1.000<=1.100"
 
 
 def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
@@ -749,11 +827,11 @@ def test_prev_trade_date_logs_unusable_calendar_payloads(monkeypatch):
 
     assert pt.get_prev_trade_date(context) is None
     assert any(
-        "get_trading_day unusable" in message and "type=str" in message
+        "get_trading_day返回值不可用" in message and "类型=str" in message
         for message in messages
     )
     assert any(
-        "get_trade_days unusable" in message and "type=list" in message
+        "get_trade_days返回值不可用" in message and "类型=list" in message
         for message in messages
     )
 
@@ -1618,7 +1696,7 @@ def test_unverified_holding_does_not_block_verified_holding_signal_exit(monkeypa
 
 @pytest.mark.parametrize(
     ("iopv", "expected_valid"),
-    [("1.95", "valid=True"), (0, "valid=False")],
+    [("1.95", "有效=True"), (0, "有效=False")],
 )
 def test_qdii_buy_logs_iopv_but_never_changes_order_path(
     monkeypatch, iopv, expected_valid
@@ -1663,7 +1741,7 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
     observations = [
         (index, value)
         for index, (kind, value) in enumerate(events)
-        if kind == "log" and value.startswith("[iopv-observe]")
+        if kind == "log" and value.startswith("[IOPV观察]")
     ]
     assert len(observations) == 1
     assert expected_valid in observations[0][1]
@@ -1694,7 +1772,7 @@ def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
     assert pt.execute_buy_candidates(
         context, [make_buy_score("159915.SZ")], date(2026, 7, 13)
     ) == 1
-    assert not any(message.startswith("[iopv-observe]") for message in messages)
+    assert not any(message.startswith("[IOPV观察]") for message in messages)
 
 
 def test_release_docs_keep_iopv_observation_non_binding():
@@ -1708,7 +1786,7 @@ def test_release_docs_keep_iopv_observation_non_binding():
         encoding="utf-8"
     )
 
-    assert "[iopv-observe]" in deployment
+    assert "[IOPV观察]" in deployment
     assert "must never block or resize an order" in deployment
     assert "Observe PTrade IOPV Without Changing Frozen Orders" in decisions
     assert "observation-only IOPV" in readme
@@ -2157,18 +2235,18 @@ def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
 
     summary = next(
         message for message in messages
-        if "stage=delivery-replay" in message
+        if "阶段=交割单重放" in message
     )
-    assert "code=513100.SS" in summary
-    assert "expected=400" in summary
-    assert "total_records=1" in summary
-    assert "code_rows=1" in summary
-    assert "valid_rows=1" in summary
-    assert "buys=1" in summary
-    assert "sells=0" in summary
-    assert "net=500" in summary
-    assert "date_range=2026-03-03~2026-03-03" in summary
-    assert "available_codes=513100.SS" in summary
+    assert "代码=513100.SS" in summary
+    assert "券商持仓=400" in summary
+    assert "总记录数=1" in summary
+    assert "标的记录数=1" in summary
+    assert "有效记录数=1" in summary
+    assert "买入笔数=1" in summary
+    assert "卖出笔数=0" in summary
+    assert "净数量=500" in summary
+    assert "日期范围=2026-03-03~2026-03-03" in summary
+    assert "可用代码=513100.SS" in summary
     rendered = "\n".join(messages)
     assert "secret-account" not in rendered
     assert "secret-stock-account" not in rendered
@@ -2225,18 +2303,18 @@ def test_live_recovery_probes_historical_calendar_without_adopting_probe(
     assert score_calls == []
     assert pt.g.unverified_positions == {"513100.SS"}
     assert any(
-        "api=get_trade_days" in message
-        and "unusable" in message
-        and "type=list" in message
+        "接口=get_trade_days" in message
+        and "返回值不可用" in message
+        and "类型=list" in message
         for message in messages
     )
     failure = next(
         message for message in messages
-        if "stage=historical-calendar" in message
+        if "阶段=历史交易日历" in message
     )
-    assert "buy_date=2026-03-03" in failure
-    assert "by_date_probe=2026-03-02" in failure
-    assert "non_binding=True" in failure
+    assert "买入日期=2026-03-03" in failure
+    assert "日期探针=2026-03-02" in failure
+    assert "不参与交易判断=是" in failure
 
 
 def test_live_recovery_logs_entry_atr_stage_when_score_is_unavailable(monkeypatch):
@@ -2278,11 +2356,11 @@ def test_live_recovery_logs_entry_atr_stage_when_score_is_unavailable(monkeypatc
 
     failure = next(
         message for message in messages
-        if "stage=entry-atr" in message
+        if "阶段=入场ATR" in message
     )
-    assert "code=513100.SS" in failure
-    assert "reason=score-unavailable" in failure
-    assert "signal_date=2026-03-02" in failure
+    assert "代码=513100.SS" in failure
+    assert "原因=评分不可用" in failure
+    assert "信号日期=2026-03-02" in failure
     assert pt.g.unverified_positions == {"513100.SS"}
 
 
@@ -2516,17 +2594,17 @@ def test_live_recovery_summary_logs_checkpoint_and_each_holding(monkeypatch):
     pt._log_live_recovery_summary(context)
 
     assert any(
-        "checkpoint source=checkpoint-b generation=8" in message
+        "检查点来源=检查点-b 代次=8" in message
         for message in messages
     )
-    holding = next(message for message in messages if "code=513100.SS" in message)
-    assert "amount=400" in holding
-    assert "cost=1.180000" in holding
-    assert "buy_date=2026-03-03" in holding
-    assert "atr=0.050000" in holding
-    assert "high=1.350000" in holding
-    assert "status=VERIFIED" in holding
-    assert "source=checkpoint-b" in holding
+    holding = next(message for message in messages if "代码=513100.SS" in message)
+    assert "数量=400" in holding
+    assert "成本=1.180000" in holding
+    assert "买入日期=2026-03-03" in holding
+    assert "ATR=0.050000" in holding
+    assert "持仓最高收盘价=1.350000" in holding
+    assert "状态=已验证" in holding
+    assert "来源=检查点-b" in holding
 
 
 @pytest.mark.parametrize(
@@ -2794,8 +2872,8 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "state-schema version" in deployment
     assert "legacy single-file checkpoint" in deployment
     assert "all new buys are blocked" in deployment
-    assert "[state-recovery]" in deployment
-    assert "account-takeover:get-deliver" in deployment
+    assert "[状态恢复汇总]" in deployment
+    assert "账户接管:交割单" in deployment
     assert "one account runs one active" in deployment
     assert "Harden PTrade Checkpoints And Recovery Gating" in decisions
     assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions

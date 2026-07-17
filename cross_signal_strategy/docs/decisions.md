@@ -811,3 +811,15 @@ Risk: This fix removes only the demonstrated calendar parsing blocker. The next 
 Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`
 Allowed validation influence: none; this is PTrade platform type compatibility work and no market-period data, strategy return, or validation result was read
 Status: adopted for the formal cross-signal PTrade adapter; JoinQuant/local business logic, frozen parameters and ETF pool, and production multi-factor files remain unchanged
+
+### Localize Formal PTrade Logs To Chinese
+
+Date: 2026-07-17
+Decision: Translate every strategy-authored log template in the formal cross-signal PTrade adapter into Chinese, including initialization, calendar, scoring, order submission, halt recovery, checkpoint recovery, broker takeover diagnostics, IOPV observation, and order/trade callbacks. Preserve official PTrade API names, ETF/indicator abbreviations, raw broker exception text, internal enum values, and all business logic.
+Reason: The deployed strategy is operated and diagnosed in a Chinese PTrade client. Mixed English log tags and field names made live recovery review slower and increased the chance of searching for the wrong message after a restart.
+Evidence: Tests were written first and observed failing against 115 English direct log templates and missing Chinese formatter behavior. The implementation adds output-only translation helpers, a static AST log contract, dynamic formatter assertions, and updated runtime-log assertions. The complete formal PTrade adapter suite passes 108 tests after localization.
+Interpretation: Strategy-generated operational logs now use Chinese labels while documented API identifiers such as `get_deliver`, `get_trades`, and `get_trade_days` remain searchable against Guojin documentation. External exception and broker rejection text is displayed verbatim because altering it would discard diagnostic evidence.
+Risk: This change does not translate messages produced by the PTrade platform itself or arbitrary text returned by broker APIs. Those values are external evidence rather than strategy-authored log templates. Chinese localization must remain an output-layer concern and must not be applied to persisted keys, order statuses, recovery sources, or strategy decisions.
+Affected files: `cross_signal_strategy/smart_trade_ptrade_cross_signal_etf.py`, `tests/test_cross_signal_ptrade_strategy.py`, `cross_signal_strategy/docs/ptrade_deployment.md`, `cross_signal_strategy/docs/decisions.md`
+Allowed validation influence: none; this is PTrade observability work and no market-period data, strategy return, or validation result was read
+Status: adopted for the formal cross-signal PTrade adapter; JoinQuant/local strategy logic, frozen parameters and ETF pool, and production multi-factor files remain unchanged
