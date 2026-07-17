@@ -7,13 +7,14 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 50 real ledger entries.
+- Recorded failed or non-adopted experiments: 51 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
 - New open budget: zero. The one fixed `etf_share_flow_shadow`
   `positive_vs_non_positive` observation is complete and exhausted.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
+- The completed fixed `cross_window=1/2/3/4` comparison remains closed; window 3 is retained.
 
 ## Frozen Families
 
@@ -32,6 +33,7 @@ it does not change any score, order, position, or risk rule.
 | `market_breadth` | exhausted | The fixed MA20/50% observation reversed in 2021; low breadth was then the better early-reversal environment. |
 | `etf_microstructure` | exhausted | Only two above-5% buys existed, both in 2020 and `513100`; do not lower the threshold or widen the QDII scope post hoc. |
 | `macd_half_cycle_user_authorized` | exhausted | The fixed `(6,13,5)` variant reduced return and most quality metrics; do not search neighboring MACD periods. |
+| `cross_window_user_authorized` | exhausted | The fixed `1/2/3/4` matrix retained window 3; do not search wider, per-indicator, or age-weighted windows. |
 | `horizontal_price_structure` | exhausted | The fixed 20-day T-2-safe/one-ATR observation failed annual consistency; do not search alternate windows, thresholds, pivots, breakout rules, or volume profiles. |
 | `controlled_breakout_anti_chase` | exhausted | The fixed 20-day T-2-safe observation found only 2 extended breakouts, failed total and annual sample gates, and did not permit a candidate. Do not search another `RSI6 >= 75`, MA20 10%, window, AND rule, breakout reward, or sell change. |
 | `etf_share_flow_shadow` | exhausted | The fixed five-observation sign-only attribution covered all 52 eligible domestic buys, but non-positive flow led average return in 2019/2020 while positive flow led both metrics in 2021. No candidate was permitted. |

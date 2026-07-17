@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 50,
+  "expected_failed_experiment_count": 51,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -98,6 +98,24 @@
       "status": "exhausted",
       "max_new_experiments": 0,
       "rationale": "The one fixed MACD(6,13,5) comparison was consumed. It cut local training return from 120.61% to 84.69% and worsened Sharpe, Sortino, win rate, profit/loss ratio, 2019, and 2021. Nearby period searches are prohibited."
+    },
+    {
+      "key": "cross_window_user_authorized",
+      "label": "User-authorized fixed cross-window comparison",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The fixed cross_window=1/2/3/4 matrix was consumed. Official window 3 had the highest total and annualized return, lowest drawdown, and strongest Sharpe, Sortino, and profit/loss ratio. Windows 1, 2, and 4 all failed the pre-registered gate. Wider, per-indicator, or age-weighted window searches are prohibited.",
+      "windows": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "baseline_window": 3,
+      "selected_window": 3,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
     },
     {
       "key": "horizontal_price_structure",

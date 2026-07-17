@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 50
-    assert report.expected_failed_experiment_count == 50
+    assert report.failed_experiment_count == 51
+    assert report.expected_failed_experiment_count == 51
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -197,6 +197,37 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
     assert budget.max_total_open_experiments == 0
+
+
+def test_user_authorized_cross_window_budget_is_consumed_after_fixed_matrix():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["cross_window_user_authorized"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "cross_window_user_authorized"
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["windows"] == [1, 2, 3, 4]
+    assert raw["baseline_window"] == 3
+    assert raw["selected_window"] == 3
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is False
 
 
 def test_etf_share_flow_shadow_budget_is_closed_after_one_fixed_observation():
@@ -365,7 +396,7 @@ def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 
     assert "research_budget.json" in text
-    assert "50" in text
+    assert "51" in text
     assert "cross-v0.3.2" in text
     assert "portfolio_dependence" in text
     assert "market_breadth" in text
@@ -374,6 +405,7 @@ def test_readable_research_map_matches_the_structured_budget():
     assert "horizontal_price_structure" in text
     assert "controlled_breakout_anti_chase" in text
     assert "etf_share_flow_shadow" in text
+    assert "cross_window_user_authorized" in text
     assert "positive_vs_non_positive" in text
     assert "52" in text
     assert "2019" in text and "2020" in text and "2021" in text

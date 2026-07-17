@@ -835,3 +835,10 @@ Risk: External scripts or personal commands that imported the old flat module pa
 Affected files: `cross_signal_strategy/README.md`, `cross_signal_strategy/docs/README.md`, `cross_signal_strategy/docs/decisions.md`, moved modules under `cross_signal_strategy/local/`, `cross_signal_strategy/research/`, `cross_signal_strategy/archive/`, and `cross_signal_strategy/tools/`, plus corresponding repository tests and path references
 Allowed validation influence: none; this is repository organization work and no market data, strategy return, or validation-period result was read
 Status: adopted as a repository-layout milestone; strategy logic, parameters, ETF pool, market data, production multi-factor files, and generated reports remain unchanged
+### Retain The Three-Trading-Day Cross Window
+
+- Decision: Keep the formal `cross_window=3` unchanged after the locked local training comparison of windows `1/2/3/4`.
+- Evidence: On 2019-2021 only, window 3 produced the highest total and annualized return, the lowest maximum drawdown, and the strongest Sharpe, Sortino, and profit/loss ratio. Windows 1, 2, and 4 all failed the pre-registered strict non-degradation gate.
+- Data boundary: 2018 was used only as read-only indicator warm-up. No reserved validation-period data was read or used for this decision.
+- Platform boundary: The alternatives failed locally, so no JoinQuant candidate was run and no formal JoinQuant, PTrade, or local-mainline strategy file was changed.
+- Overfitting control: Treat the `1/2/3/4` comparison as the complete neighboring integer-window budget. Do not continue searching wider or per-indicator windows from these outcomes.
