@@ -16,6 +16,9 @@ it does not change any score, order, position, or risk rule.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
 - The completed fixed `cross_window=1/2/3/4` comparison remains closed; window 3 is retained.
 - The completed fixed `09:35/10:00` execution-time comparison remains closed; `09:35` is retained.
+- One independent QDII underlying-index direction observation is pre-registered
+  but blocked because its isolated point-in-time source directory does not exist.
+  A blocked observation is not an open experiment budget.
 
 ## Frozen Families
 
@@ -33,6 +36,7 @@ it does not change any score, order, position, or risk rule.
 | `portfolio_dependence` | exhausted | The fixed 20-day/0.80 observation had only 9 high-dependence trades, and high dependence strongly outperformed in 2020. |
 | `market_breadth` | exhausted | The fixed MA20/50% observation reversed in 2021; low breadth was then the better early-reversal environment. |
 | `etf_microstructure` | exhausted | Only two above-5% buys existed, both in 2020 and `513100`; do not lower the threshold or widen the QDII scope post hoc. |
+| `underlying_market_direction` | blocked | The fixed four-index sign-only observation cannot run until official final values, source calendars, and timezone-aware historical availability timestamps pass the isolated data contract. |
 | `macd_half_cycle_user_authorized` | exhausted | The fixed `(6,13,5)` variant reduced return and most quality metrics; do not search neighboring MACD periods. |
 | `cross_window_user_authorized` | exhausted | The fixed `1/2/3/4` matrix retained window 3; do not search wider, per-indicator, or age-weighted windows. |
 | `execution_time_user_authorized` | exhausted | The fixed `09:35/10:00` comparison failed its annual, trade-quality, and non-QDII execution gates. Retain `09:35`; do not search nearby or ETF-specific times. |
@@ -46,7 +50,12 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. `etf_share_flow_shadow` consumed its only fixed observation. It used the
+None. `underlying_market_direction` is blocked rather than open; it cannot be
+run and cannot create a candidate while its approved source directory is
+missing. Its exact schema and frozen gate are documented in
+`underlying_market_direction.md`.
+
+`etf_share_flow_shadow` consumed its only fixed observation. It used the
 isolated read-only root
 `G:\financial\history_data\cross_signal_flow_train_2018_2021`, exactly five
 prior share observations, and the fixed `positive_vs_non_positive` grouping.

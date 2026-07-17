@@ -59,6 +59,7 @@ indicators, remove ETFs, or search for a new validation-fitting variant.
 - For local training, only read `G:\financial\history_data\cross_signal_train_2019_2021`.
 - For local warm-up, only read `G:\financial\history_data\cross_signal_warmup_2018`.
 - For the exhausted share-flow shadow diagnostic, only read `G:\financial\history_data\cross_signal_flow_train_2018_2021`; treat it as immutable and never extend its result with validation-period shares.
+- For the blocked QDII underlying-index observation, only read `G:\financial\history_data\cross_signal_underlying_train_2018_2021`; require timezone-aware point-in-time availability and never substitute ETF prices or validation-period index data.
 - Do not read `G:\financial\history_data\按年份合并` or other non-training-period market data while designing, tuning, or debugging training-period behavior unless the user explicitly authorizes a validation/final-summary step.
 - Treat `G:\financial\history_data\cross_signal_train_2019_2021` as read-only: do not modify, overwrite, clean in place, delete, or generate derived files inside it.
 - Never run delete/remove commands against `G:\financial\history_data\cross_signal_train_2019_2021` or any file below it.
@@ -86,6 +87,9 @@ These are starting defaults, not optimized parameters.
 
 - `research/trade_quality_ledger.py`: observation-only unified 2019-2021 trade-quality ledger using actual fills, causal holding-path boundaries, fixed MFE/MAE labels, ATR first-barrier labels, and post-sell returns.
 - `docs/trade_quality_ledger.md`: frozen ledger definitions plus the source-index/time-zone evidence required before any QDII underlying-market consistency observation may run.
+- `research/underlying_market_data.py`: exact-root, read-only contract for four official underlying-index histories and China-09:35 point-in-time selection.
+- `research/underlying_consistency.py`: frozen observation-only positive-versus-non-positive attribution and sample/annual/cross-ETF candidate gate.
+- `docs/underlying_market_direction.md`: required directory layout, CSV provenance fields, future-function boundary, frozen gate, and current missing-data blocker.
 
 - `docs/strategy_spec.md`: frozen design before coding.
 - `docs/backtest_notes.md`: structured backtest result log.

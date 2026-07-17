@@ -424,6 +424,46 @@ def test_etf_microstructure_budget_is_closed_after_registered_observation():
     assert rejected.allowed is False
 
 
+def test_underlying_market_direction_is_preregistered_but_data_blocked():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["underlying_market_direction"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "underlying_market_direction"
+    )
+
+    assert family.status == "blocked"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["approved_root"] == (
+        r"G:\financial\history_data\cross_signal_underlying_train_2018_2021"
+    )
+    assert raw["eligible_codes"] == ["513100", "513500", "513050", "513880"]
+    assert raw["source_ids"] == ["NDX", "SPX", "H30533", "N225"]
+    assert raw["decision_time"] == "09:35 Asia/Shanghai"
+    assert raw["grouping"] == "positive_vs_non_positive"
+    assert raw["minimum_coverage"] == pytest.approx(0.90)
+    assert raw["minimum_covered_trades"] == 30
+    assert raw["minimum_group_trades"] == 10
+    assert raw["minimum_annual_group_trades"] == 3
+    assert raw["minimum_cross_etf_comparisons"] == 3
+    assert raw["candidate_action"] == "observation_only"
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is False
+
+
 def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 

@@ -93,6 +93,37 @@
       "rationale": "The one pre-registered 513100/513500 previous-NAV premium attribution found only two above-5% closed buys, both in 2020 and both in 513100. Sample-size, cross-year, and cross-code gates failed, so lower thresholds or wider QDII scopes are prohibited post-hoc searches."
     },
     {
+      "key": "underlying_market_direction",
+      "label": "User-authorized QDII underlying-index direction observation",
+      "status": "blocked",
+      "max_new_experiments": 0,
+      "rationale": "A genuinely independent market-structure hypothesis is pre-registered, but the isolated point-in-time official-index source files do not yet exist. The observation cannot run and no candidate may be created until every file passes the 09:35 availability, finality, source, calendar, and 2018/2019-2021 boundary contract.",
+      "approved_root": "G:\\financial\\history_data\\cross_signal_underlying_train_2018_2021",
+      "eligible_codes": [
+        "513100",
+        "513500",
+        "513050",
+        "513880"
+      ],
+      "source_ids": [
+        "NDX",
+        "SPX",
+        "H30533",
+        "N225"
+      ],
+      "decision_time": "09:35 Asia/Shanghai",
+      "grouping": "positive_vs_non_positive",
+      "minimum_coverage": 0.9,
+      "minimum_covered_trades": 30,
+      "minimum_group_trades": 10,
+      "minimum_annual_group_trades": 3,
+      "minimum_cross_etf_comparisons": 3,
+      "candidate_action": "observation_only",
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
+    {
       "key": "macd_half_cycle_user_authorized",
       "label": "User-authorized fixed MACD half-cycle comparison",
       "status": "exhausted",
