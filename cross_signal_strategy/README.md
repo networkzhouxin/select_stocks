@@ -84,6 +84,9 @@ These are starting defaults, not optimized parameters.
 
 ## Files
 
+- `research/trade_quality_ledger.py`: observation-only unified 2019-2021 trade-quality ledger using actual fills, causal holding-path boundaries, fixed MFE/MAE labels, ATR first-barrier labels, and post-sell returns.
+- `docs/trade_quality_ledger.md`: frozen ledger definitions plus the source-index/time-zone evidence required before any QDII underlying-market consistency observation may run.
+
 - `docs/strategy_spec.md`: frozen design before coding.
 - `docs/backtest_notes.md`: structured backtest result log.
 - `docs/decisions.md`: why each rule was added, rejected, or frozen.
