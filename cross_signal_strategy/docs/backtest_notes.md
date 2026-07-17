@@ -2620,6 +2620,25 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-18 Fixed 09:35 Versus 10:00 Execution-Time Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` signal and risk path with one fixed execution-time candidate
+Engine: local minute execution replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Results:
+- `09:35`: +120.61% total return, 30.27% annualized, 7.47% maximum drawdown, 2.172 Sharpe, 3.415 Sortino, 56.18% win rate, and 4.440 profit/loss ratio.
+- `10:00`: +127.65% total return, 31.65% annualized, 7.15% maximum drawdown, 2.280 Sharpe, 3.670 Sortino, 59.09% win rate, and 4.413 profit/loss ratio.
+- Candidate annual returns were better in 2019 and 2020 but worse in 2021: +39.92%/+50.86%/+7.85% versus +35.84%/+49.74%/+8.46%.
+- Across 135 matched orders, side-adjusted execution averaged about -0.012%. QDII improved by +0.0307%, but non-QDII worsened by -0.0425%.
+- The complete filled-order path changed on 78 days, so aggregate performance cannot be attributed to a uniformly better fill.
+
+Decision:
+- Reject `10:00` under the locked gate and retain formal `09:35` execution.
+- Do not run JoinQuant or any reserved validation period because the local structural gate failed.
+- Close the timing family. Nearby times and subgroup-specific clocks would be post-hoc searches.
+
 ## 2026-07-16 ETF Share-Flow Shadow Diagnostic
 
 Period: 2019-01-01 to 2021-12-31

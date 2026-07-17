@@ -93,6 +93,30 @@ def test_engine_runs_one_day_order_plan_with_0935_execution_and_close_mark():
     assert day.total_value == pytest.approx(19921.4)
 
 
+def test_engine_can_use_preregistered_1000_execution_without_changing_close_mark():
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    raw_price = float(loader.get_minute_bar("510300", "2019-01-02", "10:00")["close"])
+    engine = LocalBacktestEngine(
+        loader=loader,
+        initial_cash=20000.0,
+        execution_time="10:00",
+    )
+
+    def order_plan(current_date, previous_date, broker):
+        return [{"code": "510300", "target_value": 5000.0, "reason": "buy_signal"}]
+
+    results = engine.run(["2019-01-02"], order_plan)
+
+    order = results[0].orders[0]
+    assert order.filled is True
+    assert order.side_time == "2019-01-02 10:00"
+    assert order.exec_price == pytest.approx(engine.broker._buy_exec_price(raw_price))
+    assert results[0].marks["510300"] == pytest.approx(3.017)
+
+
 def test_engine_preserves_filled_order_plan_reason_for_diagnostics():
     from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
     from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader

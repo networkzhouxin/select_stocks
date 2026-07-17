@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 51,
+  "expected_failed_experiment_count": 52,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -113,6 +113,23 @@
       ],
       "baseline_window": 3,
       "selected_window": 3,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
+    {
+      "key": "execution_time_user_authorized",
+      "label": "User-authorized fixed execution-time comparison",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The fixed 09:35 versus 10:00 comparison was consumed. Although 10:00 improved aggregate return, drawdown, Sharpe, Sortino, and win rate locally, it worsened 2021 return and profit/loss ratio. Matched execution prices also failed the pre-registered annual and non-QDII consistency gates. Retain 09:35 and prohibit searches over nearby times, intraday windows, ETF-specific times, or timing interactions.",
+      "execution_times": [
+        "09:35",
+        "10:00"
+      ],
+      "baseline_time": "09:35",
+      "selected_time": "09:35",
+      "gate_passed": false,
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true

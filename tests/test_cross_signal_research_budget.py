@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 51
-    assert report.expected_failed_experiment_count == 51
+    assert report.failed_experiment_count == 52
+    assert report.expected_failed_experiment_count == 52
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -220,6 +220,38 @@ def test_user_authorized_cross_window_budget_is_consumed_after_fixed_matrix():
     assert raw["windows"] == [1, 2, 3, 4]
     assert raw["baseline_window"] == 3
     assert raw["selected_window"] == 3
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is False
+
+
+def test_user_authorized_execution_time_budget_is_consumed_after_fixed_comparison():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["execution_time_user_authorized"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "execution_time_user_authorized"
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["execution_times"] == ["09:35", "10:00"]
+    assert raw["baseline_time"] == "09:35"
+    assert raw["selected_time"] == "09:35"
+    assert raw["gate_passed"] is False
     assert raw["validation_influence"] == "none"
     assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
     assert raw["prohibit_alternatives"] is True
@@ -396,7 +428,7 @@ def test_readable_research_map_matches_the_structured_budget():
     text = GUIDE.read_text(encoding="utf-8")
 
     assert "research_budget.json" in text
-    assert "51" in text
+    assert "52" in text
     assert "cross-v0.3.2" in text
     assert "portfolio_dependence" in text
     assert "market_breadth" in text
@@ -406,6 +438,8 @@ def test_readable_research_map_matches_the_structured_budget():
     assert "controlled_breakout_anti_chase" in text
     assert "etf_share_flow_shadow" in text
     assert "cross_window_user_authorized" in text
+    assert "execution_time_user_authorized" in text
+    assert "09:35" in text and "10:00" in text
     assert "positive_vs_non_positive" in text
     assert "52" in text
     assert "2019" in text and "2020" in text and "2021" in text

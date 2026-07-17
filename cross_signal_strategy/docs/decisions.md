@@ -842,3 +842,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Data boundary: 2018 was used only as read-only indicator warm-up. No reserved validation-period data was read or used for this decision.
 - Platform boundary: The alternatives failed locally, so no JoinQuant candidate was run and no formal JoinQuant, PTrade, or local-mainline strategy file was changed.
 - Overfitting control: Treat the `1/2/3/4` comparison as the complete neighboring integer-window budget. Do not continue searching wider or per-indicator windows from these outcomes.
+
+### Retain 09:35 After The Fixed 10:00 Execution Comparison
+
+- Decision: Keep formal execution at `09:35`; reject the single pre-registered `10:00` candidate and close the execution-time family.
+- Evidence: On 2019-2021 local training, `10:00` improved total return from +120.61% to +127.65% and reduced drawdown from 7.47% to 7.15%, but it lowered 2021 return from +8.46% to +7.85% and profit/loss ratio from 4.440 to 4.413. Across 135 matched orders, side-adjusted execution was slightly worse overall, worse in 2019 and 2021, and worse for non-QDII ETFs.
+- Interpretation: The aggregate gain came from 78 changed downstream order days, not a stable opening-noise execution advantage. Choosing the higher total-return clock would violate the pre-registered mechanism and annual-consistency gate.
+- Data boundary: Only approved 2018 warm-up and 2019-2021 training data were read. No reserved validation period was inspected.
+- Overfitting control: Do not search nearby times, VWAP windows, ETF-specific clocks, QDII-only clocks, or timing interactions. Reopening requires prospective evidence with a separately reserved confirmation sample.
+- Platform boundary: No JoinQuant candidate was run and no formal JoinQuant, PTrade, or local-mainline strategy file was changed.

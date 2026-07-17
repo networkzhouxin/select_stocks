@@ -168,11 +168,12 @@ OrderPlan = Callable[[str, str | None, LocalBroker], Sequence[Mapping[str, objec
 
 
 class LocalBacktestEngine:
-    """Minimal daily loop using T-day 09:35 execution and close marks."""
+    """Minimal daily loop using a fixed T-day execution time and close marks."""
 
-    def __init__(self, loader, initial_cash: float) -> None:
+    def __init__(self, loader, initial_cash: float, execution_time: str = "09:35") -> None:
         self.loader = loader
         self.broker = LocalBroker(initial_cash=initial_cash)
+        self.execution_time = str(execution_time)[:5]
 
     def run(self, trade_dates: Iterable[str], order_plan: OrderPlan) -> List[DayResult]:
         ordered_dates = [str(d) for d in trade_dates]
@@ -200,22 +201,26 @@ class LocalBacktestEngine:
                         amount_delta=0,
                         exec_price=0.0,
                         commission=0.0,
-                        side_time=f"{current_date} 09:35",
+                        side_time=f"{current_date} {self.execution_time}",
                         filled=False,
                         reason="no available holding slot after execution",
                     ))
                     continue
                 try:
-                    execution_bar = self.loader.get_minute_bar(code, current_date, "09:35")
+                    execution_bar = self.loader.get_minute_bar(
+                        code,
+                        current_date,
+                        self.execution_time,
+                    )
                 except (FileNotFoundError, KeyError):
                     orders.append(OrderResult(
                         code=code,
                         amount_delta=0,
                         exec_price=0.0,
                         commission=0.0,
-                        side_time=f"{current_date} 09:35",
+                        side_time=f"{current_date} {self.execution_time}",
                         filled=False,
-                        reason="missing execution bar at 09:35",
+                        reason=f"missing execution bar at {self.execution_time}",
                     ))
                     continue
                 price = float(execution_bar["close"])
@@ -225,16 +230,16 @@ class LocalBacktestEngine:
                         amount_delta=0,
                         exec_price=price,
                         commission=0.0,
-                        side_time=f"{current_date} 09:35",
+                        side_time=f"{current_date} {self.execution_time}",
                         filled=False,
-                        reason="no executable trade at 09:35",
+                        reason=f"no executable trade at {self.execution_time}",
                     ))
                     continue
                 order = self.broker.order_target_value(
                     code=code,
                     target_value=target_value,
                     price=price,
-                    side_time=f"{current_date} 09:35",
+                    side_time=f"{current_date} {self.execution_time}",
                 )
                 if order.filled and plan_reason:
                     order.reason = plan_reason
@@ -278,7 +283,9 @@ class LocalBacktestEngine:
         candidates = set(self.broker.positions.keys())
         for code in candidates:
             try:
-                prices[code] = float(self.loader.get_minute_bar(code, current_date, "09:35")["close"])
+                prices[code] = float(
+                    self.loader.get_minute_bar(code, current_date, self.execution_time)["close"]
+                )
             except (FileNotFoundError, KeyError):
                 continue
         return prices
