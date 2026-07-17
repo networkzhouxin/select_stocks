@@ -215,6 +215,37 @@ The public web search result `ptradeapi.com` describes itself as a personally
 annotated copy of the original API documentation, so it is not treated as an
 official authority for this port.
 
+## PTrade 运行日志审计
+
+部署或重启后的日志可先用仓库内的只读工具做结构化检查：
+
+```powershell
+python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --date YYYY-MM-DD
+```
+
+工具按指定交易日检查初始化、状态恢复、09:35 主流程、条件性 10:35
+复牌补偿、收盘汇总、委托及成交回报、`ERROR`、`WARNING`，以及 QDII
+买入前是否已经记录 `[IOPV观察]`。它不会修改日志、策略或检查点，且
+不读取行情数据、不调用 PTrade API，也不使用任何训练期或验证期数据。
+日志包含多个交易日时必须使用 `--date` 逐日审计；工具不会把不同日期的
+初始化、委托与收盘记录拼成一个貌似完整的交易日。
+
+审计状态含义如下：
+
+- `通过`：日志中存在该检查所要求的正面证据，且未发现对应失败证据。
+- `失败`：发现明确的错误、未验证持仓、缺失的强制运行阶段，或 QDII
+  买入前缺少 IOPV 观察等阻断事实。
+- `需复核`：例如已经提交委托，但日志中没有后续成交、撤单或拒绝回报；
+  不能仅凭当前日志证明最终状态。
+- `条件未触发`：当日没有停牌补偿、没有委托或没有 QDII 买入，因此
+  相应日志本来就不应出现；这不是失败。
+- `证据不足`：日志片段、日期或格式不足以得出结论；不能视为已经通过。
+
+证据边界：该工具只能审计日志里已经记录的事实，不能替代券商委托、
+成交回报、持仓、交割单和检查点文件的人工核验，也不能证明未写入日志的
+事件没有发生。凡是 `失败`、`需复核` 或 `证据不足`，均应先保留原始日志
+并查明根因，再决定是否启用实盘资金。
+
 ## Deployment Check
 
 1. Copy the complete PTrade deployment file into a new Guojin PTrade strategy.

@@ -103,6 +103,7 @@ These are starting defaults, not optimized parameters.
 - `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
 - `smart_trade_joinquant_cross_signal_etf.py`: frozen formal JoinQuant strategy and business-logic source of truth.
 - `smart_trade_ptrade_cross_signal_etf.py`: Guojin PTrade live adapter frozen to the official JoinQuant `cross-v0.3.2` business rules, with failure-open observation-only IOPV logging immediately before actual QDII buy submissions.
+- `tools/audit_ptrade_runtime_log.py`: 只读 PTrade 运行日志审计工具；可按交易日检查初始化、状态恢复、09:35 主流程、条件性 10:35 复牌补偿、收盘汇总、委托回报、错误和 QDII IOPV 日志顺序。示例：`python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --date YYYY-MM-DD`。
 - `docs/ptrade_deployment.md`: PTrade schedule, data boundary, order lifecycle, restart recovery, and deployment checklist.
 - `research/training_stability.py`: training-only annual, concentration, exit, holding-period, regime, and doubled-friction diagnostics.
 - `research/friction_diagnostics.py`: cached-signal training replay that isolates commission-rate, minimum-commission, and slippage sensitivity.
