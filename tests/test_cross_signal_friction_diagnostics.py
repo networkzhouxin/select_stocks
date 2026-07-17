@@ -24,7 +24,7 @@ class FakeSourceAdapter:
 
 
 def baseline_report(end_value, max_drawdown=0.05, buy_count=10, sell_count=9):
-    from cross_signal_strategy.baseline_report import BaselineReport
+    from cross_signal_strategy.research.baseline_report import BaselineReport
 
     return BaselineReport(
         start_date="2019-01-02",
@@ -49,7 +49,7 @@ def baseline_report(end_value, max_drawdown=0.05, buy_count=10, sell_count=9):
 
 
 def test_precomputed_signal_adapter_calls_source_once_and_returns_defensive_copies():
-    from cross_signal_strategy.friction_diagnostics import PrecomputedSignalAdapter
+    from cross_signal_strategy.research.friction_diagnostics import PrecomputedSignalAdapter
 
     source = FakeSourceAdapter()
     cached = PrecomputedSignalAdapter.from_source(
@@ -72,7 +72,7 @@ def test_precomputed_signal_adapter_calls_source_once_and_returns_defensive_copi
 
 
 def test_precomputed_signal_adapter_rejects_dates_outside_training_window():
-    from cross_signal_strategy.friction_diagnostics import PrecomputedSignalAdapter
+    from cross_signal_strategy.research.friction_diagnostics import PrecomputedSignalAdapter
 
     with pytest.raises(ValueError, match="outside 2019-2021 training window"):
         PrecomputedSignalAdapter.from_source(
@@ -83,7 +83,7 @@ def test_precomputed_signal_adapter_rejects_dates_outside_training_window():
 
 
 def test_friction_decomposition_identifies_each_component_and_interaction():
-    from cross_signal_strategy.friction_diagnostics import build_friction_decomposition
+    from cross_signal_strategy.research.friction_diagnostics import build_friction_decomposition
 
     reports = {
         "baseline": baseline_report(40000.0, max_drawdown=0.05),
@@ -107,7 +107,7 @@ def test_friction_decomposition_identifies_each_component_and_interaction():
 
 
 def test_friction_decomposition_requires_every_locked_scenario():
-    from cross_signal_strategy.friction_diagnostics import build_friction_decomposition
+    from cross_signal_strategy.research.friction_diagnostics import build_friction_decomposition
 
     with pytest.raises(ValueError, match="Missing friction scenarios"):
         build_friction_decomposition({"baseline": baseline_report(40000.0)})

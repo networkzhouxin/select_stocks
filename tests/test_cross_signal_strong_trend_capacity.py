@@ -28,7 +28,7 @@ def order(code, target_value, reason):
 
 
 def closed_trade(code, buy_date, sell_date, pnl, entry_score=None):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     buy_price = 10.0
     sell_price = buy_price + float(pnl) / 100.0
@@ -47,7 +47,7 @@ def closed_trade(code, buy_date, sell_date, pnl, entry_score=None):
 
 
 def day(date, orders=None, cash=10000.0, positions=None, total_value=10000.0):
-    from cross_signal_strategy.local_backtester import DayResult
+    from cross_signal_strategy.local.local_backtester import DayResult
 
     positions = positions or {}
     return DayResult(
@@ -62,7 +62,7 @@ def day(date, orders=None, cash=10000.0, positions=None, total_value=10000.0):
 
 
 def filled_buy(code):
-    from cross_signal_strategy.local_backtester import OrderResult
+    from cross_signal_strategy.local.local_backtester import OrderResult
 
     return OrderResult(
         code=code,
@@ -76,8 +76,8 @@ def filled_buy(code):
 
 
 def test_build_entry_contexts_uses_only_slot_left_after_all_primary_buys():
-    from cross_signal_strategy.local_backtester import Position
-    from cross_signal_strategy.strong_trend_capacity_diagnostics import (
+    from cross_signal_strategy.local.local_backtester import Position
+    from cross_signal_strategy.research.strong_trend_capacity_diagnostics import (
         build_entry_contexts,
     )
 
@@ -111,7 +111,7 @@ def test_build_entry_contexts_uses_only_slot_left_after_all_primary_buys():
 
 
 def test_build_entry_contexts_assigns_one_unused_slot_to_top_ranked_strong_buy():
-    from cross_signal_strategy.strong_trend_capacity_diagnostics import (
+    from cross_signal_strategy.research.strong_trend_capacity_diagnostics import (
         build_entry_contexts,
     )
 
@@ -139,7 +139,7 @@ def test_build_entry_contexts_assigns_one_unused_slot_to_top_ranked_strong_buy()
 
 
 def test_capacity_report_calculates_close_based_excursions_and_year_quality():
-    from cross_signal_strategy.strong_trend_capacity_diagnostics import (
+    from cross_signal_strategy.research.strong_trend_capacity_diagnostics import (
         StrongTrendEntryContext,
         build_strong_trend_capacity_report,
     )
@@ -189,7 +189,7 @@ def test_capacity_report_calculates_close_based_excursions_and_year_quality():
 
 
 def test_capacity_gate_requires_enough_profitable_entries_in_every_training_year():
-    from cross_signal_strategy.strong_trend_capacity_diagnostics import (
+    from cross_signal_strategy.research.strong_trend_capacity_diagnostics import (
         CapacityConcentration,
         StrongTrendPathStats,
         evaluate_capacity_gate,
@@ -240,7 +240,7 @@ def test_capacity_gate_requires_enough_profitable_entries_in_every_training_year
 
 
 def test_capacity_report_rejects_dates_outside_training_window():
-    from cross_signal_strategy.strong_trend_capacity_diagnostics import (
+    from cross_signal_strategy.research.strong_trend_capacity_diagnostics import (
         build_strong_trend_capacity_report,
     )
 

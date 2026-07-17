@@ -8,14 +8,14 @@ from typing import List
 
 import pandas as pd
 
-from cross_signal_strategy.local_adjustment import (
+from cross_signal_strategy.local.local_adjustment import (
     default_training_adjustment_factors,
     default_training_daily_corrections,
 )
-from cross_signal_strategy.local_data_loader import APPROVED_WARMUP_ROOT
-from cross_signal_strategy.local_backtester import LocalBacktestEngine
-from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
-from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+from cross_signal_strategy.local.local_data_loader import APPROVED_WARMUP_ROOT
+from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
+from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
 
 @dataclass(frozen=True)

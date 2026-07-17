@@ -37,7 +37,7 @@ Historical official mainline before the 2026-07-10 adoption update:
 - Role: historical training-confirmed baseline for the comparisons below.
 
 ATR-stress candidate:
-- File: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+- File: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 - Version: `cross-v0.3.1-atr-stress-candidate`
 - Rule: if the portfolio has at least 3 ATR stops in the recent 15 trading days, new buys are scaled to 50% target size.
 - Role: low-frequency crash-regime risk-control candidate.

@@ -33,7 +33,7 @@ def candidate_score(**overrides):
 
 
 def test_combo_candidate_blocks_macd_rsi_volume_entry_without_kdj():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_combo_candidate as candidate,
     )
 
@@ -44,7 +44,7 @@ def test_combo_candidate_blocks_macd_rsi_volume_entry_without_kdj():
 
 
 def test_combo_candidate_keeps_kdj_or_strong_trend_confirmed_entries():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_combo_candidate as candidate,
     )
 

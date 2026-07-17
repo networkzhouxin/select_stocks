@@ -16,8 +16,8 @@ WARMUP_ROOT = pathlib.Path(r"G:\financial\history_data\cross_signal_warmup_2018"
 
 
 def test_signal_frame_uses_previous_trading_day_only():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT))
 
@@ -29,8 +29,8 @@ def test_signal_frame_uses_previous_trading_day_only():
 
 
 def test_signal_frame_uses_2018_warmup_without_leaking_current_day():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
 
@@ -43,8 +43,8 @@ def test_signal_frame_uses_2018_warmup_without_leaking_current_day():
 
 
 def test_missing_warmup_file_does_not_block_listed_2019_data():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
 
@@ -55,8 +55,8 @@ def test_missing_warmup_file_does_not_block_listed_2019_data():
 
 
 def test_signal_score_reports_short_data_without_using_future_rows():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT))
 
@@ -67,8 +67,8 @@ def test_signal_score_reports_short_data_without_using_future_rows():
 
 
 def test_signal_score_matches_strategy_snapshot_scoring_after_lookback():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT))
 
@@ -86,8 +86,8 @@ def test_signal_score_matches_strategy_snapshot_scoring_after_lookback():
 
 
 def test_signal_score_allows_new_listing_when_required_indicators_are_valid():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
 
@@ -101,8 +101,8 @@ def test_signal_score_allows_new_listing_when_required_indicators_are_valid():
 
 
 def test_signal_score_allows_listing_before_ma60_when_core_indicators_are_valid():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
 
@@ -117,9 +117,9 @@ def test_signal_score_allows_listing_before_ma60_when_core_indicators_are_valid(
 
 
 def test_signal_score_suppresses_sub_float_falling_ma10_artifact():
-    from cross_signal_strategy.local_adjustment import default_training_adjustment_factors
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_adjustment import default_training_adjustment_factors
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(
         CrossSignalTrainingDataLoader(TRAIN_ROOT),
@@ -136,9 +136,9 @@ def test_signal_score_suppresses_sub_float_falling_ma10_artifact():
 
 
 def test_signal_frame_applies_confirmed_daily_bar_correction_without_mutating_raw_data():
-    from cross_signal_strategy.local_adjustment import default_training_daily_corrections
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_adjustment import default_training_daily_corrections
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     raw = loader.load_daily_frame("512100", "2020-12-31")
@@ -160,7 +160,7 @@ def test_signal_frame_applies_confirmed_daily_bar_correction_without_mutating_ra
 def test_signal_frame_applies_current_day_adjustment_without_future_events():
     import pandas as pd
 
-    from cross_signal_strategy.local_adjustment import LocalAdjustmentFactors
+    from cross_signal_strategy.local.local_adjustment import LocalAdjustmentFactors
 
     frame = pd.DataFrame(
         {
@@ -188,9 +188,9 @@ def test_signal_frame_applies_current_day_adjustment_without_future_events():
 
 
 def test_local_signal_adapter_can_align_ex_dividend_signal_close():
-    from cross_signal_strategy.local_adjustment import LocalAdjustmentFactors
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_adjustment import LocalAdjustmentFactors
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     factors = LocalAdjustmentFactors.from_records(
         [{"code": "510880", "ex_date": "2020-01-17", "ex_factor": 1.0513740030198886}]
@@ -209,8 +209,8 @@ def test_local_signal_adapter_can_align_ex_dividend_signal_close():
 
 
 def test_signal_score_cache_returns_isolated_copies():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT), warmup_root=WARMUP_ROOT)
 

@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from math import isnan
 from typing import Dict, Iterable, Mapping
 
-from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-from cross_signal_strategy.trade_diagnostics import (
+from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+from cross_signal_strategy.research.trade_diagnostics import (
     ClosedTradeDiagnostic,
     run_training_trade_diagnostics,
 )

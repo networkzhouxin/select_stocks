@@ -2,7 +2,10 @@
 
 This folder stores research notes, validation records, and design decisions for the cross-signal ETF strategy.
 
-The runnable JoinQuant strategy file should live one level up in `cross_signal_strategy/` so it stays easy to find.
+The three formal entry files live one level up in `cross_signal_strategy/`: the
+JoinQuant strategy, the PTrade adapter, and the local training replay entry.
+Archived candidates and probes live under `archive/`; support and research
+modules live under `local/`, `research/`, and `tools/`.
 
 Key files:
 

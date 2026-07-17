@@ -70,7 +70,7 @@ def closed_trade(
     resistance_distance_atr=0.5,
     support_distance_atr=4.0,
 ):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -93,7 +93,7 @@ def closed_trade(
 
 
 def stats(trades, average_return, win_rate):
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         HorizontalStructureStats,
     )
 
@@ -113,7 +113,7 @@ def stats(trades, average_return, win_rate):
 
 
 def test_levels_use_exactly_twenty_bars_strictly_before_signal_date():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         calc_horizontal_structure,
     )
 
@@ -158,7 +158,7 @@ def test_structure_buckets_use_locked_one_atr_boundaries(
     pressure_bucket,
     support_bucket,
 ):
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         calc_horizontal_structure,
     )
 
@@ -177,7 +177,7 @@ def test_structure_buckets_use_locked_one_atr_boundaries(
 
 
 def test_structure_returns_no_data_for_short_history_or_invalid_atr():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         calc_horizontal_structure,
     )
 
@@ -199,7 +199,7 @@ def test_structure_returns_no_data_for_short_history_or_invalid_atr():
 
 
 def test_structure_rejects_any_row_after_signal_date():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         calc_horizontal_structure,
     )
 
@@ -217,7 +217,7 @@ def test_structure_rejects_any_row_after_signal_date():
 
 
 def test_adapter_enriches_a_defensive_copy_without_changing_base_score():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         HorizontalStructureSignalAdapter,
     )
 
@@ -235,7 +235,7 @@ def test_adapter_enriches_a_defensive_copy_without_changing_base_score():
 
 
 def test_gate_requires_annual_return_and_win_rate_underperformance():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         evaluate_near_resistance_gate,
     )
 
@@ -261,7 +261,7 @@ def test_gate_requires_annual_return_and_win_rate_underperformance():
 
 
 def test_report_keeps_support_descriptive_and_gates_only_mild_pressure():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         build_horizontal_structure_report,
     )
 
@@ -283,7 +283,7 @@ def test_report_keeps_support_descriptive_and_gates_only_mild_pressure():
 
 
 def test_report_rejects_validation_dates():
-    from cross_signal_strategy.horizontal_structure_diagnostics import (
+    from cross_signal_strategy.research.horizontal_structure_diagnostics import (
         build_horizontal_structure_report,
     )
 

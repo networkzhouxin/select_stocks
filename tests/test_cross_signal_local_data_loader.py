@@ -14,21 +14,21 @@ TRAIN_ROOT = pathlib.Path(r"G:\financial\history_data\cross_signal_train_2019_20
 
 
 def test_loader_rejects_non_training_root():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     with pytest.raises(ValueError, match="approved training data root"):
         CrossSignalTrainingDataLoader(pathlib.Path(r"G:\financial\history_data\按年份合并"))
 
 
 def test_loader_rejects_paths_inside_training_root_for_writes():
-    from cross_signal_strategy.local_data_loader import assert_not_training_write_path
+    from cross_signal_strategy.local.local_data_loader import assert_not_training_write_path
 
     with pytest.raises(ValueError, match="read-only"):
         assert_not_training_write_path(TRAIN_ROOT / "minute_1m" / "2019" / "510300.csv")
 
 
 def test_loader_rejects_paths_inside_warmup_root_for_writes():
-    from cross_signal_strategy.local_data_loader import assert_not_training_write_path
+    from cross_signal_strategy.local.local_data_loader import assert_not_training_write_path
 
     warmup_root = pathlib.Path(r"G:\financial\history_data\cross_signal_warmup_2018")
 
@@ -37,7 +37,7 @@ def test_loader_rejects_paths_inside_warmup_root_for_writes():
 
 
 def test_loader_returns_0935_minute_bar_from_training_data():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     row = loader.get_minute_bar("510300", "2019-01-02", "09:35")
@@ -50,7 +50,7 @@ def test_loader_returns_0935_minute_bar_from_training_data():
 
 
 def test_loader_rejects_dates_outside_training_window():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
 
@@ -59,7 +59,7 @@ def test_loader_rejects_dates_outside_training_window():
 
 
 def test_loader_detects_out_of_window_dates_in_loaded_frame(tmp_path):
-    from cross_signal_strategy.local_data_loader import assert_dates_in_training_window
+    from cross_signal_strategy.local.local_data_loader import assert_dates_in_training_window
 
     frame = pd.DataFrame({"date": ["2019-01-02", "2022-01-04"]})
 
@@ -68,7 +68,7 @@ def test_loader_detects_out_of_window_dates_in_loaded_frame(tmp_path):
 
 
 def test_loader_caches_training_csv_reads_and_returns_defensive_copies(monkeypatch):
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     calls = []
     original_read_csv = pd.read_csv

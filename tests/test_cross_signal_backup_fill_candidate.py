@@ -47,7 +47,7 @@ def candidate(code, buy_score, **overrides):
 
 
 def test_backup_filter_keeps_only_50_59_scores_that_pass_all_mainline_filters():
-    from cross_signal_strategy.backup_fill_candidate import filter_backup_buy_candidates
+    from cross_signal_strategy.archive.candidates.backup_fill_candidate import filter_backup_buy_candidates
 
     valid = candidate("VALID", 55)
     primary = candidate("PRIMARY", 60)
@@ -71,8 +71,8 @@ def test_backup_filter_keeps_only_50_59_scores_that_pass_all_mainline_filters():
 
 
 def test_backup_planner_fills_only_slots_left_by_primary_candidates():
-    from cross_signal_strategy.backup_fill_candidate import BackupFillOrderPlanner
-    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.archive.candidates.backup_fill_candidate import BackupFillOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
 
     scores = {
         "PRIMARY": candidate("PRIMARY", 70),
@@ -93,8 +93,8 @@ def test_backup_planner_fills_only_slots_left_by_primary_candidates():
 
 
 def test_backup_planner_does_not_displace_three_primary_candidates():
-    from cross_signal_strategy.backup_fill_candidate import BackupFillOrderPlanner
-    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.archive.candidates.backup_fill_candidate import BackupFillOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
 
     scores = {
         "P1": candidate("P1", 80),

@@ -19,7 +19,7 @@ GUIDE = ROOT / "cross_signal_strategy" / "docs" / "research_budget.md"
 
 
 def test_parse_failed_experiments_requires_complete_core_fields():
-    from cross_signal_strategy.research_budget import parse_failed_experiments
+    from cross_signal_strategy.research.research_budget import parse_failed_experiments
 
     text = """\
 Date: 2026-07-11
@@ -49,7 +49,7 @@ Why it failed: The sample was too small.
 
 
 def test_repository_budget_accounts_for_every_recorded_experiment():
-    from cross_signal_strategy.research_budget import audit_research_budget
+    from cross_signal_strategy.research.research_budget import audit_research_budget
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
@@ -60,7 +60,7 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
 
 def test_budget_freezes_exhausted_search_and_limits_open_families():
-    from cross_signal_strategy.research_budget import load_research_budget
+    from cross_signal_strategy.research.research_budget import load_research_budget
 
     budget = load_research_budget(BUDGET)
     families = {family.key: family for family in budget.families}
@@ -80,7 +80,7 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
 
 
 def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_path):
-    from cross_signal_strategy.research_budget import (
+    from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
     )
@@ -188,7 +188,7 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
 
 
 def test_budget_is_training_only_and_forbids_validation_tuning():
-    from cross_signal_strategy.research_budget import load_research_budget
+    from cross_signal_strategy.research.research_budget import load_research_budget
 
     budget = load_research_budget(BUDGET)
 
@@ -200,7 +200,7 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
 
 
 def test_etf_share_flow_shadow_budget_is_closed_after_one_fixed_observation():
-    from cross_signal_strategy.research_budget import (
+    from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
     )
@@ -251,7 +251,7 @@ def test_etf_share_flow_shadow_budget_is_closed_after_one_fixed_observation():
 
 
 def test_user_authorized_controlled_breakout_budget_is_consumed_after_one_observation():
-    from cross_signal_strategy.research_budget import (
+    from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
     )
@@ -288,7 +288,7 @@ def test_user_authorized_controlled_breakout_budget_is_consumed_after_one_observ
 
 
 def test_user_authorized_horizontal_structure_budget_is_closed_after_one_observation():
-    from cross_signal_strategy.research_budget import (
+    from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
     )
@@ -313,7 +313,7 @@ def test_user_authorized_horizontal_structure_budget_is_closed_after_one_observa
 
 
 def test_user_authorized_macd_budget_is_consumed_after_one_fixed_variant():
-    from cross_signal_strategy.research_budget import (
+    from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
     )
@@ -338,7 +338,7 @@ def test_user_authorized_macd_budget_is_consumed_after_one_fixed_variant():
 
 
 def test_etf_microstructure_budget_is_closed_after_registered_observation():
-    from cross_signal_strategy.research_budget import (
+    from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
     )

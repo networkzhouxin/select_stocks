@@ -13,7 +13,7 @@ sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 
 def test_sell35_candidate_only_raises_normal_signal_sell_threshold():
     from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf as mainline
-    from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf_sell35_candidate as candidate
+    from cross_signal_strategy.archive.candidates import smart_trade_joinquant_cross_signal_etf_sell35_candidate as candidate
 
     main_params = mainline.get_default_params()
     candidate_params = candidate.get_default_params()
@@ -30,7 +30,7 @@ def test_sell35_candidate_only_raises_normal_signal_sell_threshold():
 
 
 def test_sell35_candidate_keeps_atr_stop_unconditional_but_blocks_weak_signal_sell():
-    from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf_sell35_candidate as candidate
+    from cross_signal_strategy.archive.candidates import smart_trade_joinquant_cross_signal_etf_sell35_candidate as candidate
 
     weak_signal = {
         "sell_score": 34,

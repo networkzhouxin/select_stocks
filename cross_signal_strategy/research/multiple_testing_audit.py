@@ -9,15 +9,15 @@ from pathlib import Path
 from statistics import NormalDist
 from typing import Dict, Iterable, Sequence
 
-from cross_signal_strategy.baseline_report import build_baseline_report
-from cross_signal_strategy.local_backtester import LocalBacktestEngine
-from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+from cross_signal_strategy.research.baseline_report import build_baseline_report
+from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 from cross_signal_strategy.local_training_run import (
     build_training_signal_adapter,
     get_training_trade_dates,
 )
-from cross_signal_strategy.research_budget import audit_research_budget
+from cross_signal_strategy.research.research_budget import audit_research_budget
 
 
 TRAINING_START = "2019-01-01"

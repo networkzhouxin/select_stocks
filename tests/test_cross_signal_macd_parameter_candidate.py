@@ -21,7 +21,7 @@ def performance(
     profit_loss_ratio,
     annual_returns,
 ):
-    from cross_signal_strategy.macd_parameter_candidate import MacdPerformance
+    from cross_signal_strategy.archive.candidates.macd_parameter_candidate import MacdPerformance
 
     return MacdPerformance(
         total_return=total_return,
@@ -38,7 +38,7 @@ def performance(
 
 
 def day(date, total_value, code=None, amount=100, reason="buy_signal"):
-    from cross_signal_strategy.local_backtester import DayResult, OrderResult
+    from cross_signal_strategy.local.local_backtester import DayResult, OrderResult
 
     orders = []
     if code:
@@ -63,8 +63,8 @@ def day(date, total_value, code=None, amount=100, reason="buy_signal"):
 
 
 def test_candidate_changes_only_macd_periods_from_official_v032():
-    from cross_signal_strategy.local_order_planner import strategy
-    from cross_signal_strategy.macd_parameter_candidate import (
+    from cross_signal_strategy.local.local_order_planner import strategy
+    from cross_signal_strategy.archive.candidates.macd_parameter_candidate import (
         CANDIDATE_VERSION,
         candidate_params,
     )
@@ -86,7 +86,7 @@ def test_candidate_changes_only_macd_periods_from_official_v032():
 
 
 def test_macd_gate_is_pre_registered_as_strict_non_degradation():
-    from cross_signal_strategy.macd_parameter_candidate import evaluate_macd_gate
+    from cross_signal_strategy.archive.candidates.macd_parameter_candidate import evaluate_macd_gate
 
     baseline = performance(
         total_return=1.20,
@@ -138,7 +138,7 @@ def test_macd_gate_is_pre_registered_as_strict_non_degradation():
 
 
 def test_macd_comparison_counts_all_filled_order_path_changes():
-    from cross_signal_strategy.macd_parameter_candidate import build_macd_comparison
+    from cross_signal_strategy.archive.candidates.macd_parameter_candidate import build_macd_comparison
 
     baseline = [
         day("2019-12-31", 11000.0, "AAA", amount=100),
@@ -164,7 +164,7 @@ def test_macd_comparison_counts_all_filled_order_path_changes():
 
 
 def test_macd_comparison_rejects_dates_outside_2019_2021_training_window():
-    from cross_signal_strategy.macd_parameter_candidate import build_macd_comparison
+    from cross_signal_strategy.archive.candidates.macd_parameter_candidate import build_macd_comparison
 
     with pytest.raises(ValueError, match="outside 2019-2021 training window"):
         build_macd_comparison(

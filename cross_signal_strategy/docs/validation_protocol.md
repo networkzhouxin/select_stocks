@@ -16,7 +16,7 @@ Run these files exactly as they are before inspecting validation results:
    - Role: current official training-period safety point.
 
 2. Risk-control candidate:
-   - `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+   - `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
    - Version: `cross-v0.3.1-atr-stress-candidate`
    - Role: candidate only; not adopted.
 

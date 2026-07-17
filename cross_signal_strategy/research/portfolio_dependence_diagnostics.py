@@ -9,13 +9,13 @@ from typing import Dict, Iterable, Mapping, Sequence
 
 import pandas as pd
 
-from cross_signal_strategy.local_backtester import LocalBacktestEngine
-from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 from cross_signal_strategy.local_training_run import (
     build_training_signal_adapter,
     get_training_trade_dates,
 )
-from cross_signal_strategy.trade_diagnostics import (
+from cross_signal_strategy.research.trade_diagnostics import (
     ClosedTradeDiagnostic,
     DiagnosticOrderPlanner,
     build_closed_trade_diagnostics,

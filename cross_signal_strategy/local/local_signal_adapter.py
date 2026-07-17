@@ -15,7 +15,7 @@ import pandas as pd
 sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 
 from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf as strategy
-from cross_signal_strategy.local_data_loader import APPROVED_WARMUP_ROOT, assert_warmup_dates
+from cross_signal_strategy.local.local_data_loader import APPROVED_WARMUP_ROOT, assert_warmup_dates
 
 
 @dataclass(frozen=True)

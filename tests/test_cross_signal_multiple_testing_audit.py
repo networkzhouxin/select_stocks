@@ -15,7 +15,7 @@ DECISIONS_DOC = ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
 
 
 def days_from_returns(start_value, dated_returns):
-    from cross_signal_strategy.local_backtester import DayResult
+    from cross_signal_strategy.local.local_backtester import DayResult
 
     value = float(start_value)
     days = []
@@ -49,7 +49,7 @@ def positive_training_path():
 
 
 def test_audit_treats_failed_ledger_plus_selected_mainline_as_trial_lower_bound():
-    from cross_signal_strategy.multiple_testing_audit import build_multiple_testing_audit
+    from cross_signal_strategy.research.multiple_testing_audit import build_multiple_testing_audit
 
     report = build_multiple_testing_audit(
         positive_training_path(),
@@ -64,7 +64,7 @@ def test_audit_treats_failed_ledger_plus_selected_mainline_as_trial_lower_bound(
 
 
 def test_audit_applies_bonferroni_to_psr_without_calling_it_canonical_dsr():
-    from cross_signal_strategy.multiple_testing_audit import build_multiple_testing_audit
+    from cross_signal_strategy.research.multiple_testing_audit import build_multiple_testing_audit
 
     report = build_multiple_testing_audit(
         positive_training_path(),
@@ -96,7 +96,7 @@ def test_audit_applies_bonferroni_to_psr_without_calling_it_canonical_dsr():
 
 
 def test_more_unrecorded_trials_can_only_weaken_the_reported_selection_confidence():
-    from cross_signal_strategy.multiple_testing_audit import build_multiple_testing_audit
+    from cross_signal_strategy.research.multiple_testing_audit import build_multiple_testing_audit
 
     lower = build_multiple_testing_audit(
         positive_training_path(),
@@ -118,7 +118,7 @@ def test_more_unrecorded_trials_can_only_weaken_the_reported_selection_confidenc
 
 
 def test_audit_reports_each_training_year_without_using_other_dates():
-    from cross_signal_strategy.multiple_testing_audit import build_multiple_testing_audit
+    from cross_signal_strategy.research.multiple_testing_audit import build_multiple_testing_audit
 
     report = build_multiple_testing_audit(
         positive_training_path(),
@@ -138,7 +138,7 @@ def test_audit_reports_each_training_year_without_using_other_dates():
 
 
 def test_audit_format_labels_evidence_limits_and_not_out_of_sample_validation():
-    from cross_signal_strategy.multiple_testing_audit import (
+    from cross_signal_strategy.research.multiple_testing_audit import (
         build_multiple_testing_audit,
         format_multiple_testing_audit,
     )

@@ -35,7 +35,7 @@ def frame(rows):
 
 
 def closed_trade(direction, year=2019, pnl=100.0, trend_score=10):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -57,7 +57,7 @@ def closed_trade(direction, year=2019, pnl=100.0, trend_score=10):
 
 
 def stats(trades, average_return, win_rate, profit_loss_ratio=1.0):
-    from cross_signal_strategy.boll_width_diagnostics import BollWidthStats
+    from cross_signal_strategy.research.boll_width_diagnostics import BollWidthStats
 
     wins = int(round(trades * win_rate))
     losses = max(0, trades - wins)
@@ -77,7 +77,7 @@ def stats(trades, average_return, win_rate, profit_loss_ratio=1.0):
 
 
 def test_calc_boll_bandwidth_uses_standard_rolling_band_definition():
-    from cross_signal_strategy.boll_width_diagnostics import calc_boll_bandwidth
+    from cross_signal_strategy.research.boll_width_diagnostics import calc_boll_bandwidth
 
     data = frame([
         ("2019-01-01", 1.0),
@@ -93,7 +93,7 @@ def test_calc_boll_bandwidth_uses_standard_rolling_band_definition():
 
 
 def test_boll_width_adapter_uses_frozen_signal_frame_and_returns_copy():
-    from cross_signal_strategy.boll_width_diagnostics import BollWidthSignalAdapter
+    from cross_signal_strategy.research.boll_width_diagnostics import BollWidthSignalAdapter
 
     data = frame([
         ("2019-01-01", 1.0),
@@ -113,7 +113,7 @@ def test_boll_width_adapter_uses_frozen_signal_frame_and_returns_copy():
 
 
 def test_boll_width_adapter_rejects_data_after_signal_date():
-    from cross_signal_strategy.boll_width_diagnostics import BollWidthSignalAdapter
+    from cross_signal_strategy.research.boll_width_diagnostics import BollWidthSignalAdapter
 
     data = frame([
         ("2019-01-02", 1.0),
@@ -130,7 +130,7 @@ def test_boll_width_adapter_rejects_data_after_signal_date():
 
 
 def test_boll_width_attribution_splits_direction_trend_and_year():
-    from cross_signal_strategy.boll_width_diagnostics import (
+    from cross_signal_strategy.research.boll_width_diagnostics import (
         build_boll_width_attribution,
     )
 
@@ -152,7 +152,7 @@ def test_boll_width_attribution_splits_direction_trend_and_year():
 
 
 def test_boll_width_gate_requires_stable_mild_trend_improvement():
-    from cross_signal_strategy.boll_width_diagnostics import (
+    from cross_signal_strategy.research.boll_width_diagnostics import (
         evaluate_boll_width_gate,
     )
 
@@ -178,7 +178,7 @@ def test_boll_width_gate_requires_stable_mild_trend_improvement():
 
 
 def test_boll_width_attribution_rejects_non_training_dates():
-    from cross_signal_strategy.boll_width_diagnostics import (
+    from cross_signal_strategy.research.boll_width_diagnostics import (
         build_boll_width_attribution,
     )
 

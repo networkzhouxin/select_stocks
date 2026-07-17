@@ -21,7 +21,7 @@ def trade(
     trend_score=10,
     buy_price=10.1,
 ):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     sell_price = buy_price + float(pnl) / 100.0
     return ClosedTradeDiagnostic(
@@ -44,7 +44,7 @@ def trade(
 
 
 def stats(trades, average_return, win_rate, profit_loss_ratio=1.0):
-    from cross_signal_strategy.gap_execution_diagnostics import GapTradeStats
+    from cross_signal_strategy.research.gap_execution_diagnostics import GapTradeStats
 
     wins = int(round(trades * win_rate))
     losses = max(0, trades - wins)
@@ -65,7 +65,7 @@ def stats(trades, average_return, win_rate, profit_loss_ratio=1.0):
 
 
 def test_gap_atr_bucket_uses_locked_boundaries():
-    from cross_signal_strategy.gap_execution_diagnostics import gap_atr_bucket
+    from cross_signal_strategy.research.gap_execution_diagnostics import gap_atr_bucket
 
     assert gap_atr_bucket(-0.1) == "non_positive"
     assert gap_atr_bucket(0.0) == "non_positive"
@@ -76,7 +76,7 @@ def test_gap_atr_bucket_uses_locked_boundaries():
 
 
 def test_gap_report_uses_raw_0935_price_not_slippage_adjusted_fill_price():
-    from cross_signal_strategy.gap_execution_diagnostics import (
+    from cross_signal_strategy.research.gap_execution_diagnostics import (
         build_gap_execution_report,
     )
 
@@ -101,7 +101,7 @@ def test_gap_report_uses_raw_0935_price_not_slippage_adjusted_fill_price():
 
 
 def test_gap_report_splits_entry_year_and_trend_without_changing_trade_path():
-    from cross_signal_strategy.gap_execution_diagnostics import (
+    from cross_signal_strategy.research.gap_execution_diagnostics import (
         build_gap_execution_report,
     )
 
@@ -145,7 +145,7 @@ def test_gap_report_splits_entry_year_and_trend_without_changing_trade_path():
 
 
 def test_gap_filter_gate_requires_consistent_annual_underperformance():
-    from cross_signal_strategy.gap_execution_diagnostics import (
+    from cross_signal_strategy.research.gap_execution_diagnostics import (
         evaluate_gap_filter_gate,
     )
 
@@ -171,7 +171,7 @@ def test_gap_filter_gate_requires_consistent_annual_underperformance():
 
 
 def test_gap_report_rejects_same_day_signal_and_non_training_dates():
-    from cross_signal_strategy.gap_execution_diagnostics import (
+    from cross_signal_strategy.research.gap_execution_diagnostics import (
         build_gap_execution_report,
     )
 

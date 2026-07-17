@@ -5,6 +5,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBE_FILE = (
     ROOT
     / "cross_signal_strategy"
+    / "archive"
+    / "probes"
     / "smart_trade_joinquant_cross_signal_iopv_probe.py"
 )
 

@@ -34,7 +34,7 @@ def candidate_score(**overrides):
 
 
 def test_low_bounce_candidate_blocks_volume_low_reversal_without_macd():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_low_bounce_candidate as candidate,
     )
 
@@ -49,7 +49,7 @@ def test_low_bounce_candidate_blocks_volume_low_reversal_without_macd():
 
 
 def test_low_bounce_candidate_keeps_macd_strong_trend_or_non_low_bounce_entries():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_low_bounce_candidate as candidate,
     )
 

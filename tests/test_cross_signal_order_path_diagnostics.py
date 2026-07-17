@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def test_parse_joinquant_order_events_normalizes_buy_and_sell_logs():
-    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_order_events
+    from cross_signal_strategy.research.order_path_diagnostics import parse_joinquant_order_events
 
     text = """
 2019-10-18 09:35:00 - INFO  - [buy] 513880.XSHG buy=80 rev=25 loc=17 trend=9 vol=4 target=5000
@@ -31,7 +31,7 @@ def test_parse_joinquant_order_events_normalizes_buy_and_sell_logs():
 
 
 def test_parse_joinquant_sell_reason_can_contain_score_text():
-    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_order_events
+    from cross_signal_strategy.research.order_path_diagnostics import parse_joinquant_order_events
 
     text = "2019-02-28 09:35:00 - INFO  - [sell] 159915.XSHE reason=sell_score 31 amount=3900"
 
@@ -44,7 +44,7 @@ def test_parse_joinquant_sell_reason_can_contain_score_text():
 
 
 def test_parse_joinquant_filled_order_events_ignores_cancelled_intent():
-    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_filled_order_events
+    from cross_signal_strategy.research.order_path_diagnostics import parse_joinquant_filled_order_events
 
     text = """
 2019-12-12 09:35:00 - INFO  - [sell] 513880.XSHG reason=sell_score 45 amount=5700
@@ -61,7 +61,7 @@ def test_parse_joinquant_filled_order_events_ignores_cancelled_intent():
 
 
 def test_parse_joinquant_filled_order_events_parses_open_as_buy():
-    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_filled_order_events
+    from cross_signal_strategy.research.order_path_diagnostics import parse_joinquant_filled_order_events
 
     text = (
         "2019-10-18 09:35:00 - INFO  - order StockOrder(entrust_id=3 security=513880.XSHG "
@@ -78,7 +78,7 @@ def test_parse_joinquant_filled_order_events_parses_open_as_buy():
 
 
 def test_parse_joinquant_transaction_csv_reads_filled_rows(tmp_path):
-    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_transaction_csv
+    from cross_signal_strategy.research.order_path_diagnostics import parse_joinquant_transaction_csv
 
     csv_path = tmp_path / "transaction.csv"
     csv_path.write_text(
@@ -107,7 +107,7 @@ def test_parse_joinquant_transaction_csv_reads_filled_rows(tmp_path):
 
 
 def test_parse_joinquant_transaction_csv_ignores_cancelled_rows_by_default(tmp_path):
-    from cross_signal_strategy.order_path_diagnostics import parse_joinquant_transaction_csv
+    from cross_signal_strategy.research.order_path_diagnostics import parse_joinquant_transaction_csv
 
     csv_path = tmp_path / "transaction.csv"
     csv_path.write_text(
@@ -124,8 +124,8 @@ def test_parse_joinquant_transaction_csv_ignores_cancelled_rows_by_default(tmp_p
 
 
 def test_extract_local_order_events_uses_filled_orders_only():
-    from cross_signal_strategy.local_backtester import DayResult, OrderResult, Position
-    from cross_signal_strategy.order_path_diagnostics import extract_local_order_events
+    from cross_signal_strategy.local.local_backtester import DayResult, OrderResult, Position
+    from cross_signal_strategy.research.order_path_diagnostics import extract_local_order_events
 
     results = [
         DayResult(
@@ -162,7 +162,7 @@ def test_extract_local_order_events_uses_filled_orders_only():
 
 
 def test_find_first_order_divergence_reports_missing_or_different_event():
-    from cross_signal_strategy.order_path_diagnostics import (
+    from cross_signal_strategy.research.order_path_diagnostics import (
         OrderPathEvent,
         find_first_order_divergence,
     )
@@ -186,7 +186,7 @@ def test_find_first_order_divergence_reports_missing_or_different_event():
 
 
 def test_compare_order_execution_fields_reports_amount_price_fee_and_value_diffs():
-    from cross_signal_strategy.order_path_diagnostics import (
+    from cross_signal_strategy.research.order_path_diagnostics import (
         OrderPathEvent,
         compare_order_execution_fields,
     )

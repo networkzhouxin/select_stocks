@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from statistics import median
 from typing import Dict, Iterable, Mapping, Sequence
 
-from cross_signal_strategy.friction_diagnostics import PrecomputedSignalAdapter
-from cross_signal_strategy.local_backtester import LocalBacktestEngine
-from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-from cross_signal_strategy.local_order_planner import (
+from cross_signal_strategy.research.friction_diagnostics import PrecomputedSignalAdapter
+from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+from cross_signal_strategy.local.local_order_planner import (
     LocalCrossSignalOrderPlanner,
     strategy,
 )

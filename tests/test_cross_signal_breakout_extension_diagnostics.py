@@ -66,7 +66,7 @@ class FakeSource:
 
 
 def closed_trade(label, year=2019, pnl=100.0, return_pct=None):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     trade_return = float(return_pct if return_pct is not None else pnl / 10.0)
     return ClosedTradeDiagnostic(
@@ -109,7 +109,7 @@ def test_classification_uses_only_locked_breakout_extension_boundaries(
     ma20,
     expected,
 ):
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         classify_breakout_extension,
     )
 
@@ -117,7 +117,7 @@ def test_classification_uses_only_locked_breakout_extension_boundaries(
 
 
 def test_adapter_uses_t2_resistance_and_t1_trailing_diagnostics_on_copy():
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         BreakoutExtensionSignalAdapter,
     )
 
@@ -139,7 +139,7 @@ def test_adapter_uses_t2_resistance_and_t1_trailing_diagnostics_on_copy():
 
 
 def test_adapter_rejects_any_row_after_signal_date():
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         BreakoutExtensionSignalAdapter,
     )
 
@@ -150,7 +150,7 @@ def test_adapter_rejects_any_row_after_signal_date():
 
 
 def test_adapter_returns_no_data_without_exact_twenty_t2_bars():
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         BreakoutExtensionSignalAdapter,
     )
 
@@ -162,7 +162,7 @@ def test_adapter_returns_no_data_without_exact_twenty_t2_bars():
 
 
 def test_observation_gate_requires_sample_and_annual_underperformance():
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         BreakoutExtensionStats,
         evaluate_observation_gate,
     )
@@ -204,7 +204,7 @@ def test_observation_gate_requires_sample_and_annual_underperformance():
 
 
 def test_observation_gate_rejects_insufficient_group_samples():
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         BreakoutExtensionStats,
         evaluate_observation_gate,
     )
@@ -227,7 +227,7 @@ def test_observation_gate_rejects_insufficient_group_samples():
 
 
 def test_report_groups_breakouts_and_rejects_validation_dates():
-    from cross_signal_strategy.breakout_extension_diagnostics import (
+    from cross_signal_strategy.research.breakout_extension_diagnostics import (
         build_breakout_extension_report,
     )
 

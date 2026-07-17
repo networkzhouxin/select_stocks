@@ -27,7 +27,7 @@ def score(code, buy_score=35, sell_score=34, **overrides):
 
 
 def test_weak_replacement_candidate_protects_only_weak_sell_without_replacement():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate as candidate,
     )
 
@@ -45,7 +45,7 @@ def test_weak_replacement_candidate_protects_only_weak_sell_without_replacement(
 
 
 def test_weak_replacement_candidate_does_not_protect_when_replacement_exists():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate as candidate,
     )
 
@@ -62,7 +62,7 @@ def test_weak_replacement_candidate_does_not_protect_when_replacement_exists():
 
 
 def test_weak_replacement_candidate_does_not_protect_stronger_or_unsupported_sells():
-    from cross_signal_strategy import (
+    from cross_signal_strategy.archive.candidates import (
         smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate as candidate,
     )
 

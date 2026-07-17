@@ -24,7 +24,7 @@ platform fact.
 
 ## Safety Boundary
 
-- Run `smart_trade_ptrade_cross_signal_iopv_probe.py` as a separate temporary
+- Run `archive/probes/smart_trade_ptrade_cross_signal_iopv_probe.py` as a separate temporary
   simulation/live strategy. Do not merge it into the official strategy.
 - Do not run it alongside the live cross-signal strategy because both alter the
   strategy universe and consume scheduled callbacks.

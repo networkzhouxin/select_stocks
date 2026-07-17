@@ -6,18 +6,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping, Sequence
 
-from cross_signal_strategy.baseline_report import BaselineReport, build_baseline_report
-from cross_signal_strategy.local_adjustment import (
+from cross_signal_strategy.research.baseline_report import BaselineReport, build_baseline_report
+from cross_signal_strategy.local.local_adjustment import (
     default_training_adjustment_factors,
     default_training_daily_corrections,
 )
-from cross_signal_strategy.local_backtester import LocalBacktestEngine
-from cross_signal_strategy.local_data_loader import (
+from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+from cross_signal_strategy.local.local_data_loader import (
     APPROVED_WARMUP_ROOT,
     CrossSignalTrainingDataLoader,
 )
-from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner, strategy
-from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner, strategy
+from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 from cross_signal_strategy.local_training_run import get_training_trade_dates
 
 

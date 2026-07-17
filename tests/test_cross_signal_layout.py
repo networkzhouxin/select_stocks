@@ -1,0 +1,55 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+STRATEGY_ROOT = ROOT / "cross_signal_strategy"
+
+
+def test_cross_signal_root_keeps_only_three_formal_python_entries():
+    root_python_files = sorted(path.name for path in STRATEGY_ROOT.glob("*.py"))
+
+    assert root_python_files == [
+        "local_training_run.py",
+        "smart_trade_joinquant_cross_signal_etf.py",
+        "smart_trade_ptrade_cross_signal_etf.py",
+    ]
+
+
+def test_cross_signal_archives_are_separated_by_role():
+    expected_directories = [
+        STRATEGY_ROOT / "archive" / "candidates",
+        STRATEGY_ROOT / "archive" / "probes",
+        STRATEGY_ROOT / "local",
+        STRATEGY_ROOT / "research",
+        STRATEGY_ROOT / "tools",
+    ]
+
+    for directory in expected_directories:
+        assert directory.is_dir(), directory
+        assert (directory / "__init__.py").is_file(), directory
+
+    assert (
+        STRATEGY_ROOT
+        / "archive"
+        / "candidates"
+        / "smart_trade_joinquant_cross_signal_etf_combo_candidate.py"
+    ).is_file()
+    assert (
+        STRATEGY_ROOT
+        / "archive"
+        / "probes"
+        / "smart_trade_ptrade_cross_signal_iopv_probe.py"
+    ).is_file()
+    assert (STRATEGY_ROOT / "local" / "local_backtester.py").is_file()
+    assert (STRATEGY_ROOT / "research" / "trade_diagnostics.py").is_file()
+    assert (STRATEGY_ROOT / "tools" / "trade_chart.py").is_file()
+
+
+def test_cross_signal_readme_documents_the_archived_layout():
+    readme = (STRATEGY_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "archive/candidates" in readme
+    assert "archive/probes" in readme
+    assert "local/" in readme
+    assert "research/" in readme
+    assert "tools/" in readme

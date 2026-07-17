@@ -52,8 +52,8 @@ def candidate(code, buy_score=70):
 
 
 def test_diagnostic_planner_captures_entry_score_snapshot_before_later_scores_change():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.trade_diagnostics import DiagnosticOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.research.trade_diagnostics import DiagnosticOrderPlanner
 
     adapter = FakeSignalAdapter({"AAA": candidate("AAA", buy_score=70)})
     planner = DiagnosticOrderPlanner(adapter, etf_pool=["AAA"])
@@ -67,9 +67,9 @@ def test_diagnostic_planner_captures_entry_score_snapshot_before_later_scores_ch
 
 
 def test_diagnostic_planner_captures_exit_score_snapshot_for_signal_sells():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
     from cross_signal_strategy import smart_trade_joinquant_cross_signal_etf as strategy
-    from cross_signal_strategy.trade_diagnostics import DiagnosticOrderPlanner
+    from cross_signal_strategy.research.trade_diagnostics import DiagnosticOrderPlanner
 
     sell_score = candidate("AAA", buy_score=40)
     sell_score.update({
@@ -97,8 +97,8 @@ def test_diagnostic_planner_captures_exit_score_snapshot_for_signal_sells():
 
 
 def test_closed_trade_diagnostics_use_entry_score_snapshot():
-    from cross_signal_strategy.local_backtester import DayResult, OrderResult
-    from cross_signal_strategy.trade_diagnostics import build_closed_trade_diagnostics
+    from cross_signal_strategy.local.local_backtester import DayResult, OrderResult
+    from cross_signal_strategy.research.trade_diagnostics import build_closed_trade_diagnostics
 
     results = [
         DayResult(

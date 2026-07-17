@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def trade(code="513100", year=2019, pnl=100.0, buy_price=10.0):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     sell_price = buy_price + float(pnl) / 100.0
     return ClosedTradeDiagnostic(
@@ -29,7 +29,7 @@ def trade(code="513100", year=2019, pnl=100.0, buy_price=10.0):
 
 
 def stats(trades, average_return, win_rate):
-    from cross_signal_strategy.us_qdii_premium_diagnostics import PremiumTradeStats
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import PremiumTradeStats
 
     wins = int(round(trades * win_rate))
     losses = max(0, trades - wins)
@@ -46,7 +46,7 @@ def stats(trades, average_return, win_rate):
 
 
 def test_premium_bucket_uses_pre_registered_economic_boundaries():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import premium_bucket
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import premium_bucket
 
     assert premium_bucket(-0.01) == "at_most_2"
     assert premium_bucket(0.02) == "at_most_2"
@@ -59,7 +59,7 @@ def test_premium_bucket_uses_pre_registered_economic_boundaries():
 
 
 def test_report_uses_raw_0935_price_and_ignores_non_us_qdii_trades():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import (
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import (
         build_us_qdii_premium_report,
     )
 
@@ -87,7 +87,7 @@ def test_report_uses_raw_0935_price_and_ignores_non_us_qdii_trades():
 
 
 def test_report_records_missing_reference_without_dropping_target_trade():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import (
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import (
         build_us_qdii_premium_report,
     )
 
@@ -106,7 +106,7 @@ def test_report_records_missing_reference_without_dropping_target_trade():
 
 
 def test_candidate_gate_requires_coverage_sample_year_and_code_consistency():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import (
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import (
         evaluate_premium_candidate_gate,
     )
 
@@ -146,7 +146,7 @@ def test_candidate_gate_requires_coverage_sample_year_and_code_consistency():
 
 
 def test_report_rejects_dates_outside_training_window():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import (
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import (
         build_us_qdii_premium_report,
     )
 
@@ -158,7 +158,7 @@ def test_report_rejects_dates_outside_training_window():
 
 
 def test_training_runner_reads_0935_close_and_iopv_from_approved_loader():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import (
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import (
         run_training_us_qdii_premium,
     )
 
@@ -179,7 +179,7 @@ def test_training_runner_reads_0935_close_and_iopv_from_approved_loader():
 
 
 def test_format_report_includes_coverage_buckets_and_gate():
-    from cross_signal_strategy.us_qdii_premium_diagnostics import (
+    from cross_signal_strategy.research.us_qdii_premium_diagnostics import (
         build_us_qdii_premium_report,
         format_us_qdii_premium_report,
     )

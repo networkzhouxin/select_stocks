@@ -41,7 +41,7 @@ Reason:
 ### Frozen Training Baseline After JoinQuant Path Alignment
 
 Version: cross-v0.2.6 local replay baseline after data/path/execution alignment
-Code files: `cross_signal_strategy/baseline_report.py`, `cross_signal_strategy/local_training_run.py`
+Code files: `cross_signal_strategy/research/baseline_report.py`, `cross_signal_strategy/local_training_run.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: frozen training baseline for future structure experiments
 Initial capital: 20000
@@ -368,7 +368,7 @@ Reason: This is diagnostic evidence only. A global cross-window change would be 
 ### JoinQuant Versus Local Close Data Audit
 
 Version: data-quality diagnostic only
-Code file: `cross_signal_strategy/local_data_quality.py`
+Code file: `cross_signal_strategy/local/local_data_quality.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: determine whether remaining local/JoinQuant divergences are caused by bad local data
 Initial capital: not applicable
@@ -392,7 +392,7 @@ Reason: This is a data-quality and platform-data-parity audit. It supports furth
 ### Local ETF Adjustment Factor Audit
 
 Version: local replay adjustment-factor alignment
-Code files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`
+Code files: `cross_signal_strategy/local/local_adjustment.py`, `cross_signal_strategy/local/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: fix local/JoinQuant data口径 parity only; no strategy rule or parameter tuning
 Initial capital: 20000
@@ -414,7 +414,7 @@ Main observations:
 - `数据合并工具最新版本下载.txt` only contains a Baidu Netdisk tool link and is not directly useful for this anomaly.
 
 Implementation:
-- Added a small 2019-2021 target-ETF adjustment-factor table inside `local_adjustment.py` instead of reading the full `按年份合并` source during replay.
+- Added a small 2019-2021 target-ETF adjustment-factor table inside `local/local_adjustment.py` instead of reading the full `按年份合并` source during replay.
 - `LocalSignalAdapter` can apply known adjustment events on or before the decision date. It divides historical OHLC rows before the ex-date by the product of known later ex-factors and does not adjust volume.
 - `run_training_replay` enables these training-period adjustment factors by default.
 - Future events are not applied before their ex-date.
@@ -433,7 +433,7 @@ Reason: This is a data parity fix. It reduces local/JoinQuant replay differences
 ### Filled Order Path Diagnostic
 
 Version: local/JoinQuant filled-order path diagnostic
-Code file: `cross_signal_strategy/order_path_diagnostics.py`
+Code file: `cross_signal_strategy/research/order_path_diagnostics.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: identify remaining platform/local replay divergence using filled order events only
 Initial capital: 20000
@@ -464,7 +464,7 @@ Reason: This milestone adds repeatable diagnosis and filters out unfilled JoinQu
 ### Cross Flag Window Alignment Diagnostic
 
 Version: JoinQuant/local cross-flag alignment diagnostic
-Code file: `cross_signal_strategy/local_data_quality.py`
+Code file: `cross_signal_strategy/local/local_data_quality.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: determine whether the remaining 2020-09-22 `512100` buy divergence is caused by a broad cross-window mismatch
 Initial capital: not applicable
@@ -503,7 +503,7 @@ Reason: This is alignment evidence against a broad window change. It does not ju
 ### Cross Flag Boundary Narrow Diagnostic
 
 Version: KDJ/RSI/MACD recent-cross boundary diagnosis
-Code file: `cross_signal_strategy/local_data_quality.py`
+Code file: `cross_signal_strategy/local/local_data_quality.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: determine whether a narrower window/precision fix can explain the remaining 2020-09-22 `512100` buy divergence
 Initial capital: not applicable
@@ -536,7 +536,7 @@ Reason: The narrower KDJ-only change fails the global alignment check. This diag
 ### Cross Flag Version And State Diagnostic
 
 Version: cross-flag version/state diagnosis
-Code file: `cross_signal_strategy/local_data_quality.py`
+Code file: `cross_signal_strategy/local/local_data_quality.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: check whether the 2020-09-22 `512100` divergence is caused by indicator value mismatch, an alternate cross-state interpretation, or version drift
 Initial capital: not applicable
@@ -605,7 +605,7 @@ Reason: It corrects local replay to match the JoinQuant training log's falling-M
 ### Local Sub-Float Falling-MA10 Adapter Alignment
 
 Version: local replay precision alignment for falling-MA10 structure
-Code file: `cross_signal_strategy/local_signal_adapter.py`
+Code file: `cross_signal_strategy/local/local_signal_adapter.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: keep local replay aligned to JoinQuant platform behavior while leaving the JoinQuant strategy source byte-identical to the uploaded platform code
 Initial capital: 20000
@@ -673,7 +673,7 @@ Reason: All broad fixes tested so far worsen full training-log alignment. The ev
 ### 512100 Local Daily Close Correction
 
 Version: confirmed local daily-bar correction for `512100` on 2020-09-02
-Code files: `cross_signal_strategy/local_adjustment.py`, `cross_signal_strategy/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`
+Code files: `cross_signal_strategy/local/local_adjustment.py`, `cross_signal_strategy/local/local_signal_adapter.py`, `cross_signal_strategy/local_training_run.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: align local training replay data to JoinQuant and verified minute/software evidence without modifying read-only source CSVs
 Initial capital: 20000
@@ -716,7 +716,7 @@ Reason: The evidence identifies a local data defect and fixes replay alignment o
 ### Local Execution Price Diagnostics
 
 Version: transaction/log execution-field comparison
-Code files: `cross_signal_strategy/order_path_diagnostics.py`, `cross_signal_strategy/local_backtester.py`
+Code files: `cross_signal_strategy/research/order_path_diagnostics.py`, `cross_signal_strategy/local/local_backtester.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: explain remaining local/JoinQuant return gap after order path alignment
 Initial capital: 20000
@@ -786,7 +786,7 @@ Reason: The change is broad, explainable, and affects only capital usage after a
 ### Normal Signal Sell Minimum-Hold Sweep
 
 Version: cross-v0.2.6 local replay with `base_ratio=0.90` and varied normal-signal minimum hold
-Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`
+Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local/local_order_planner.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: training-only sell-noise structure experiment
 Initial capital: 20000
@@ -841,7 +841,7 @@ Reason: The change is broad and affects only capital usage after signals are sel
 ### Current Training Metrics With Local Risk Ratios
 
 Version: cross-signal current local training mainline
-Code file: `cross_signal_strategy/baseline_report.py`
+Code file: `cross_signal_strategy/research/baseline_report.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: training-only reporting checkpoint
 Initial capital: 20000
@@ -904,7 +904,7 @@ Reason: It identifies the weak training regime and informs experiments, but does
 ### Formal Entry-Score Trade Diagnostics
 
 Version: cross-signal current local training mainline
-Code file: `cross_signal_strategy/trade_diagnostics.py`
+Code file: `cross_signal_strategy/research/trade_diagnostics.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: training-only attribution-tooling checkpoint
 Initial capital: 20000
@@ -929,7 +929,7 @@ Reason: Formal attribution confirms the weak area, but previous volume-filter ex
 
 ### JoinQuant 513880 Sparse-Liquidity Cancellation Probe
 
-Version: temporary JoinQuant probe `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_probe_513880.py`
+Version: temporary JoinQuant probe `cross_signal_strategy/archive/probes/smart_trade_joinquant_cross_signal_etf_probe_513880.py`
 Backtest period: 2019-01-01 to 2021-12-31
 Protocol role: execution-liquidity diagnosis only
 
@@ -960,7 +960,7 @@ Reason: This probe only explains a known execution warning. It supports risk doc
 ### A-Share Zero-Volume Buy Half-Size Rule
 
 Version: cross-signal after `base_ratio=0.95` and `min_signal_hold_days=5`
-Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local_order_planner.py`
+Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/local/local_order_planner.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: training-only structure experiment
 Initial capital: 20000
@@ -1032,7 +1032,7 @@ Reason: This confirms that the local training improvement also appears in JoinQu
 ### Post-Sell Follow-Through Diagnostics
 
 Version: cross-signal after `a_share_zero_volume_buy_scale=0.50`
-Code file: `cross_signal_strategy/sell_diagnostics.py`
+Code file: `cross_signal_strategy/research/sell_diagnostics.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: training-only sell-side diagnosis
 Initial capital: 20000
@@ -1058,7 +1058,7 @@ Reason: The diagnostic reveals a real weakness but does not include the portfoli
 ### ETF Attribution Diagnostics
 
 Version: cross-signal after `a_share_zero_volume_buy_scale=0.50`
-Code file: `cross_signal_strategy/attribution_diagnostics.py`
+Code file: `cross_signal_strategy/research/attribution_diagnostics.py`
 Backtest period: 2019-01-02 to 2021-12-31
 Protocol role: training-only attribution diagnosis
 Initial capital: 20000
@@ -1095,7 +1095,7 @@ ETF-pool training experiments:
 - Remove `510300`, `510880`, and `159920`: return +113.44%, annualized +28.84%, max drawdown 6.94%, Sharpe 2.049, Sortino 3.201, 100 buys and 97 sells. Candidate only.
 
 JoinQuant candidate file:
-- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_pool_candidate.py` was created as a temporary training-confirmation file.
+- `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_pool_candidate.py` was created as a temporary training-confirmation file.
 - It only changes `STRATEGY_VERSION` and removes `510300.XSHG`, `510880.XSHG`, and `159920.XSHE` from `get_default_etf_pool()`.
 - It is not the official adopted strategy until JoinQuant 2019-2021 training confirms the improvement and logs/transactions are reviewed.
 
@@ -1105,7 +1105,7 @@ Reason: ETF-pool deletion is highly exposed to training-window selection bias. T
 ### JoinQuant Training Confirmation For ETF-Pool Candidate
 
 Version: `cross-v0.3.0-pool-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_pool_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_pool_candidate.py`
 Platform: JoinQuant
 Backtest period: 2019-01-01 to 2021-12-31
 Initial capital: 20000
@@ -1300,7 +1300,7 @@ Reason: The diagnostics identify strengths and weaknesses but do not itself test
 ### Portfolio ATR-Stress Buy-Scale Candidate
 
 Version: `cross-v0.3.1` local experimental replay
-Candidate file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Candidate file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Backtest period: 2019-01-01 to 2021-12-31
 Protocol role: training-only structural risk experiment
 
@@ -1348,7 +1348,7 @@ Reason: Local training replay supports the structure, but JoinQuant remains the 
 ### JoinQuant Training Confirmation For ATR-Stress Candidate
 
 Version: `cross-v0.3.1-atr-stress-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Platform: JoinQuant
 Backtest period: 2019-01-01 to 2021-12-31
 Initial capital: 20000
@@ -1458,7 +1458,7 @@ Next allowed action:
 ### First Reserved Validation: ATR-Stress Candidate
 
 Version: `cross-v0.3.1-atr-stress-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Platform: JoinQuant
 Validation period: 2022-01-01 to 2023-12-31
 Initial capital: 20000
@@ -1576,7 +1576,7 @@ Next allowed action:
 ### Second Reserved Validation: ATR-Stress Candidate
 
 Version: `cross-v0.3.1-atr-stress-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Platform: JoinQuant
 Validation period: 2024-01-01 to 2026-07-08
 Initial capital: 20000
@@ -1686,7 +1686,7 @@ Pass/fail/hold judgment:
 ### Stress Reserved Validation: ATR-Stress Candidate
 
 Version: `cross-v0.3.1-atr-stress-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Platform: JoinQuant
 Validation period: 2015-01-01 to 2018-12-31
 Initial capital: 20000
@@ -1803,7 +1803,7 @@ Reason: This is an early supplement with incomplete ETF availability. It is usef
 ### Early Out-Of-Sample Supplement: ATR-Stress Candidate
 
 Version: `cross-v0.3.1-atr-stress-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Platform: JoinQuant
 Validation period: 2010-01-01 to 2014-12-31
 Initial capital: 20000
@@ -1843,7 +1843,7 @@ Reason: This is an early supplement and the candidate was effectively inactive. 
 ### Frozen Cross-Period Summary
 
 Version: official `cross-v0.3.1` and `cross-v0.3.1-atr-stress-candidate`
-Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
+Code files: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`, `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr_stress_candidate.py`
 Protocol role: frozen evidence summary after training and reserved validation windows
 
 Summary table:
@@ -1924,7 +1924,7 @@ ATR multiplier probe:
 - `trailing_atr_mult=1.5` produced the same local path as 2.0 because the stop-floor clamp still dominated many stop calculations.
 
 Candidate created:
-- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_atr2_candidate.py`
+- `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_atr2_candidate.py`
 - Version: `cross-v0.3.1-atr2-candidate`
 - Only intended strategy change versus official mainline: `trailing_atr_mult=2.0` instead of `2.5`.
 
@@ -1964,7 +1964,7 @@ Variant scan:
 - Composite entry-quality filter: +50.37% return, 10.13% max drawdown, Sharpe 1.230.
 
 Candidate created:
-- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_no_512100_candidate.py`
+- `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_no_512100_candidate.py`
 - Version: `cross-v0.3.1-no-512100-candidate`
 - Only intended strategy change versus official mainline: remove `512100.XSHG` from `get_default_etf_pool()`.
 
@@ -1979,7 +1979,7 @@ Reason: Local training replay supports preparing a JoinQuant training candidate,
 ### JoinQuant Training Check: No-512100 Pool Candidate
 
 Version: `cross-v0.3.1-no-512100-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_no_512100_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_no_512100_candidate.py`
 Backtest period: 2019-01-01 to 2021-12-31
 Initial capital: 20000
 Execution schedule: daily `09:35`
@@ -2045,7 +2045,7 @@ Local pressure tests:
 - Block three negative-looking combos together: +116.34% return, +29.42% annualized, 7.19% max drawdown, Sharpe 2.097, Sortino 3.298, 94 buys, average exposure 0.704.
 
 Candidate created:
-- `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+- `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
 - Version: `cross-v0.3.1-combo-candidate`
 - Only intended strategy change versus official mainline: skip new buy entries when RSI and MACD are up, volume is confirmed, trend is supportive but not strong, and KDJ has not crossed up.
 
@@ -2060,7 +2060,7 @@ Reason: Local training replay supports preparing a JoinQuant training candidate,
 ### JoinQuant Training Check: Entry Combo Filter Candidate
 
 Version: `cross-v0.3.1-combo-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
 Backtest period: 2019-01-01 to 2021-12-31
 Initial capital: 20000
 Execution schedule: daily `09:35`
@@ -2101,7 +2101,7 @@ Reason: JoinQuant training confirms the local candidate, but validation periods 
 ### JoinQuant Validation Check: Entry Combo Filter Candidate 2022-2023
 
 Version: `cross-v0.3.1-combo-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
 Backtest period: 2022-01-01 to 2023-12-31
 Initial capital: 20000
 Execution schedule: daily `09:35`
@@ -2142,7 +2142,7 @@ Reason: This is validation evidence for the already-frozen candidate. It support
 ### Sell Confirmation Candidate Prepared: Raise Normal Signal Sell Threshold To 35
 
 Version: `cross-v0.3.2-sell35-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
 Backtest period for next required check: 2019-01-01 to 2021-12-31 only
 Initial capital for next required check: 20000
 Execution schedule: daily `09:35`
@@ -2163,7 +2163,7 @@ Training-log diagnostic snapshot that motivated the candidate:
 Implementation checks:
 - Added tests before implementation for version, unchanged parameters except `sell_threshold`, unchanged ETF pool, ATR stop remaining unconditional, and weak `sell_score 34` normal sell being blocked.
 - `python -m pytest tests/test_cross_signal_sell35_candidate_strategy.py tests/test_cross_signal_strategy.py -q` passed.
-- `python -m py_compile cross_signal_strategy\smart_trade_joinquant_cross_signal_etf_sell35_candidate.py cross_signal_strategy\smart_trade_joinquant_cross_signal_etf.py` passed.
+- `python -m py_compile cross_signal_strategy\archive\candidates\smart_trade_joinquant_cross_signal_etf_sell35_candidate.py cross_signal_strategy\smart_trade_joinquant_cross_signal_etf.py` passed.
 
 Can this result be used to change rules? not yet
 Reason: This is only a prepared training candidate. It needs JoinQuant 2019-2021 training confirmation before any adoption or reserved-period validation.
@@ -2171,7 +2171,7 @@ Reason: This is only a prepared training candidate. It needs JoinQuant 2019-2021
 ### Local Training Check: Sell35 Candidate
 
 Version: `cross-v0.3.2-sell35-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_sell35_candidate.py`
 Backtest period: 2019-01-02 to 2021-12-31 local training replay
 Initial capital: 20000
 Protocol role: training-only local direction check; JoinQuant remains performance authority
@@ -2191,7 +2191,7 @@ Reason: The training-only local check failed. Record as a failed broad-threshold
 ### Weak Replacement-Aware Signal-Sell Candidate Prepared
 
 Version: `cross-v0.3.2-weak-replacement-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py`
 Backtest period for next required JoinQuant check: 2019-01-01 to 2021-12-31 only
 Initial capital for next required JoinQuant check: 20000
 Execution schedule: daily `09:35`
@@ -2212,7 +2212,7 @@ Local training probe:
 Implementation checks:
 - Added tests before implementation for version, weak sell protection without replacement, no protection when replacement exists, no protection for stronger sells, and no protection when `buy_score < 35`.
 - `python -m pytest tests/test_cross_signal_weak_replacement_candidate.py tests/test_cross_signal_strategy.py -q` passed.
-- `python -m py_compile cross_signal_strategy\smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py cross_signal_strategy\smart_trade_joinquant_cross_signal_etf.py` passed.
+- `python -m py_compile cross_signal_strategy\archive\candidates\smart_trade_joinquant_cross_signal_etf_weak_replacement_candidate.py cross_signal_strategy\smart_trade_joinquant_cross_signal_etf.py` passed.
 
 Interpretation:
 - The local edge is small and protects only two sells, so this candidate has path-noise risk.
@@ -2225,7 +2225,7 @@ Reason: This is only a prepared training candidate. It needs JoinQuant 2019-2021
 ### JoinQuant Early Supplemental Validation Check: Entry Combo Filter Candidate 2010-2014
 
 Version: `cross-v0.3.1-combo-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
 Backtest period: 2010-01-01 to 2014-12-31
 Initial capital: 20000
 Execution schedule: daily `09:35`
@@ -2266,7 +2266,7 @@ Reason: This is supplemental validation evidence for the already-frozen candidat
 ### JoinQuant Stress Validation Check: Entry Combo Filter Candidate 2015-2018
 
 Version: `cross-v0.3.1-combo-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
 Backtest period: 2015-01-01 to 2018-12-31
 Initial capital: 20000
 Execution schedule: daily `09:35`
@@ -2308,7 +2308,7 @@ Reason: This is stress-validation evidence for the already-frozen candidate. It 
 ### JoinQuant Validation Check: Entry Combo Filter Candidate 2024-2026
 
 Version: `cross-v0.3.1-combo-candidate`
-Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
+Code file: `cross_signal_strategy/archive/candidates/smart_trade_joinquant_cross_signal_etf_combo_candidate.py`
 Backtest period: 2024-01-01 to 2026-07-08
 Initial capital: 20000
 Execution schedule: daily `09:35`

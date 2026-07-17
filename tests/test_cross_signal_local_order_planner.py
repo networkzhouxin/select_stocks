@@ -52,8 +52,8 @@ def candidate(code, buy_score=65, sell_score=0, reversal_score=40, volume_score=
 
 
 def test_planner_buys_top_candidates_up_to_empty_slots():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({
         "510300": candidate("510300", buy_score=70, reversal_score=30, volume_score=6),
@@ -73,8 +73,8 @@ def test_planner_buys_top_candidates_up_to_empty_slots():
 
 
 def test_planner_sells_existing_position_before_buying_new_slots():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     held_sell = candidate("510300", buy_score=20, sell_score=40)
     held_sell.update({"close_below_ma20": True})
@@ -95,8 +95,8 @@ def test_planner_sells_existing_position_before_buying_new_slots():
 
 
 def test_planner_preserves_position_state_until_sell_is_actually_filled():
-    from cross_signal_strategy.local_backtester import LocalBroker, OrderResult, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, OrderResult, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     held_sell = candidate("510300", buy_score=20, sell_score=40)
     held_sell.update({"close_below_ma20": True})
@@ -135,8 +135,8 @@ def test_planner_preserves_position_state_until_sell_is_actually_filled():
 
 
 def test_planner_does_not_sell_position_bought_today_by_signal():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     held_sell = candidate("510300", buy_score=20, sell_score=40)
     held_sell.update({"close_below_ma20": True})
@@ -155,8 +155,8 @@ def test_planner_does_not_sell_position_bought_today_by_signal():
 
 
 def test_planner_blocks_signal_sell_before_minimum_trading_day_hold():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     held_sell = candidate("510300", buy_score=20, sell_score=40)
     held_sell.update({"close_below_ma20": True})
@@ -185,8 +185,8 @@ def test_planner_blocks_signal_sell_before_minimum_trading_day_hold():
 
 
 def test_planner_atr_stop_ignores_minimum_signal_hold():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"510300": candidate("510300", buy_score=80)})
     params = {
@@ -223,10 +223,10 @@ def test_planner_atr_stop_ignores_minimum_signal_hold():
 
 
 def test_engine_runs_real_signal_planner_smoke_window_without_future_dates():
-    from cross_signal_strategy.local_backtester import LocalBacktestEngine
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
-    from cross_signal_strategy.local_signal_adapter import LocalSignalAdapter
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
 
     train_root = pathlib.Path(r"G:\financial\history_data\cross_signal_train_2019_2021")
     loader = CrossSignalTrainingDataLoader(train_root)
@@ -245,8 +245,8 @@ def test_engine_runs_real_signal_planner_smoke_window_without_future_dates():
 
 
 def test_planner_records_entry_atr_and_highest_after_filled_buy():
-    from cross_signal_strategy.local_backtester import OrderResult
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import OrderResult
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"510300": candidate("510300", buy_score=70)})
     planner = LocalCrossSignalOrderPlanner(adapter, etf_pool=["510300"])
@@ -267,8 +267,8 @@ def test_planner_records_entry_atr_and_highest_after_filled_buy():
 
 
 def test_planner_atr_stop_sells_before_signal_logic_and_blocks_same_day_rebuy():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({
         "510300": candidate("510300", buy_score=80),
@@ -303,8 +303,8 @@ def test_planner_atr_stop_sells_before_signal_logic_and_blocks_same_day_rebuy():
 
 
 def test_planner_does_not_apply_atr_stop_cooldown_by_default():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"159915": candidate("159915", buy_score=70)})
     planner = LocalCrossSignalOrderPlanner(
@@ -323,8 +323,8 @@ def test_planner_does_not_apply_atr_stop_cooldown_by_default():
 
 
 def test_planner_blocks_buy_during_configured_atr_stop_cooldown():
-    from cross_signal_strategy.local_backtester import LocalBroker, OrderResult
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, OrderResult
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"159915": candidate("159915", buy_score=70)})
     params = {
@@ -369,8 +369,8 @@ def test_planner_blocks_buy_during_configured_atr_stop_cooldown():
 
 
 def test_planner_does_not_apply_portfolio_atr_stress_scale_by_default():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"513100": candidate("513100", buy_score=70, volume_score=6)})
     planner = LocalCrossSignalOrderPlanner(
@@ -389,8 +389,8 @@ def test_planner_does_not_apply_portfolio_atr_stress_scale_by_default():
 
 
 def test_planner_scales_new_buys_during_configured_portfolio_atr_stress():
-    from cross_signal_strategy.local_backtester import LocalBroker, OrderResult
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, OrderResult
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"513100": candidate("513100", buy_score=70, volume_score=6)})
     params = {
@@ -429,8 +429,8 @@ def test_planner_scales_new_buys_during_configured_portfolio_atr_stress():
 
 
 def test_portfolio_atr_stress_ignores_old_stops_outside_lookback():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({"513100": candidate("513100", buy_score=70, volume_score=6)})
     params = {
@@ -469,8 +469,8 @@ def test_portfolio_atr_stress_ignores_old_stops_outside_lookback():
 
 
 def test_planner_atr_stop_uses_etf_tick_precision_for_trigger():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({
         "518880": candidate("518880", buy_score=31, sell_score=24),
@@ -492,8 +492,8 @@ def test_planner_atr_stop_uses_etf_tick_precision_for_trigger():
 
 
 def test_planner_uses_0935_position_marks_for_new_buy_target_value():
-    from cross_signal_strategy.local_backtester import LocalBroker, Position
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     adapter = FakeSignalAdapter({
         "159915": candidate("159915", buy_score=70, volume_score=6),
@@ -515,8 +515,8 @@ def test_planner_uses_0935_position_marks_for_new_buy_target_value():
 
 
 def test_planner_can_scale_zero_volume_score_buy_target_without_blocking_trade():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 
     no_volume = candidate("159915", buy_score=70)
     no_volume["volume_score"] = 0

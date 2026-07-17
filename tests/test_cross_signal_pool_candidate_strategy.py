@@ -14,7 +14,8 @@ sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 def load_candidate_strategy():
     spec = importlib.util.spec_from_file_location(
         "cross_signal_pool_candidate",
-        ROOT / "cross_signal_strategy" / "smart_trade_joinquant_cross_signal_etf_pool_candidate.py",
+        ROOT / "cross_signal_strategy" / "archive" / "candidates"
+        / "smart_trade_joinquant_cross_signal_etf_pool_candidate.py",
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

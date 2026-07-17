@@ -27,7 +27,7 @@ class FakeFrameSource:
 
 
 def closed_trade(bucket, year=2019, pnl=100.0, trend_score=10, breadth=0.4):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -48,7 +48,7 @@ def closed_trade(bucket, year=2019, pnl=100.0, trend_score=10, breadth=0.4):
 
 
 def stats(trades, average_return, win_rate):
-    from cross_signal_strategy.market_breadth_diagnostics import BreadthTradeStats
+    from cross_signal_strategy.research.market_breadth_diagnostics import BreadthTradeStats
 
     wins = int(round(trades * win_rate))
     losses = max(0, trades - wins)
@@ -65,7 +65,7 @@ def stats(trades, average_return, win_rate):
 
 
 def test_above_ma20_uses_latest_t1_close_and_requires_full_history():
-    from cross_signal_strategy.market_breadth_diagnostics import calc_above_ma
+    from cross_signal_strategy.research.market_breadth_diagnostics import calc_above_ma
 
     assert calc_above_ma(price_frame(range(1, 21)), period=20) is True
     assert calc_above_ma(price_frame(range(20, 0, -1)), period=20) is False
@@ -73,7 +73,7 @@ def test_above_ma20_uses_latest_t1_close_and_requires_full_history():
 
 
 def test_pool_breadth_excludes_insufficient_history_from_denominator():
-    from cross_signal_strategy.market_breadth_diagnostics import calculate_pool_breadth
+    from cross_signal_strategy.research.market_breadth_diagnostics import calculate_pool_breadth
 
     source = FakeFrameSource({
         "UP": price_frame(range(1, 21)),
@@ -95,7 +95,7 @@ def test_pool_breadth_excludes_insufficient_history_from_denominator():
 
 
 def test_buy_snapshot_annotation_shares_one_t1_breadth_snapshot():
-    from cross_signal_strategy.market_breadth_diagnostics import (
+    from cross_signal_strategy.research.market_breadth_diagnostics import (
         annotate_planned_buy_breadth,
     )
 
@@ -125,7 +125,7 @@ def test_buy_snapshot_annotation_shares_one_t1_breadth_snapshot():
 
 
 def test_pool_breadth_rejects_data_after_signal_date():
-    from cross_signal_strategy.market_breadth_diagnostics import calculate_pool_breadth
+    from cross_signal_strategy.research.market_breadth_diagnostics import calculate_pool_breadth
 
     source = FakeFrameSource(
         {"UP": price_frame(range(1, 22), end="2019-02-04")},
@@ -142,7 +142,7 @@ def test_pool_breadth_rejects_data_after_signal_date():
 
 
 def test_breadth_report_gates_only_mild_trend_entries_by_year():
-    from cross_signal_strategy.market_breadth_diagnostics import (
+    from cross_signal_strategy.research.market_breadth_diagnostics import (
         build_market_breadth_report,
     )
 
@@ -158,7 +158,7 @@ def test_breadth_report_gates_only_mild_trend_entries_by_year():
 
 
 def test_breadth_gate_requires_consistent_annual_return_and_win_underperformance():
-    from cross_signal_strategy.market_breadth_diagnostics import evaluate_breadth_gate
+    from cross_signal_strategy.research.market_breadth_diagnostics import evaluate_breadth_gate
 
     below = {
         year: stats(6, average_return=-0.02, win_rate=0.33)
@@ -182,7 +182,7 @@ def test_breadth_gate_requires_consistent_annual_return_and_win_underperformance
 
 
 def test_breadth_report_rejects_validation_dates():
-    from cross_signal_strategy.market_breadth_diagnostics import (
+    from cross_signal_strategy.research.market_breadth_diagnostics import (
         build_market_breadth_report,
     )
 

@@ -23,8 +23,8 @@ class FakeLoader:
 
 
 def test_post_sell_returns_use_training_trade_day_offsets_and_available_future_rows():
-    from cross_signal_strategy.sell_diagnostics import post_sell_returns
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.sell_diagnostics import post_sell_returns
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     loader = FakeLoader({
         "AAA": pd.DataFrame({
@@ -54,7 +54,7 @@ def test_post_sell_returns_use_training_trade_day_offsets_and_available_future_r
 
 
 def test_summarize_post_sell_returns_groups_by_sell_reason():
-    from cross_signal_strategy.sell_diagnostics import PostSellDiagnostic, summarize_post_sell_returns
+    from cross_signal_strategy.research.sell_diagnostics import PostSellDiagnostic, summarize_post_sell_returns
 
     diagnostics = [
         PostSellDiagnostic("AAA", "2021-01-04", "signal_sell", 11.0, {3: 0.10, 5: -0.02}),
@@ -73,8 +73,8 @@ def test_summarize_post_sell_returns_groups_by_sell_reason():
 
 
 def test_sell_fly_diagnostic_uses_exit_score_and_forward_return():
-    from cross_signal_strategy.sell_diagnostics import sell_fly_diagnostic
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.sell_diagnostics import sell_fly_diagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     loader = FakeLoader({
         "AAA": pd.DataFrame({
@@ -112,7 +112,7 @@ def test_sell_fly_diagnostic_uses_exit_score_and_forward_return():
 
 
 def test_summarize_sell_fly_by_feature_counts_flagged_and_unflagged_cases():
-    from cross_signal_strategy.sell_diagnostics import SellFlyDiagnostic, summarize_sell_fly_by_feature
+    from cross_signal_strategy.research.sell_diagnostics import SellFlyDiagnostic, summarize_sell_fly_by_feature
 
     diagnostics = [
         SellFlyDiagnostic("AAA", "2021-01-04", "signal_sell", 3, 0.08, 80.0, True, {"close_below_ma20": True}),

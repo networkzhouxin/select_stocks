@@ -13,8 +13,8 @@ TRAIN_ROOT = pathlib.Path(r"G:\financial\history_data\cross_signal_train_2019_20
 
 
 def test_broker_buys_target_value_at_0935_with_lot_fee_and_slippage():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     broker = LocalBroker(initial_cash=20000.0)
@@ -37,8 +37,8 @@ def test_broker_buys_target_value_at_0935_with_lot_fee_and_slippage():
 
 
 def test_broker_sells_to_zero_with_sell_slippage_and_min_commission():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     price = loader.get_minute_bar("510300", "2019-01-02", "09:35")["close"]
@@ -56,7 +56,7 @@ def test_broker_sells_to_zero_with_sell_slippage_and_min_commission():
 
 
 def test_broker_rejects_buy_when_cash_cannot_cover_one_lot_plus_commission():
-    from cross_signal_strategy.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_backtester import LocalBroker
 
     broker = LocalBroker(initial_cash=100.0)
     order = broker.order_target_value("510300", 5000.0, price=3.060, side_time="2019-01-02 09:35")
@@ -68,8 +68,8 @@ def test_broker_rejects_buy_when_cash_cannot_cover_one_lot_plus_commission():
 
 
 def test_engine_runs_one_day_order_plan_with_0935_execution_and_close_mark():
-    from cross_signal_strategy.local_backtester import LocalBacktestEngine
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     engine = LocalBacktestEngine(loader=loader, initial_cash=20000.0)
@@ -94,8 +94,8 @@ def test_engine_runs_one_day_order_plan_with_0935_execution_and_close_mark():
 
 
 def test_engine_preserves_filled_order_plan_reason_for_diagnostics():
-    from cross_signal_strategy.local_backtester import LocalBacktestEngine
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     engine = LocalBacktestEngine(loader=loader, initial_cash=20000.0)
@@ -110,8 +110,8 @@ def test_engine_preserves_filled_order_plan_reason_for_diagnostics():
 
 
 def test_engine_passes_previous_training_trade_date_to_order_plan():
-    from cross_signal_strategy.local_backtester import LocalBacktestEngine
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     engine = LocalBacktestEngine(loader=loader, initial_cash=20000.0)
@@ -127,8 +127,8 @@ def test_engine_passes_previous_training_trade_date_to_order_plan():
 
 
 def test_engine_does_not_fill_at_stale_0935_bar_with_no_trades():
-    from cross_signal_strategy.local_backtester import LocalBacktestEngine
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
     bar = loader.get_minute_bar("159915", "2021-02-09", "09:35")
@@ -150,7 +150,7 @@ def test_engine_does_not_fill_at_stale_0935_bar_with_no_trades():
 
 
 def test_engine_records_missing_0935_bar_as_unfilled_instead_of_crashing():
-    from cross_signal_strategy.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
 
     class MissingBarLoader:
         def get_minute_bar(self, code, current_date, trade_time):
@@ -173,11 +173,11 @@ def test_engine_records_missing_0935_bar_as_unfilled_instead_of_crashing():
 
 @pytest.mark.parametrize("buy_reason", ["buy_signal", "backup_buy_signal"])
 def test_engine_does_not_exceed_max_hold_when_planned_sell_is_unfilled(buy_reason):
-    from cross_signal_strategy.local_backtester import (
+    from cross_signal_strategy.local.local_backtester import (
         LocalBacktestEngine,
         Position,
     )
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     class SellThenBuyPlan:
         params = {"max_hold": 3}
@@ -208,11 +208,11 @@ def test_engine_does_not_exceed_max_hold_when_planned_sell_is_unfilled(buy_reaso
 
 
 def test_engine_uses_slot_released_by_a_filled_sell_for_later_buy():
-    from cross_signal_strategy.local_backtester import (
+    from cross_signal_strategy.local.local_backtester import (
         LocalBacktestEngine,
         Position,
     )
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
 
     class SellThenBuyPlan:
         params = {"max_hold": 3}

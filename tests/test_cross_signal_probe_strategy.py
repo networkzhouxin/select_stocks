@@ -2,7 +2,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROBE_FILE = ROOT / "cross_signal_strategy" / "smart_trade_joinquant_cross_signal_etf_probe_513880.py"
+PROBE_FILE = (
+    ROOT / "cross_signal_strategy" / "archive" / "probes"
+    / "smart_trade_joinquant_cross_signal_etf_probe_513880.py"
+)
 
 
 def test_probe_strategy_file_contains_513880_status_diagnostics():

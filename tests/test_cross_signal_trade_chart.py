@@ -34,7 +34,7 @@ def daily_frame():
 
 
 def test_default_periods_match_the_five_joinquant_backtests():
-    from cross_signal_strategy.trade_chart import DEFAULT_PERIODS
+    from cross_signal_strategy.tools.trade_chart import DEFAULT_PERIODS
 
     assert [(item.key, item.start, item.end) for item in DEFAULT_PERIODS] == [
         ("2010-2014", "2010-01-01", "2014-12-31"),
@@ -46,7 +46,7 @@ def test_default_periods_match_the_five_joinquant_backtests():
 
 
 def test_report_periods_include_the_continuous_full_backtest():
-    from cross_signal_strategy.trade_chart import FULL_PERIOD, REPORT_PERIODS
+    from cross_signal_strategy.tools.trade_chart import FULL_PERIOD, REPORT_PERIODS
 
     assert (FULL_PERIOD.key, FULL_PERIOD.start, FULL_PERIOD.end) == (
         "2015-2026-continuous",
@@ -58,7 +58,7 @@ def test_report_periods_include_the_continuous_full_backtest():
 
 
 def test_parse_joinquant_log_extracts_fills_scores_and_sell_reason():
-    from cross_signal_strategy.trade_chart import parse_joinquant_trade_log
+    from cross_signal_strategy.tools.trade_chart import parse_joinquant_trade_log
 
     markers = parse_joinquant_trade_log(SAMPLE_LOG)
 
@@ -74,7 +74,7 @@ def test_parse_joinquant_log_extracts_fills_scores_and_sell_reason():
 
 
 def test_parse_joinquant_log_handles_wrapped_fill_line():
-    from cross_signal_strategy.trade_chart import parse_joinquant_trade_log
+    from cross_signal_strategy.tools.trade_chart import parse_joinquant_trade_log
 
     wrapped = """\
 2025-08-25 09:35:00 - INFO  - [buy] 513050.XSHG buy=65 rev=35 loc=15 trend=9 vol=6 target=9537
@@ -91,7 +91,7 @@ def test_parse_joinquant_log_handles_wrapped_fill_line():
 
 
 def test_pair_trade_outcomes_adds_realized_pnl_to_sell_marker():
-    from cross_signal_strategy.trade_chart import (
+    from cross_signal_strategy.tools.trade_chart import (
         pair_trade_outcomes,
         parse_joinquant_trade_log,
     )
@@ -105,7 +105,7 @@ def test_pair_trade_outcomes_adds_realized_pnl_to_sell_marker():
 
 
 def test_build_symbol_dataset_contains_kline_ma_volume_and_trade_markers():
-    from cross_signal_strategy.trade_chart import (
+    from cross_signal_strategy.tools.trade_chart import (
         build_symbol_dataset,
         pair_trade_outcomes,
         parse_joinquant_trade_log,
@@ -128,7 +128,7 @@ def test_build_symbol_dataset_contains_kline_ma_volume_and_trade_markers():
 
 
 def test_build_symbol_dataset_rejects_dates_outside_declared_period():
-    from cross_signal_strategy.trade_chart import build_symbol_dataset
+    from cross_signal_strategy.tools.trade_chart import build_symbol_dataset
 
     with pytest.raises(ValueError, match="outside period"):
         build_symbol_dataset(
@@ -140,7 +140,7 @@ def test_build_symbol_dataset_rejects_dates_outside_declared_period():
 
 
 def test_render_period_page_has_etf_selector_kline_and_source_caveat():
-    from cross_signal_strategy.trade_chart import render_period_page
+    from cross_signal_strategy.tools.trade_chart import render_period_page
 
     html = render_period_page(
         period_key="2019-2021",
@@ -158,7 +158,7 @@ def test_render_period_page_has_etf_selector_kline_and_source_caveat():
 
 
 def test_render_continuous_page_uses_formal_strategy_label():
-    from cross_signal_strategy.trade_chart import render_period_page
+    from cross_signal_strategy.tools.trade_chart import render_period_page
 
     html = render_period_page(
         period_key="2015-2026-continuous",
@@ -171,7 +171,7 @@ def test_render_continuous_page_uses_formal_strategy_label():
 
 
 def test_render_index_links_each_period_and_reports_fill_count():
-    from cross_signal_strategy.trade_chart import render_index_page
+    from cross_signal_strategy.tools.trade_chart import render_index_page
 
     html = render_index_page({
         "2010-2014": {"fills": 83, "symbols": 4, "last_kline": "2014-12-31"},

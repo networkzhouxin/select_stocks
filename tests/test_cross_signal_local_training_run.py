@@ -11,7 +11,7 @@ TRAIN_ROOT = pathlib.Path(r"G:\financial\history_data\cross_signal_train_2019_20
 
 
 def test_training_trade_dates_are_read_from_training_daily_data_only():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local_training_run import get_training_trade_dates
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
@@ -26,7 +26,7 @@ def test_training_trade_dates_are_read_from_training_daily_data_only():
 
 
 def test_training_signal_adapter_applies_confirmed_daily_corrections():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local_training_run import build_training_signal_adapter
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
@@ -43,7 +43,7 @@ def test_training_signal_adapter_applies_confirmed_daily_corrections():
 
 
 def test_full_training_replay_completes_without_date_or_position_violations():
-    from cross_signal_strategy.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local_training_run import run_training_replay
 
     loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)

@@ -35,7 +35,7 @@ def frame(closes, end="2019-01-05"):
 
 
 def closed_trade(direction, year=2019, pnl=100.0, trend_score=10):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -57,7 +57,7 @@ def closed_trade(direction, year=2019, pnl=100.0, trend_score=10):
 
 
 def stats(trades, average_return, win_rate):
-    from cross_signal_strategy.efficiency_ratio_diagnostics import EfficiencyRatioStats
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import EfficiencyRatioStats
 
     wins = int(round(trades * win_rate))
     losses = max(0, trades - wins)
@@ -75,7 +75,7 @@ def stats(trades, average_return, win_rate):
 
 
 def test_calc_efficiency_ratio_handles_trend_noise_and_flat_windows():
-    from cross_signal_strategy.efficiency_ratio_diagnostics import (
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import (
         calc_efficiency_ratio,
     )
 
@@ -90,7 +90,7 @@ def test_calc_efficiency_ratio_handles_trend_noise_and_flat_windows():
 
 
 def test_efficiency_ratio_adapter_uses_frozen_frame_and_returns_copy():
-    from cross_signal_strategy.efficiency_ratio_diagnostics import (
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import (
         EfficiencyRatioSignalAdapter,
     )
 
@@ -110,7 +110,7 @@ def test_efficiency_ratio_adapter_uses_frozen_frame_and_returns_copy():
 
 
 def test_efficiency_ratio_adapter_rejects_data_after_signal_date():
-    from cross_signal_strategy.efficiency_ratio_diagnostics import (
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import (
         EfficiencyRatioSignalAdapter,
     )
 
@@ -127,7 +127,7 @@ def test_efficiency_ratio_adapter_rejects_data_after_signal_date():
 
 
 def test_efficiency_ratio_attribution_splits_direction_trend_and_year():
-    from cross_signal_strategy.efficiency_ratio_diagnostics import (
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import (
         build_efficiency_ratio_attribution,
     )
 
@@ -145,7 +145,7 @@ def test_efficiency_ratio_attribution_splits_direction_trend_and_year():
 
 
 def test_efficiency_ratio_gate_requires_stable_mild_trend_improvement():
-    from cross_signal_strategy.efficiency_ratio_diagnostics import (
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import (
         evaluate_efficiency_ratio_gate,
     )
 
@@ -171,7 +171,7 @@ def test_efficiency_ratio_gate_requires_stable_mild_trend_improvement():
 
 
 def test_efficiency_ratio_attribution_rejects_non_training_dates():
-    from cross_signal_strategy.efficiency_ratio_diagnostics import (
+    from cross_signal_strategy.research.efficiency_ratio_diagnostics import (
         build_efficiency_ratio_attribution,
     )
 

@@ -72,14 +72,14 @@ def sample_frame():
 
 
 def test_profile_rejects_missing_required_columns():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     with pytest.raises(ValueError, match="Missing required columns: iopv"):
         profile_iopv_frame(sample_frame().drop(columns=["iopv"]), "513100", 2019)
 
 
 def test_profile_rejects_rows_outside_training_window():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     frame = sample_frame()
     frame.loc[0, "date"] = "2022-01-04"
@@ -89,7 +89,7 @@ def test_profile_rejects_rows_outside_training_window():
 
 
 def test_profile_counts_iopv_validity_and_0935_coverage():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     stats = profile_iopv_frame(sample_frame(), "513100", 2019)
 
@@ -107,7 +107,7 @@ def test_profile_counts_iopv_validity_and_0935_coverage():
 
 
 def test_profile_calculates_premium_distribution_only_from_valid_pairs():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     stats = profile_iopv_frame(sample_frame(), "513100", 2019)
 
@@ -121,7 +121,7 @@ def test_profile_calculates_premium_distribution_only_from_valid_pairs():
 
 
 def test_profile_detects_duplicate_minutes_and_iopv_updates_without_trades():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     frame = sample_frame()
     frame = pd.concat([frame, frame.iloc[[1]]], ignore_index=True)
@@ -134,7 +134,7 @@ def test_profile_detects_duplicate_minutes_and_iopv_updates_without_trades():
 
 
 def test_profile_separates_executable_0935_premium_from_no_trade_rows():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     frame = sample_frame()
     frame.loc[
@@ -152,7 +152,7 @@ def test_profile_separates_executable_0935_premium_from_no_trade_rows():
 
 
 def test_profile_rejects_code_or_year_mismatch():
-    from cross_signal_strategy.iopv_quality_diagnostics import profile_iopv_frame
+    from cross_signal_strategy.research.iopv_quality_diagnostics import profile_iopv_frame
 
     with pytest.raises(ValueError, match="does not match requested code"):
         profile_iopv_frame(sample_frame(), "513500", 2019)
@@ -162,14 +162,14 @@ def test_profile_rejects_code_or_year_mismatch():
 
 
 def test_audit_training_iopv_rejects_non_training_years_before_loading():
-    from cross_signal_strategy.iopv_quality_diagnostics import audit_training_iopv
+    from cross_signal_strategy.research.iopv_quality_diagnostics import audit_training_iopv
 
     with pytest.raises(ValueError, match="years must be within 2019-2021"):
         audit_training_iopv(codes=["513100"], years=[2022])
 
 
 def test_audit_training_iopv_profiles_each_requested_code_year():
-    from cross_signal_strategy.iopv_quality_diagnostics import audit_training_iopv
+    from cross_signal_strategy.research.iopv_quality_diagnostics import audit_training_iopv
 
     calls = []
 

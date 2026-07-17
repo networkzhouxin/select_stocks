@@ -35,7 +35,7 @@ def score(code, **overrides):
 
 
 def day(date, total_value, cash, positions=None, orders=None):
-    from cross_signal_strategy.local_backtester import DayResult
+    from cross_signal_strategy.local.local_backtester import DayResult
 
     positions = positions or {}
     return DayResult(
@@ -50,7 +50,7 @@ def day(date, total_value, cash, positions=None, orders=None):
 
 
 def test_candidate_rejection_reason_matches_official_filter_order():
-    from cross_signal_strategy.capital_utilization_diagnostics import (
+    from cross_signal_strategy.research.capital_utilization_diagnostics import (
         candidate_rejection_reason,
     )
 
@@ -78,8 +78,8 @@ def test_candidate_rejection_reason_matches_official_filter_order():
 
 
 def test_capital_report_attributes_vacant_slots_and_shadow_returns():
-    from cross_signal_strategy.local_backtester import Position
-    from cross_signal_strategy.capital_utilization_diagnostics import (
+    from cross_signal_strategy.local.local_backtester import Position
+    from cross_signal_strategy.research.capital_utilization_diagnostics import (
         build_capital_utilization_report,
     )
 
@@ -168,7 +168,7 @@ def test_capital_report_attributes_vacant_slots_and_shadow_returns():
 
 
 def test_shadow_returns_collapse_consecutive_candidate_days_into_one_episode():
-    from cross_signal_strategy.capital_utilization_diagnostics import (
+    from cross_signal_strategy.research.capital_utilization_diagnostics import (
         build_capital_utilization_report,
     )
 
@@ -212,7 +212,7 @@ def test_shadow_returns_collapse_consecutive_candidate_days_into_one_episode():
 
 
 def test_shadow_score_bands_keep_50_59_separate_from_40_49():
-    from cross_signal_strategy.capital_utilization_diagnostics import (
+    from cross_signal_strategy.research.capital_utilization_diagnostics import (
         build_capital_utilization_report,
     )
 
@@ -233,8 +233,8 @@ def test_shadow_score_bands_keep_50_59_separate_from_40_49():
 
 
 def test_capital_report_excludes_actual_buys_and_existing_holdings_from_shadow_pool():
-    from cross_signal_strategy.local_backtester import OrderResult, Position
-    from cross_signal_strategy.capital_utilization_diagnostics import (
+    from cross_signal_strategy.local.local_backtester import OrderResult, Position
+    from cross_signal_strategy.research.capital_utilization_diagnostics import (
         build_capital_utilization_report,
     )
 
@@ -272,7 +272,7 @@ def test_capital_report_excludes_actual_buys_and_existing_holdings_from_shadow_p
 
 
 def test_capital_report_rejects_dates_outside_training_window():
-    from cross_signal_strategy.capital_utilization_diagnostics import (
+    from cross_signal_strategy.research.capital_utilization_diagnostics import (
         build_capital_utilization_report,
     )
 

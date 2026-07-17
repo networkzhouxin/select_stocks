@@ -13,8 +13,8 @@ sys.path.insert(0, str(ROOT))
 
 
 def test_baseline_report_summarizes_returns_drawdown_and_closed_trades():
-    from cross_signal_strategy.baseline_report import build_baseline_report
-    from cross_signal_strategy.local_backtester import DayResult, OrderResult, Position
+    from cross_signal_strategy.research.baseline_report import build_baseline_report
+    from cross_signal_strategy.local.local_backtester import DayResult, OrderResult, Position
 
     results = [
         DayResult("2020-01-02", None, [

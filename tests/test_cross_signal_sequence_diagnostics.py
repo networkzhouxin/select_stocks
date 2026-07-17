@@ -43,7 +43,7 @@ def signal_frame(end="2019-02-20", periods=40):
 
 
 def closed_trade(sequence, year=2019, pnl=100.0, trend_score=10):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -63,7 +63,7 @@ def closed_trade(sequence, year=2019, pnl=100.0, trend_score=10):
 
 
 def stats(trades, average_return, win_rate):
-    from cross_signal_strategy.sequence_diagnostics import SequenceStats
+    from cross_signal_strategy.research.sequence_diagnostics import SequenceStats
 
     wins = int(round(trades * win_rate))
     losses = max(0, trades - wins)
@@ -79,7 +79,7 @@ def stats(trades, average_return, win_rate):
 
 
 def test_latest_cross_event_keeps_latest_direction_and_days_ago():
-    from cross_signal_strategy.sequence_diagnostics import latest_cross_event
+    from cross_signal_strategy.research.sequence_diagnostics import latest_cross_event
 
     fast = np.array([-1.0, 1.0, -1.0, 1.0])
     slow = np.zeros(4)
@@ -94,7 +94,7 @@ def test_latest_cross_event_keeps_latest_direction_and_days_ago():
 
 
 def test_classify_cross_sequence_keeps_clean_and_mixed_orders_separate():
-    from cross_signal_strategy.sequence_diagnostics import classify_cross_sequence
+    from cross_signal_strategy.research.sequence_diagnostics import classify_cross_sequence
 
     assert classify_cross_sequence(0, [2, 1]) == "oscillators_lead_macd"
     assert classify_cross_sequence(2, [1, 0]) == "macd_leads_oscillators"
@@ -105,7 +105,7 @@ def test_classify_cross_sequence_keeps_clean_and_mixed_orders_separate():
 
 
 def test_sequence_adapter_uses_frozen_t_minus_one_frame_and_returns_copy():
-    from cross_signal_strategy.sequence_diagnostics import CrossSequenceSignalAdapter
+    from cross_signal_strategy.research.sequence_diagnostics import CrossSequenceSignalAdapter
 
     adapter = CrossSequenceSignalAdapter(FakeSignalAdapter(signal_frame()))
 
@@ -119,7 +119,7 @@ def test_sequence_adapter_uses_frozen_t_minus_one_frame_and_returns_copy():
 
 
 def test_sequence_adapter_rejects_data_after_signal_date():
-    from cross_signal_strategy.sequence_diagnostics import CrossSequenceSignalAdapter
+    from cross_signal_strategy.research.sequence_diagnostics import CrossSequenceSignalAdapter
 
     adapter = CrossSequenceSignalAdapter(
         FakeSignalAdapter(signal_frame(end="2019-02-21"), signal_date="2019-02-20")
@@ -130,7 +130,7 @@ def test_sequence_adapter_rejects_data_after_signal_date():
 
 
 def test_sequence_attribution_splits_sequence_trend_and_year():
-    from cross_signal_strategy.sequence_diagnostics import build_sequence_attribution
+    from cross_signal_strategy.research.sequence_diagnostics import build_sequence_attribution
 
     report = build_sequence_attribution([
         closed_trade("oscillators_lead_macd", year=2019, pnl=100.0, trend_score=10),
@@ -146,7 +146,7 @@ def test_sequence_attribution_splits_sequence_trend_and_year():
 
 
 def test_sequence_gate_requires_stable_oscillator_lead_advantage():
-    from cross_signal_strategy.sequence_diagnostics import evaluate_sequence_gate
+    from cross_signal_strategy.research.sequence_diagnostics import evaluate_sequence_gate
 
     oscillator_lead = {
         year: stats(4, average_return=0.05, win_rate=0.75)
@@ -170,7 +170,7 @@ def test_sequence_gate_requires_stable_oscillator_lead_advantage():
 
 
 def test_sequence_attribution_rejects_non_training_dates():
-    from cross_signal_strategy.sequence_diagnostics import build_sequence_attribution
+    from cross_signal_strategy.research.sequence_diagnostics import build_sequence_attribution
 
     with pytest.raises(ValueError, match="outside 2019-2021 training window"):
         build_sequence_attribution([

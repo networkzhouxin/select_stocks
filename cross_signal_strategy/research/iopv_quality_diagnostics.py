@@ -9,7 +9,7 @@ from typing import Callable, Iterable, Sequence
 import numpy as np
 import pandas as pd
 
-from cross_signal_strategy.local_data_loader import (
+from cross_signal_strategy.local.local_data_loader import (
     CrossSignalTrainingDataLoader,
     assert_dates_in_training_window,
 )

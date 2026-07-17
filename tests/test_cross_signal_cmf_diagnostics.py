@@ -35,7 +35,7 @@ def frame(rows):
 
 
 def closed_trade(cmf, trend_score, pnl, buy_date="2019-01-02", reason="signal_sell"):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -52,7 +52,7 @@ def closed_trade(cmf, trend_score, pnl, buy_date="2019-01-02", reason="signal_se
 
 
 def test_calc_cmf_uses_close_location_volume_and_handles_flat_range():
-    from cross_signal_strategy.cmf_diagnostics import calc_cmf
+    from cross_signal_strategy.research.cmf_diagnostics import calc_cmf
 
     data = frame(
         [
@@ -70,7 +70,7 @@ def test_calc_cmf_uses_close_location_volume_and_handles_flat_range():
 
 
 def test_calc_cmf_returns_nan_when_rolling_volume_is_zero():
-    from cross_signal_strategy.cmf_diagnostics import calc_cmf
+    from cross_signal_strategy.research.cmf_diagnostics import calc_cmf
 
     data = frame(
         [
@@ -83,7 +83,7 @@ def test_calc_cmf_returns_nan_when_rolling_volume_is_zero():
 
 
 def test_cmf_signal_adapter_attaches_t_minus_one_value_and_returns_copy():
-    from cross_signal_strategy.cmf_diagnostics import CmfSignalAdapter
+    from cross_signal_strategy.research.cmf_diagnostics import CmfSignalAdapter
 
     data = frame(
         [
@@ -106,7 +106,7 @@ def test_cmf_signal_adapter_attaches_t_minus_one_value_and_returns_copy():
 
 
 def test_cmf_signal_adapter_rejects_data_after_signal_date():
-    from cross_signal_strategy.cmf_diagnostics import CmfSignalAdapter
+    from cross_signal_strategy.research.cmf_diagnostics import CmfSignalAdapter
 
     data = frame(
         [
@@ -124,7 +124,7 @@ def test_cmf_signal_adapter_rejects_data_after_signal_date():
 
 
 def test_cmf_attribution_groups_sign_trend_and_entry_year():
-    from cross_signal_strategy.cmf_diagnostics import build_cmf_attribution
+    from cross_signal_strategy.research.cmf_diagnostics import build_cmf_attribution
 
     trades = [
         closed_trade(0.2, 20, 100.0, buy_date="2019-01-02", reason="atr_stop"),

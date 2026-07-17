@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def day(date, total_value, cash, positions=None, orders=None):
-    from cross_signal_strategy.local_backtester import DayResult
+    from cross_signal_strategy.local.local_backtester import DayResult
 
     return DayResult(
         date=date,
@@ -26,7 +26,7 @@ def day(date, total_value, cash, positions=None, orders=None):
 
 
 def trade(code, buy_date, sell_date, reason, pnl, trend_score=0, atr=0.2, close=10.0):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     sell_price = 10.0 + pnl / 100.0
     return ClosedTradeDiagnostic(
@@ -48,8 +48,8 @@ def trade(code, buy_date, sell_date, reason, pnl, trend_score=0, atr=0.2, close=
 
 
 def test_stability_report_splits_annual_performance_and_anchors_year_start_value():
-    from cross_signal_strategy.local_backtester import OrderResult, Position
-    from cross_signal_strategy.training_stability import build_training_stability_report
+    from cross_signal_strategy.local.local_backtester import OrderResult, Position
+    from cross_signal_strategy.research.training_stability import build_training_stability_report
 
     results = [
         day(
@@ -96,7 +96,7 @@ def test_stability_report_splits_annual_performance_and_anchors_year_start_value
 
 
 def test_stability_report_summarizes_concentration_exits_holding_and_entry_regimes():
-    from cross_signal_strategy.training_stability import build_training_stability_report
+    from cross_signal_strategy.research.training_stability import build_training_stability_report
 
     results = [
         day("2019-01-02", 10000.0, 10000.0),
@@ -142,7 +142,7 @@ def test_stability_report_summarizes_concentration_exits_holding_and_entry_regim
 
 
 def test_volatility_regime_uses_training_sample_median_instead_of_fixed_market_threshold():
-    from cross_signal_strategy.training_stability import build_training_stability_report
+    from cross_signal_strategy.research.training_stability import build_training_stability_report
 
     results = [
         day("2019-01-02", 10000.0, 10000.0),
@@ -161,8 +161,8 @@ def test_volatility_regime_uses_training_sample_median_instead_of_fixed_market_t
 
 
 def test_stability_report_compares_complete_doubled_friction_replay():
-    from cross_signal_strategy.baseline_report import build_baseline_report
-    from cross_signal_strategy.training_stability import build_training_stability_report
+    from cross_signal_strategy.research.baseline_report import build_baseline_report
+    from cross_signal_strategy.research.training_stability import build_training_stability_report
 
     baseline_results = [
         day("2019-01-02", 10000.0, 10000.0),
@@ -189,7 +189,7 @@ def test_stability_report_compares_complete_doubled_friction_replay():
 
 
 def test_stability_report_rejects_non_training_dates():
-    from cross_signal_strategy.training_stability import build_training_stability_report
+    from cross_signal_strategy.research.training_stability import build_training_stability_report
 
     with pytest.raises(ValueError, match="outside 2019-2021 training window"):
         build_training_stability_report(

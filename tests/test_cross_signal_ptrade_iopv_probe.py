@@ -9,6 +9,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROBE = (
     ROOT
     / "cross_signal_strategy"
+    / "archive"
+    / "probes"
     / "smart_trade_ptrade_cross_signal_iopv_probe.py"
 )
 DOC = ROOT / "cross_signal_strategy" / "docs" / "ptrade_iopv_probe.md"

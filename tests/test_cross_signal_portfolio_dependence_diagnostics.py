@@ -27,7 +27,7 @@ class FakeFrameSource:
 
 
 def closed_trade(bucket, year=2019, pnl=100.0, mae=-0.02, corr=0.9):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code="AAA",
@@ -48,7 +48,7 @@ def closed_trade(bucket, year=2019, pnl=100.0, mae=-0.02, corr=0.9):
 
 
 def stats(trades, average_return, average_mae):
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         DependenceTradeStats,
     )
 
@@ -66,7 +66,7 @@ def stats(trades, average_return, average_mae):
 
 
 def test_return_correlation_uses_aligned_twenty_day_returns():
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         calc_return_correlation,
     )
 
@@ -96,7 +96,7 @@ def test_return_correlation_uses_aligned_twenty_day_returns():
 
 
 def test_buy_snapshot_annotation_includes_held_and_earlier_planned_buys():
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         annotate_planned_buy_dependence,
     )
 
@@ -134,7 +134,7 @@ def test_buy_snapshot_annotation_includes_held_and_earlier_planned_buys():
 
 
 def test_buy_snapshot_annotation_rejects_data_after_signal_date():
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         annotate_planned_buy_dependence,
     )
 
@@ -157,7 +157,7 @@ def test_buy_snapshot_annotation_rejects_data_after_signal_date():
 
 
 def test_dependence_report_splits_bucket_and_year_and_uses_mae():
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         build_portfolio_dependence_report,
     )
 
@@ -179,7 +179,7 @@ def test_dependence_report_splits_bucket_and_year_and_uses_mae():
 
 
 def test_dependence_gate_requires_annual_return_and_mae_underperformance():
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         evaluate_dependence_gate,
     )
 
@@ -205,7 +205,7 @@ def test_dependence_gate_requires_annual_return_and_mae_underperformance():
 
 
 def test_dependence_report_rejects_validation_dates():
-    from cross_signal_strategy.portfolio_dependence_diagnostics import (
+    from cross_signal_strategy.research.portfolio_dependence_diagnostics import (
         build_portfolio_dependence_report,
     )
 

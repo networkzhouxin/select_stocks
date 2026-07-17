@@ -44,7 +44,7 @@ def candidate(code, buy_score, reversal_score):
 
 
 def day(date, total_value, buy_code=None):
-    from cross_signal_strategy.local_backtester import DayResult, OrderResult
+    from cross_signal_strategy.local.local_backtester import DayResult, OrderResult
 
     orders = []
     if buy_code:
@@ -69,7 +69,7 @@ def day(date, total_value, buy_code=None):
 
 
 def performance(total_return, max_drawdown, sharpe, sortino, annual):
-    from cross_signal_strategy.ranking_candidate import RankingPerformance
+    from cross_signal_strategy.archive.candidates.ranking_candidate import RankingPerformance
 
     return RankingPerformance(
         total_return=total_return,
@@ -81,7 +81,7 @@ def performance(total_return, max_drawdown, sharpe, sortino, annual):
 
 
 def test_reversal_first_sort_changes_only_candidate_priority():
-    from cross_signal_strategy.ranking_candidate import reversal_first_sort
+    from cross_signal_strategy.archive.candidates.ranking_candidate import reversal_first_sort
 
     items = [
         candidate("TOTAL", buy_score=80, reversal_score=35),
@@ -95,9 +95,9 @@ def test_reversal_first_sort_changes_only_candidate_priority():
 
 
 def test_reversal_first_planner_selects_higher_reversal_when_one_slot_exists():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import strategy
-    from cross_signal_strategy.ranking_candidate import ReversalFirstOrderPlanner
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import strategy
+    from cross_signal_strategy.archive.candidates.ranking_candidate import ReversalFirstOrderPlanner
 
     scores = {
         "TOTAL": candidate("TOTAL", buy_score=80, reversal_score=35),
@@ -123,7 +123,7 @@ def test_reversal_first_planner_selects_higher_reversal_when_one_slot_exists():
 
 
 def test_ranking_gate_requires_path_activity_and_strict_metric_non_degradation():
-    from cross_signal_strategy.ranking_candidate import evaluate_ranking_gate
+    from cross_signal_strategy.archive.candidates.ranking_candidate import evaluate_ranking_gate
 
     baseline = performance(
         total_return=1.0,
@@ -165,7 +165,7 @@ def test_ranking_gate_requires_path_activity_and_strict_metric_non_degradation()
 
 
 def test_ranking_comparison_counts_changed_buy_days_and_annual_returns():
-    from cross_signal_strategy.ranking_candidate import build_ranking_comparison
+    from cross_signal_strategy.archive.candidates.ranking_candidate import build_ranking_comparison
 
     baseline = [
         day("2019-12-31", 11000.0, "AAA"),
@@ -199,7 +199,7 @@ def test_ranking_comparison_counts_changed_buy_days_and_annual_returns():
 
 
 def test_ranking_comparison_rejects_non_training_dates():
-    from cross_signal_strategy.ranking_candidate import build_ranking_comparison
+    from cross_signal_strategy.archive.candidates.ranking_candidate import build_ranking_comparison
 
     with pytest.raises(ValueError, match="outside 2019-2021 training window"):
         build_ranking_comparison(

@@ -14,7 +14,7 @@ sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 
 
 def closed_trade(code, buy_date, sell_date, reason, pnl, entry_score=None):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code=code,
@@ -31,7 +31,7 @@ def closed_trade(code, buy_date, sell_date, reason, pnl, entry_score=None):
 
 
 def test_etf_attribution_summarizes_trade_quality_by_code():
-    from cross_signal_strategy.attribution_diagnostics import build_etf_attribution
+    from cross_signal_strategy.research.attribution_diagnostics import build_etf_attribution
 
     trades = [
         closed_trade("AAA", "2021-01-01", "2021-01-06", "atr_stop", 100.0),
@@ -68,7 +68,7 @@ def test_etf_attribution_summarizes_trade_quality_by_code():
 
 
 def test_entry_signal_tags_are_stable_and_group_signal_sources():
-    from cross_signal_strategy.attribution_diagnostics import (
+    from cross_signal_strategy.research.attribution_diagnostics import (
         entry_combo_key,
         entry_signal_tags,
     )
@@ -96,7 +96,7 @@ def test_entry_signal_tags_are_stable_and_group_signal_sources():
 
 
 def test_entry_signal_combo_summary_aggregates_closed_trade_quality():
-    from cross_signal_strategy.attribution_diagnostics import (
+    from cross_signal_strategy.research.attribution_diagnostics import (
         summarize_entry_signal_combos,
     )
 
@@ -144,7 +144,7 @@ def test_entry_signal_combo_summary_aggregates_closed_trade_quality():
 
 
 def test_entry_bucket_labels_group_buy_context():
-    from cross_signal_strategy.attribution_diagnostics import entry_bucket_labels
+    from cross_signal_strategy.research.attribution_diagnostics import entry_bucket_labels
 
     labels = entry_bucket_labels(
         closed_trade(
@@ -181,7 +181,7 @@ def test_entry_bucket_labels_group_buy_context():
 
 
 def test_entry_bucket_summary_aggregates_each_dimension():
-    from cross_signal_strategy.attribution_diagnostics import summarize_entry_buckets
+    from cross_signal_strategy.research.attribution_diagnostics import summarize_entry_buckets
 
     trades = [
         closed_trade(

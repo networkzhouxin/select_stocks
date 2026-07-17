@@ -90,7 +90,7 @@ class _FakeFlowLoader:
 
 
 def test_share_flow_loader_rejects_non_approved_root(tmp_path):
-    from cross_signal_strategy.share_flow_diagnostics import ShareFlowDataLoader
+    from cross_signal_strategy.research.share_flow_diagnostics import ShareFlowDataLoader
 
     with pytest.raises(ValueError, match="approved share-flow data root"):
         ShareFlowDataLoader(tmp_path)
@@ -100,7 +100,7 @@ def test_share_flow_loader_combines_cross_year_history_filters_future_and_copies
     tmp_path,
     monkeypatch,
 ):
-    import cross_signal_strategy.share_flow_diagnostics as module
+    import cross_signal_strategy.research.share_flow_diagnostics as module
 
     warmup = _frame(
         ["2018-12-26", "2018-12-27", "2018-12-28"],
@@ -155,14 +155,14 @@ def test_share_flow_loader_combines_cross_year_history_filters_future_and_copies
     ],
 )
 def test_validate_share_flow_frame_rejects_bad_source_rows(frame, message):
-    from cross_signal_strategy.share_flow_diagnostics import validate_share_frame
+    from cross_signal_strategy.research.share_flow_diagnostics import validate_share_frame
 
     with pytest.raises(ValueError, match=message):
         validate_share_frame(frame, expected_code="159915")
 
 
 def test_calculate_share_flow_uses_fixed_five_observation_log_change():
-    from cross_signal_strategy.share_flow_diagnostics import calculate_share_flow
+    from cross_signal_strategy.research.share_flow_diagnostics import calculate_share_flow
 
     dates = [
         "2020-01-02",
@@ -208,7 +208,7 @@ def test_calculate_share_flow_uses_fixed_five_observation_log_change():
 
 
 def test_calculate_share_flow_requires_t_minus_one_endpoint_and_rejects_future_rows():
-    from cross_signal_strategy.share_flow_diagnostics import calculate_share_flow
+    from cross_signal_strategy.research.share_flow_diagnostics import calculate_share_flow
 
     dates = [
         "2020-01-02",
@@ -250,7 +250,7 @@ def test_calculate_share_flow_requires_t_minus_one_endpoint_and_rejects_future_r
 
 
 def test_calculate_share_flow_blocks_qdii_without_using_history():
-    from cross_signal_strategy.share_flow_diagnostics import calculate_share_flow
+    from cross_signal_strategy.research.share_flow_diagnostics import calculate_share_flow
 
     observation = calculate_share_flow(
         pd.DataFrame(),
@@ -266,7 +266,7 @@ def test_calculate_share_flow_blocks_qdii_without_using_history():
 
 
 def test_calculate_share_flow_neutralizes_split_crossing_and_resets_at_split_baseline():
-    from cross_signal_strategy.share_flow_diagnostics import (
+    from cross_signal_strategy.research.share_flow_diagnostics import (
         CorporateAction,
         calculate_share_flow,
     )
@@ -322,7 +322,7 @@ def test_calculate_share_flow_neutralizes_split_crossing_and_resets_at_split_bas
 
 
 def test_share_flow_loader_reads_corporate_actions_once(tmp_path, monkeypatch):
-    import cross_signal_strategy.share_flow_diagnostics as module
+    import cross_signal_strategy.research.share_flow_diagnostics as module
 
     meta = tmp_path / "meta" / "corporate_actions.csv"
     meta.parent.mkdir(parents=True, exist_ok=True)
@@ -345,7 +345,7 @@ def test_share_flow_loader_reads_corporate_actions_once(tmp_path, monkeypatch):
 
 
 def test_share_flow_signal_adapter_adds_only_shadow_fields_and_caches_result():
-    from cross_signal_strategy.share_flow_diagnostics import ShareFlowSignalAdapter
+    from cross_signal_strategy.research.share_flow_diagnostics import ShareFlowSignalAdapter
 
     dates = [
         "2020-01-02",
@@ -380,7 +380,7 @@ def test_share_flow_signal_adapter_adds_only_shadow_fields_and_caches_result():
 
 
 def test_share_flow_signal_adapter_rejects_price_signal_date_mismatch():
-    from cross_signal_strategy.share_flow_diagnostics import ShareFlowSignalAdapter
+    from cross_signal_strategy.research.share_flow_diagnostics import ShareFlowSignalAdapter
 
     source = _FakeSignalSource(
         _candidate_score(signal_date="2020-01-09"),
@@ -396,7 +396,7 @@ def test_share_flow_signal_adapter_rejects_price_signal_date_mismatch():
 
 
 def test_share_flow_signal_adapter_blocks_qdii_without_loading_share_history():
-    from cross_signal_strategy.share_flow_diagnostics import ShareFlowSignalAdapter
+    from cross_signal_strategy.research.share_flow_diagnostics import ShareFlowSignalAdapter
 
     source = _FakeSignalSource(_candidate_score(code="513100"))
     flow_loader = _FakeFlowLoader(pd.DataFrame())
@@ -411,9 +411,9 @@ def test_share_flow_signal_adapter_blocks_qdii_without_loading_share_history():
 
 
 def test_share_flow_shadow_adapter_preserves_planned_orders():
-    from cross_signal_strategy.local_backtester import LocalBroker
-    from cross_signal_strategy.local_order_planner import LocalCrossSignalOrderPlanner
-    from cross_signal_strategy.share_flow_diagnostics import ShareFlowSignalAdapter
+    from cross_signal_strategy.local.local_backtester import LocalBroker
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
+    from cross_signal_strategy.research.share_flow_diagnostics import ShareFlowSignalAdapter
 
     dates = [
         "2020-01-02",
@@ -458,7 +458,7 @@ def _closed_trade(
     pnl,
     return_pct,
 ):
-    from cross_signal_strategy.trade_diagnostics import ClosedTradeDiagnostic
+    from cross_signal_strategy.research.trade_diagnostics import ClosedTradeDiagnostic
 
     return ClosedTradeDiagnostic(
         code=code,
@@ -479,7 +479,7 @@ def _closed_trade(
 
 
 def test_share_flow_report_tracks_coverage_raw_states_and_group_statistics():
-    from cross_signal_strategy.share_flow_diagnostics import build_share_flow_report
+    from cross_signal_strategy.research.share_flow_diagnostics import build_share_flow_report
 
     trades = [
         _closed_trade(
@@ -519,7 +519,7 @@ def test_share_flow_report_tracks_coverage_raw_states_and_group_statistics():
 
 
 def _gate_stats(closed_trades, wins, average_return):
-    from cross_signal_strategy.share_flow_diagnostics import ShareFlowStats
+    from cross_signal_strategy.research.share_flow_diagnostics import ShareFlowStats
 
     return ShareFlowStats(
         closed_trades=closed_trades,
@@ -530,7 +530,7 @@ def _gate_stats(closed_trades, wins, average_return):
 
 
 def test_share_flow_gate_passes_only_for_same_direction_annual_dominance():
-    from cross_signal_strategy.share_flow_diagnostics import evaluate_share_flow_gate
+    from cross_signal_strategy.research.share_flow_diagnostics import evaluate_share_flow_gate
 
     positive = {
         2019: _gate_stats(2, 2, 0.10),
@@ -552,7 +552,7 @@ def test_share_flow_gate_passes_only_for_same_direction_annual_dominance():
 
 @pytest.mark.parametrize("failure_mode", ["sparse", "reversed_year", "tie"])
 def test_share_flow_gate_rejects_sparse_inconsistent_or_tied_evidence(failure_mode):
-    from cross_signal_strategy.share_flow_diagnostics import evaluate_share_flow_gate
+    from cross_signal_strategy.research.share_flow_diagnostics import evaluate_share_flow_gate
 
     positive = {
         2019: _gate_stats(2, 2, 0.10),
@@ -578,7 +578,7 @@ def test_share_flow_gate_rejects_sparse_inconsistent_or_tied_evidence(failure_mo
 
 
 def test_share_flow_report_rejects_trades_outside_training_window():
-    from cross_signal_strategy.share_flow_diagnostics import build_share_flow_report
+    from cross_signal_strategy.research.share_flow_diagnostics import build_share_flow_report
 
     trade = _closed_trade(
         "2022-01-04", "159915", "net_creation", "positive", 100.0, 10.0
@@ -589,7 +589,7 @@ def test_share_flow_report_rejects_trades_outside_training_window():
 
 
 def test_training_share_flow_runner_reuses_official_diagnostic_replay(monkeypatch):
-    import cross_signal_strategy.share_flow_diagnostics as module
+    import cross_signal_strategy.research.share_flow_diagnostics as module
 
     trade = _closed_trade(
         "2019-02-01", "159915", "net_creation", "positive", 100.0, 10.0
@@ -657,7 +657,7 @@ def test_training_share_flow_runner_reuses_official_diagnostic_replay(monkeypatc
 
 
 def test_share_flow_report_formatter_states_locked_scope_and_gate_reasons():
-    from cross_signal_strategy.share_flow_diagnostics import (
+    from cross_signal_strategy.research.share_flow_diagnostics import (
         build_share_flow_report,
         format_share_flow_report,
     )

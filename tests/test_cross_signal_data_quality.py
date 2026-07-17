@@ -12,7 +12,7 @@ sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
 
 
 def test_parse_joinquant_rich_indicator_rows_extracts_close():
-    from cross_signal_strategy.local_data_quality import parse_joinquant_rich_indicator_rows
+    from cross_signal_strategy.local.local_data_quality import parse_joinquant_rich_indicator_rows
 
     text = (
         "2020-09-22 09:35:00 - INFO  -   512100.XSHG buy=65 rev=35 loc=17 "
@@ -35,7 +35,7 @@ def test_parse_joinquant_rich_indicator_rows_extracts_close():
 
 
 def test_parse_joinquant_indicator_values_extracts_diffs_and_kdj():
-    from cross_signal_strategy.local_data_quality import parse_joinquant_indicator_value_rows
+    from cross_signal_strategy.local.local_data_quality import parse_joinquant_indicator_value_rows
 
     text = (
         "2020-09-22 09:35:00 - INFO  -   512100.XSHG buy=65 rev=35 loc=17 "
@@ -69,7 +69,7 @@ def test_parse_joinquant_indicator_values_extracts_diffs_and_kdj():
 
 
 def test_parse_joinquant_cross_flag_rows_extracts_flags():
-    from cross_signal_strategy.local_data_quality import parse_joinquant_cross_flag_rows
+    from cross_signal_strategy.local.local_data_quality import parse_joinquant_cross_flag_rows
 
     text = (
         "2020-09-22 09:35:00 - INFO  -   512100.XSHG rev=35 buy=65 sell=0 "
@@ -102,7 +102,7 @@ def test_parse_joinquant_cross_flag_rows_extracts_flags():
 
 
 def test_summarize_cross_flag_alignment_counts_window_matches():
-    from cross_signal_strategy.local_data_quality import summarize_cross_flag_alignment
+    from cross_signal_strategy.local.local_data_quality import summarize_cross_flag_alignment
 
     rows = [
         {
@@ -136,7 +136,7 @@ def test_summarize_cross_flag_alignment_counts_window_matches():
 
 
 def test_recent_cross_trace_reports_offsets_and_direction():
-    from cross_signal_strategy.local_data_quality import recent_cross_trace
+    from cross_signal_strategy.local.local_data_quality import recent_cross_trace
 
     fast = [0.0, -2.0, 1.0, 2.0, 3.0]
     slow = [0.0, 0.0, 0.0, 0.0, 0.0]
@@ -162,7 +162,7 @@ def test_recent_cross_trace_reports_offsets_and_direction():
 
 
 def test_find_close_mismatches_uses_adapter_scores():
-    from cross_signal_strategy.local_data_quality import find_close_mismatches
+    from cross_signal_strategy.local.local_data_quality import find_close_mismatches
 
     rows = [
         {"date": "2020-01-17", "code": "510880", "buy": 31, "rev": 0, "sell": 35, "close": 2.803},
