@@ -88,8 +88,11 @@ These are starting defaults, not optimized parameters.
 - `research/trade_quality_ledger.py`: observation-only unified 2019-2021 trade-quality ledger using actual fills, causal holding-path boundaries, fixed MFE/MAE labels, ATR first-barrier labels, and post-sell returns.
 - `docs/trade_quality_ledger.md`: frozen ledger definitions plus the source-index/time-zone evidence required before any QDII underlying-market consistency observation may run.
 - `research/underlying_market_data.py`: exact-root, read-only contract for four official underlying-index histories and China-09:35 point-in-time selection.
+- `research/underlying_source_acquisition.py`: locked 2018-2021 FRED/CSI acquisition, raw-data normalization, publication-policy gate, and SHA-256 staging manifest; it cannot invent `available_at` or publish a partial formal bundle.
+- `tools/fetch_underlying_sources.py`: repeatable raw-source download command. It writes only the separate staging root and leaves the formal point-in-time root absent while any availability policy is unproved.
 - `research/underlying_consistency.py`: frozen observation-only positive-versus-non-positive attribution and sample/annual/cross-ETF candidate gate.
 - `docs/underlying_market_direction.md`: required directory layout, CSV provenance fields, future-function boundary, frozen gate, and current missing-data blocker.
+- `docs/underlying_source_acquisition.md`: source registry, real staging audit, hashes, publication-time evidence, and remaining blockers.
 
 - `docs/strategy_spec.md`: frozen design before coding.
 - `docs/backtest_notes.md`: structured backtest result log.

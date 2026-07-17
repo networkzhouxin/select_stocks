@@ -228,6 +228,11 @@ def test_user_authorized_cross_window_budget_is_consumed_after_fixed_matrix():
         family_key=family.key,
         planned_variants=1,
     ).allowed is False
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=2,
+    ).allowed is False
 
 
 def test_user_authorized_execution_time_budget_is_consumed_after_fixed_comparison():
@@ -310,6 +315,38 @@ def test_etf_share_flow_shadow_budget_is_closed_after_one_fixed_observation():
         budget,
         family_key=family.key,
         planned_variants=2,
+    ).allowed is False
+
+
+def test_underlying_direction_budget_tracks_raw_staging_without_opening_experiment():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    family = next(
+        item for item in budget.families
+        if item.key == "underlying_market_direction"
+    )
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "underlying_market_direction"
+    )
+
+    assert family.status == "blocked"
+    assert raw["raw_values_ready"] is True
+    assert raw["raw_source_staging_root"] == (
+        r"G:\financial\history_data\cross_signal_underlying_staging_2018_2021"
+    )
+    assert raw["raw_source_codes"] == ["513100", "513500", "513050", "513880"]
+    assert raw["blocked_availability_codes"] == ["513050", "513500"]
+    assert raw["formal_root_created"] is False
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
     ).allowed is False
 
 

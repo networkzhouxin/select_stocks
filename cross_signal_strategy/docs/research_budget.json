@@ -97,8 +97,21 @@
       "label": "User-authorized QDII underlying-index direction observation",
       "status": "blocked",
       "max_new_experiments": 0,
-      "rationale": "A genuinely independent market-structure hypothesis is pre-registered, but the isolated point-in-time official-index source files do not yet exist. The observation cannot run and no candidate may be created until every file passes the 09:35 availability, finality, source, calendar, and 2018/2019-2021 boundary contract.",
+      "rationale": "The four locked 2018-2021 raw value series have been staged and hashed, but SPX and H30533 still lack approved historical final-value availability policies. The formal root remains absent. The observation cannot run and no candidate may be created until every file passes the 09:35 availability, finality, source, calendar, and boundary contract.",
       "approved_root": "G:\\financial\\history_data\\cross_signal_underlying_train_2018_2021",
+      "raw_source_staging_root": "G:\\financial\\history_data\\cross_signal_underlying_staging_2018_2021",
+      "raw_values_ready": true,
+      "raw_source_codes": [
+        "513100",
+        "513500",
+        "513050",
+        "513880"
+      ],
+      "blocked_availability_codes": [
+        "513050",
+        "513500"
+      ],
+      "formal_root_created": false,
       "eligible_codes": [
         "513100",
         "513500",

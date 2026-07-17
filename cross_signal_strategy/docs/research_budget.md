@@ -16,8 +16,10 @@ it does not change any score, order, position, or risk rule.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
 - The completed fixed `cross_window=1/2/3/4` comparison remains closed; window 3 is retained.
 - The completed fixed `09:35/10:00` execution-time comparison remains closed; `09:35` is retained.
-- One independent QDII underlying-index direction observation is pre-registered
-  but blocked because its isolated point-in-time source directory does not exist.
+- One independent QDII underlying-index direction observation is pre-registered.
+  Four raw 2018-2021 value series are staged and hashed, but the observation
+  remains blocked because `SPX` and `H30533` lack approved historical
+  final-value availability policies. The formal source root does not exist.
   A blocked observation is not an open experiment budget.
 
 ## Frozen Families
@@ -50,10 +52,12 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. `underlying_market_direction` is blocked rather than open; it cannot be
-run and cannot create a candidate while its approved source directory is
-missing. Its exact schema and frozen gate are documented in
-`underlying_market_direction.md`.
+None. `underlying_market_direction` is blocked rather than open. Raw values in
+`G:\financial\history_data\cross_signal_underlying_staging_2018_2021` are not
+formal point-in-time data and cannot run the observation. The approved root
+must remain absent until all four publication-time policies pass. Its exact
+schema and frozen gate are documented in `underlying_market_direction.md` and
+the acquisition evidence is documented in `underlying_source_acquisition.md`.
 
 `etf_share_flow_shadow` consumed its only fixed observation. It used the
 isolated read-only root
