@@ -889,3 +889,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Overfitting and future-function control: Requests are hard-limited to 2018 warm-up plus 2019-2021 training dates. Missing source-market sessions are dropped rather than filled. No validation-period data or result was read, and no score, indicator, threshold, ETF pool, order, or risk rule changed.
 - Affected files: `cross_signal_strategy/research/underlying_source_acquisition.py`, `cross_signal_strategy/tools/fetch_underlying_sources.py`, `tests/test_cross_signal_underlying_source_acquisition.py`, `tests/test_cross_signal_research_budget.py`, `cross_signal_strategy/docs/underlying_source_acquisition.md`, `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, `cross_signal_strategy/docs/decisions.md`, and `cross_signal_strategy/README.md`.
 - Status: raw values staged and audited; point-in-time observation remains blocked; formal JoinQuant, PTrade, local-mainline, and production multi-factor files unchanged.
+
+### Probe JoinQuant Underlying-Index Readability Without Publishing Availability
+
+- Date: 2026-07-18.
+- Decision: Add one isolated, no-order JoinQuant probe for `513500` and `513050`. On four fixed 2019-2021 dates at 09:35, it discovers each ETF's tracked index through `finance.FUND_INVEST_TARGET`, attempts to read two daily closes ending at China T-1, and attempts a same-day close as a future-data negative control.
+- Evidence boundary: A successful T-1 read proves only that the JoinQuant historical backtest exposes that row at the simulated decision time with `avoid_future_data=True`. It does not expose the index publisher's first-release timestamp, JoinQuant's historical ingestion timestamp, or a point-in-time unrevised snapshot.
+- Failure interpretation: An empty `traced_index_code`, unsupported index identifier, metadata error, or price-query error is a platform-capability result. The probe must not replace the underlying index with the ETF price or another proxy.
+- Overfitting and future-function control: The callback is hard-limited to four fixed training dates, places no trades, reads no validation-period data, and changes no signal, threshold, pool, ranking, position, stop, or execution rule.
+- Status: diagnostic probe ready for a JoinQuant run; 513050 and 513500 remain blocked from the formal `available_at` bundle regardless of probe outcome until publisher-level evidence or an explicitly approved contract change exists.
