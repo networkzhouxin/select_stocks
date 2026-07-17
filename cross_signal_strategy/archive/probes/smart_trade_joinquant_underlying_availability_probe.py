@@ -57,10 +57,11 @@ def _assess_close_frame(frame, requested_end):
     if frame is not None and not frame.empty:
         expected = pd.Timestamp(requested_end).normalize()
         parsed_index = pd.to_datetime(frame.index, errors="coerce")
-        requested_end_present = any(
-            not pd.isna(value) and pd.Timestamp(value).normalize() == expected
+        requested_end_present = len([
+            value
             for value in parsed_index
-        )
+            if not pd.isna(value) and pd.Timestamp(value).normalize() == expected
+        ]) > 0
         if "close" in frame.columns:
             closes = pd.to_numeric(frame["close"], errors="coerce")
             finite = closes.notna() & (closes != float("inf")) & (

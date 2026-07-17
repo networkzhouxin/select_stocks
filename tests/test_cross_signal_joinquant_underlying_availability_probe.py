@@ -22,9 +22,11 @@ def probe_text():
     return PROBE_FILE.read_text(encoding="utf-8")
 
 
-def load_probe_module(monkeypatch):
+def load_probe_module(monkeypatch, shadow_builtin_any=False):
     jqdata = types.ModuleType("jqdata")
     jqdata.finance = types.ModuleType("finance")
+    if shadow_builtin_any:
+        jqdata.any = lambda values: values
     monkeypatch.setitem(sys.modules, "jqdata", jqdata)
     spec = importlib.util.spec_from_file_location(
         "cross_signal_underlying_availability_probe", PROBE_FILE
@@ -114,6 +116,18 @@ def test_probe_marks_finite_history_usable_without_assuming_matching_calendars(m
     }
 
 
+def test_close_assessment_ignores_jqdata_any_name_shadow(monkeypatch):
+    module = load_probe_module(monkeypatch, shadow_builtin_any=True)
+    frame = pd.DataFrame(
+        {"close": [3025.0]},
+        index=pd.to_datetime(["2020-02-06"]),
+    )
+
+    assessment = module._assess_close_frame(frame, pd.Timestamp("2020-02-06"))
+
+    assert assessment["requested_end_present"] is True
+
+
 def test_probe_cross_checks_index_registration_and_two_history_interfaces():
     text = probe_text()
 
@@ -165,4 +179,7 @@ def test_probe_scope_and_evidence_limit_are_documented():
     assert "Probe JoinQuant Underlying-Index Readability Without Publishing Availability" in decisions
     assert "all returned `close` values were `NaN`" in decisions
     assert "second-stage diagnostic" in decisions
+    assert "Second-run evidence" in decisions
+    assert "no supported code or name match" in decisions
+    assert "metadata-visible but has no finite OHLC" in decisions
     assert "513050 and 513500 remain blocked" in decisions
