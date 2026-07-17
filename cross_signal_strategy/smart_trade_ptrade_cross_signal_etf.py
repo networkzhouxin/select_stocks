@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Cross-Signal ETF Strategy v0.3.2 for Guojin PTrade.
+"""国金证券 PTrade 上穿下穿 ETF 策略 v0.3.2 正式版。
 
-Business rules are frozen to the JoinQuant v0.3.2 mainline. Only platform,
-live-order, restart-recovery, and halted-security handling differ. PTrade
-backtests are smoke tests; JoinQuant remains the performance authority.
+业务规则冻结并对齐聚宽 v0.3.2 主线；两版只允许在平台接口、实盘委托、
+重启恢复和停复牌处理上存在差异。PTrade 回测只用于验证代码可运行，
+策略收益仍以聚宽回测为准。
 """
 
 import numpy as np
@@ -13,6 +13,10 @@ import hashlib
 import pickle
 from datetime import datetime
 
+
+# 一、冻结的业务配置与持久化边界
+# 参数和 ETF 池由代码固定，防止 PTrade 在重启恢复 g 时覆盖正式版业务配置。
+# A/B 检查点保存可序列化的风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
 LIVE_STATE_SCHEMA_VERSION = 1
@@ -104,7 +108,7 @@ def get_default_etf_pool():
 
 
 def _lock_frozen_business_config():
-    """Reassert code-owned strategy configuration after PTrade restores g."""
+    """PTrade 恢复 g 后，重新写入由代码冻结的策略参数和 ETF 池。"""
     g.params = get_default_params()
     g.etf_pool = get_default_etf_pool()
     try:
@@ -537,6 +541,10 @@ def _format_recovery_source_for_log(source):
     }.get(text, text or "无")
 
 
+# 二、PTrade 生命周期与任务调度
+# 实盘只注册 09:35 主流程和 10:35 停复牌/废单补偿，共两个定时任务。
+# 回测由 handle_data 驱动且固定在收盘执行，因此只能用于冒烟检查，不能评价收益。
+
 def initialize(context):
     set_benchmark("000300.SS")
     try:
@@ -569,6 +577,7 @@ def initialize(context):
     g.buy_date = {}
     g.last_scores = {}
     g.sold_today = {}
+    g.sell_retry_reasons = {}
     g.paused_pool_codes = set()
     g.unverified_positions = set()
     g.execution_date = None
@@ -581,8 +590,7 @@ def initialize(context):
     g.__data = None
     g.__is_live = is_live
     g.__mode_verified = mode_verified
-    # get_trade_name is unavailable during PTrade's initialize phase. Resolve
-    # the instance-scoped checkpoint path in before_trading_start instead.
+    # initialize 阶段不允许调用 get_trade_name；实例隔离的检查点路径延后到盘前阶段解析。
     g.__state_path = None
     g.__state_restore_source = None
     g.__state_restore_generation = None
@@ -607,7 +615,7 @@ def initialize(context):
 
 
 def handle_data(context, data):
-    """PTrade backtest entry; daily backtests execute at the platform close."""
+    """PTrade 回测入口；日线回测会被平台固定在收盘时点执行。"""
     g.__data = data
     if not getattr(g, "__mode_verified", False):
         log.error("[数据处理] 交易模式未验证，交易已阻止")
@@ -634,6 +642,7 @@ def before_trading_start(context, data):
     if g.execution_date != today:
         g.execution_date = today
         g.sold_today = {}
+        g.sell_retry_reasons = {}
         g.paused_pool_codes = set()
         g.deferred_scores = []
         g.deferred_signal_date = None
@@ -668,6 +677,10 @@ def _halt_recover_wrapper(context):
     halt_recover(context)
     _persist_live_state()
 
+
+# 三、技术指标与交叉信号
+# 本段纯计算逻辑与聚宽正式版保持一致；交叉按数组位置比较最近有效差值，避免索引错位。
+# 所有买卖评分只消费已经截断到 T-1 的日线快照，不读取 T 日完整行情。
 
 def calc_rsi(close, period):
     delta = close.diff()
@@ -1037,8 +1050,12 @@ def score_skip_reason(df, snapshot, required_fields, min_len):
     return None
 
 
+# 四、T-1 日线数据与交易日证明
+# 交易日必须由平台日历证明；无法证明 T-1 时直接停止交易，不用自然日猜测。
+# PTrade 停牌日线会以昨值填充且成交量为零，数据层统一剔除这些行以对齐聚宽 skip_paused。
+
 def normalize_code(code):
-    """Normalize PTrade callbacks and JoinQuant symbols to the PTrade universe."""
+    """把 PTrade 回调或聚宽格式代码统一转换为 PTrade 标的代码。"""
     text = str(code or "").strip().upper()
     if not text:
         return ""
@@ -1164,7 +1181,7 @@ def get_prev_trade_date(context):
 
 
 def get_price_data(code, end_date, count):
-    """Load pre-adjusted daily bars ending at the proven T-1 date."""
+    """读取截至已证明 T-1 的前复权日线，并拒绝越过信号日期的数据。"""
     end_date_str = end_date.strftime("%Y-%m-%d") if hasattr(end_date, "strftime") else str(end_date)
     fields = ["open", "close", "high", "low", "volume"]
     try:
@@ -1209,7 +1226,7 @@ def get_price_data(code, end_date, count):
 
 
 def _extract_history_field_series(raw, code, field):
-    """Normalize documented Python 3.11 and legacy PTrade history shapes."""
+    """兼容官方新版及旧版 PTrade 历史行情返回结构。"""
     normalized_code = normalize_code(code)
     if isinstance(raw, pd.Series):
         return raw.copy()
@@ -1389,6 +1406,10 @@ def calc_stop_price(highest, atr_val, cost, params=None):
     pct_stop = max(p["stop_floor"], min(p["stop_cap"], pct_stop))
     return highest * (1 - pct_stop)
 
+
+# 五、账户、行情与委托执行
+# 实盘以券商持仓、可用资金和行情快照为事实来源；未知状态一律按不可交易处理。
+# 卖出使用 pending/sold_today 双重防重，避免 order_target 在持仓同步延迟期间重复下单。
 
 def current_hold_codes(context):
     return [
@@ -1749,6 +1770,7 @@ def execute_sell(code, context, reason):
         log.error("[卖出] %s委托提交后未返回委托编号" % code)
         return False
     if getattr(g, "__is_live", False):
+        g.sell_retry_reasons.pop(code, None)
         g.sold_today[code] = True
         g.__pending_sells[code] = {
             "requested_qty": amount,
@@ -1832,7 +1854,7 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
 
 
 def execute_buy_candidates(context, all_scores, today):
-    """Submit buys only against broker-confirmed holdings and cash."""
+    """只依据券商已确认的持仓和可用资金提交买单。"""
     if getattr(g, "__order_state_unknown", False):
         log.error("[买入] 券商委托状态无法确认，延后买入已阻止")
         return 0
@@ -1907,6 +1929,10 @@ def execute_buy_candidates(context, all_scores, today):
         bought += 1
     return bought
 
+
+# 六、09:35 主流程与 10:35 补偿
+# 09:35 对可交易标的执行完整流程；早盘停牌标的在 10:35 复牌后补做同一套风险与信号判断。
+# 卖单拒绝或部分撤单只获得一次 10:35 有界重评机会，条件消失时不再机械追单。
 
 def do_trading(context):
     p = g.params
@@ -2076,17 +2102,33 @@ def halt_recover(context):
         return
     _recover_live_state_with_available_sources(context, allow_deliver=False)
     previous = set(getattr(g, "paused_pool_codes", set()))
+    retry_reasons = dict(getattr(g, "sell_retry_reasons", {}))
+    g.sell_retry_reasons = {}
+    held_now = set(current_hold_codes(context))
+    retry_codes = set(retry_reasons) & held_now
+    atr_retry_codes = set(
+        code for code in retry_codes
+        if str(retry_reasons.get(code, "")).startswith("atr_stop ")
+    )
+    signal_retry_codes = set(
+        code for code in retry_codes
+        if str(retry_reasons.get(code, "")).startswith("sell_score ")
+    )
     still_paused = set(code for code in previous if is_paused(code))
     recovered = sorted(previous - still_paused)
     g.paused_pool_codes = still_paused
     atr_stopped = set()
-    for code, stop_price, price in check_atr_stops(context, recovered):
+    atr_review_codes = set(recovered) | atr_retry_codes
+    for code, stop_price, price in check_atr_stops(context, atr_review_codes):
         if execute_sell(code, context, "atr_stop %.3f<=%.3f" % (price, stop_price)):
             atr_stopped.add(code)
     scores = list(getattr(g, "deferred_scores", []))
-    if recovered:
+    score_review_codes = set(recovered) | signal_retry_codes
+    if score_review_codes:
         by_code = {item["code"]: item for item in scores}
-        for code in recovered:
+        for code in sorted(score_review_codes):
+            if code in by_code:
+                continue
             score, reason = calc_cross_signal_score(code, prev_date, return_reason=True)
             if score is not None:
                 by_code[code] = score
@@ -2096,19 +2138,34 @@ def halt_recover(context):
                     code, _format_reason_for_log(reason)))
         scores = sort_candidates(list(by_code.values()))
         g.deferred_scores = scores
-        resumed_holds = set(current_hold_codes(context)) & set(recovered)
-        signal_hold_days = _get_signal_hold_days(today, g.params) if resumed_holds else None
-        for code in sorted(resumed_holds - atr_stopped):
+        signal_review_holds = held_now & score_review_codes
+        signal_hold_days = _get_signal_hold_days(today, g.params) if signal_review_holds else None
+        for code in sorted(signal_review_holds - atr_stopped):
             score = by_code.get(code)
             if score is not None:
                 _evaluate_signal_sell(
                     context, code, score, today, signal_hold_days)
+        for code in sorted(retry_codes - atr_stopped):
+            if code not in getattr(g, "__pending_sells", {}):
+                log.info("[卖出重试] %s风险条件已解除，本次不再卖出" % code)
+        if retry_codes:
+            log.info("[卖出重试] 已重新评估=%s" % ",".join(sorted(retry_codes)))
+    elif retry_codes:
+        for code in sorted(retry_codes - atr_stopped):
+            if code not in getattr(g, "__pending_sells", {}):
+                log.info("[卖出重试] %s风险条件已解除，本次不再卖出" % code)
+        log.info("[卖出重试] 已重新评估=%s" % ",".join(sorted(retry_codes)))
+    if recovered:
         log.info("[复牌补偿] 已复牌=%s，已执行延后卖出与买入评估" % ",".join(recovered))
     elif previous:
         log.info("[复牌补偿] 受跟踪的ETF均未复牌")
     if scores:
         execute_buy_candidates(context, scores, today)
 
+
+# 七、实盘状态恢复与成交回报
+# 恢复顺序为检查点、当日策略成交、历史交割单和券商持仓；证据不足的持仓标记为未验证。
+# 未验证持仓禁止自动卖出和新增买入，避免凭空构造买入日、ATR 或最高收盘价。
 
 def _has_incomplete_position_state(context):
     for code in current_hold_codes(context):
@@ -2140,7 +2197,7 @@ def _recover_live_state_with_available_sources(context, allow_deliver):
 
 
 def _fetch_deliver_records(prev_date):
-    """Fetch broker delivery records only from documented lifecycle callbacks."""
+    """只在官方允许的生命周期回调中读取券商历史交割单。"""
     end_date = _as_date(prev_date)
     if end_date is None:
         return []
@@ -2169,7 +2226,7 @@ def _fetch_deliver_records(prev_date):
 
 
 def _fetch_current_strategy_trades():
-    """Normalize PTrade's strategy-only current-day fills into delivery rows."""
+    """把 PTrade 当前策略的当日成交统一转换成交割单式记录。"""
     getter = globals().get("get_trades")
     if getter is None:
         log.error("[状态恢复] get_trades接口不可用")
@@ -2277,7 +2334,7 @@ def _limited_diagnostic_values(values, limit=30):
 
 
 def _diagnose_delivery_replay(records, code, broker_amount):
-    """Return a broker-safe summary without account identifiers or raw rows."""
+    """生成不含账户标识和原始交割单的安全诊断摘要。"""
     target = normalize_code(code)
     all_records = list(records or [])
     available_codes = []
@@ -2396,7 +2453,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
 
 
 def _reconstruct_open_position(records, code, broker_amount):
-    """Rebuild the current open episode and require exact broker-quantity parity."""
+    """重放当前持仓区间，并要求重放数量与券商持仓严格一致。"""
     target = normalize_code(code)
     expected = _safe_float(broker_amount, np.nan)
     if not _is_positive_finite(expected):
@@ -2486,7 +2543,7 @@ def _previous_trade_date_before(value):
 
 
 def _probe_previous_trade_date_by_date(value):
-    """Observe the documented historical calendar API without using its result."""
+    """仅诊断历史交易日接口，不把其返回值直接用于恢复决策。"""
     trade_date = _as_date(value)
     getter = globals().get("get_trading_day_by_date")
     if trade_date is None or getter is None:
@@ -2513,7 +2570,7 @@ def _probe_previous_trade_date_by_date(value):
 
 
 def _get_recovery_close_data(code, start_date, end_date):
-    """Load comparable pre-adjusted closes for disaster recovery only."""
+    """仅为灾难恢复读取可比的前复权收盘价。"""
     start = _as_date(start_date)
     end = _as_date(end_date)
     if start is None or end is None or start > end:
@@ -2675,7 +2732,7 @@ def _prune_closed_position_state(held):
 
 def recover_live_state(
         context, deliver_records=None, current_trade_records=None, prev_date=None):
-    """Verify state, then adopt account positions from provable broker facts."""
+    """先验证已有状态，再用可证明的券商事实接管账户持仓。"""
     held = set(current_hold_codes(context))
     _prune_closed_position_state(held)
     source_map = getattr(g, "__position_recovery_source", None)
@@ -2843,6 +2900,7 @@ def _finish_terminal_sell(code, pending):
         _clear_position_state(code)
     else:
         g.sold_today.pop(code, None)
+        g.sell_retry_reasons[code] = pending.get("reason", "sell_retry")
         log.warning("[卖出余量] %s部分成交后仍有持仓，风险状态已保留" % code)
     return True
 
@@ -2889,6 +2947,7 @@ def on_order_response(context, order_list):
             else:
                 g.__pending_sells.pop(code, None)
                 g.sold_today.pop(code, None)
+                g.sell_retry_reasons[code] = sell_pending.get("reason", "sell_retry")
                 log.error("[卖出拒绝或撤单] %s 状态=%s 原因=%s" % (
                     code, status, error))
     _persist_live_state()

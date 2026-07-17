@@ -48,6 +48,7 @@ def make_g(**overrides):
         "buy_date": {},
         "last_scores": {},
         "sold_today": {},
+        "sell_retry_reasons": {},
         "paused_pool_codes": set(),
         "unverified_positions": set(),
         "execution_date": None,
@@ -143,6 +144,38 @@ def test_ptrade_strategy_does_not_use_platform_forbidden_os_module():
 
     assert "os" not in imported_modules
     assert os_reference_lines == []
+
+
+def test_ptrade_source_documents_platform_boundaries_in_chinese():
+    path = (
+        ROOT
+        / "cross_signal_strategy"
+        / "smart_trade_ptrade_cross_signal_etf.py"
+    )
+    source = path.read_text(encoding="utf-8")
+    required_sections = (
+        "# 一、冻结的业务配置与持久化边界",
+        "# 二、PTrade 生命周期与任务调度",
+        "# 三、技术指标与交叉信号",
+        "# 四、T-1 日线数据与交易日证明",
+        "# 五、账户、行情与委托执行",
+        "# 六、09:35 主流程与 10:35 补偿",
+        "# 七、实盘状态恢复与成交回报",
+    )
+    legacy_english_comments = (
+        "Cross-Signal ETF Strategy v0.3.2 for Guojin PTrade",
+        "Business rules are frozen",
+        "Reassert code-owned strategy configuration",
+        "PTrade backtest entry",
+        "Normalize PTrade callbacks",
+        "Load pre-adjusted daily bars",
+        "Submit buys only against broker-confirmed holdings and cash",
+        "Fetch broker delivery records",
+        "Verify state, then adopt account positions",
+    )
+
+    assert all(section in source for section in required_sections)
+    assert not any(comment in source for comment in legacy_english_comments)
 
 
 def test_ptrade_direct_log_templates_are_chinese():
@@ -1273,7 +1306,10 @@ def test_rejected_sell_releases_retry_guard_without_clearing_position_state():
         sold_today={"513100.SS": True},
         __pending_sells={
             "513100.SS": {
-                "requested_qty": 500, "filled_qty": 0, "order_id": "sell-order-1"
+                "requested_qty": 500,
+                "filled_qty": 0,
+                "order_id": "sell-order-1",
+                "reason": "atr_stop 0.900<=0.950",
             }
         },
     )
@@ -1290,6 +1326,9 @@ def test_rejected_sell_releases_retry_guard_without_clearing_position_state():
     assert "513100.SS" not in pt.g.__pending_sells
     assert "513100.SS" not in pt.g.sold_today
     assert "513100.SS" in pt.g.highest_since_buy
+    assert pt.g.sell_retry_reasons == {
+        "513100.SS": "atr_stop 0.900<=0.950",
+    }
 
 
 def test_partial_cancelled_sell_keeps_risk_state_for_remaining_position():
@@ -1300,7 +1339,10 @@ def test_partial_cancelled_sell_keeps_risk_state_for_remaining_position():
         sold_today={"513100.SS": True},
         __pending_sells={
             "513100.SS": {
-                "requested_qty": 500, "filled_qty": 200, "order_id": "sell-order-1"
+                "requested_qty": 500,
+                "filled_qty": 200,
+                "order_id": "sell-order-1",
+                "reason": "atr_stop 0.900<=0.950",
             }
         },
     )
@@ -1318,6 +1360,9 @@ def test_partial_cancelled_sell_keeps_risk_state_for_remaining_position():
     assert "513100.SS" not in pt.g.sold_today
     assert "513100.SS" in pt.g.highest_since_buy
     assert "513100.SS" in pt.g.entry_atr
+    assert pt.g.sell_retry_reasons == {
+        "513100.SS": "atr_stop 0.900<=0.950",
+    }
 
 
 def test_before_trading_clears_expired_day_order_guards(monkeypatch):
@@ -1325,6 +1370,7 @@ def test_before_trading_clears_expired_day_order_guards(monkeypatch):
         __pending_orders={"513100.SS": {"requested_qty": 100}},
         __pending_sells={"159915.SZ": {"requested_qty": 100}},
         sold_today={"159915.SZ": True},
+        sell_retry_reasons={"159915.SZ": "atr_stop 0.900<=0.950"},
     )
     monkeypatch.setattr(pt, "recover_live_state", lambda context: None)
     monkeypatch.setattr(pt, "get_open_orders", lambda: [], raising=False)
@@ -1338,6 +1384,7 @@ def test_before_trading_clears_expired_day_order_guards(monkeypatch):
     assert pt.g.__pending_orders == {}
     assert pt.g.__pending_sells == {}
     assert pt.g.sold_today == {}
+    assert pt.g.sell_retry_reasons == {}
 
 
 def test_before_trading_rebuilds_guards_from_broker_open_orders(monkeypatch):
@@ -1902,6 +1949,98 @@ def test_halt_recovery_runs_atr_stop_for_resumed_holding(monkeypatch):
     assert sold[0][1].startswith("atr_stop ")
 
 
+def test_halt_recovery_retries_rejected_atr_sell_for_nonpaused_holding(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(
+        sell_retry_reasons={code: "atr_stop 8.500<=8.750"},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        highest_since_buy={code: 10.0},
+        entry_atr={code: 0.5},
+        buy_date={code: date(2026, 6, 30)},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=10.0,
+                    last_sale_price=8.5,
+                )
+            }
+        ),
+    )
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 8.5)
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda candidate, context, reason: sold.append((candidate, reason)) or True,
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert sold == [(code, "atr_stop 8.500<=8.750")]
+    assert pt.g.sell_retry_reasons == {}
+
+
+def test_halt_recovery_drops_rejected_atr_retry_when_risk_has_cleared(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(
+        sell_retry_reasons={code: "atr_stop 8.500<=8.750"},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        highest_since_buy={code: 10.0},
+        entry_atr={code: 0.5},
+        buy_date={code: date(2026, 6, 30)},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=10.0,
+                    last_sale_price=9.5,
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 9.5)
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cleared ATR risk must not be sold")
+        ),
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert pt.g.sell_retry_reasons == {}
+
+
 def test_halt_recovery_runs_signal_sell_only_for_resumed_holding(monkeypatch):
     resumed = "513100.SS"
     already_open = "159985.SZ"
@@ -1961,6 +2100,63 @@ def test_halt_recovery_runs_signal_sell_only_for_resumed_holding(monkeypatch):
     pt.halt_recover(context)
 
     assert sold == [(resumed, "sell_score 35")]
+
+
+def test_halt_recovery_retries_rejected_signal_sell_for_nonpaused_holding(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    score = make_sell_score(code)
+    pt.g = make_g(
+        sell_retry_reasons={code: "sell_score 35"},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        deferred_scores=[score],
+        highest_since_buy={code: 10.0},
+        entry_atr={code: 0.2},
+        buy_date={code: date(2026, 6, 30)},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=10.0,
+                    last_sale_price=10.0,
+                )
+            }
+        ),
+    )
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 10.0)
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda end_date, count: [
+            date(2026, 7, 6), date(2026, 7, 7), date(2026, 7, 8),
+            date(2026, 7, 9), date(2026, 7, 10), today,
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda candidate, context, reason: sold.append((candidate, reason)) or True,
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert sold == [(code, "sell_score 35")]
+    assert pt.g.sell_retry_reasons == {}
 
 
 def test_halt_recovery_keeps_minimum_hold_protection_for_resumed_holding(monkeypatch):
@@ -2730,6 +2926,7 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
         ("_halt_recover_wrapper", "10:35"),
     ]
     assert pt.g.params == jq.get_default_params()
+    assert pt.g.sell_retry_reasons == {}
     assert not hasattr(pt.g, "base_weights")
     assert platform_parameters == [{
         "receive_cancel_response": "1",
