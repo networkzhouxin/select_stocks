@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "scope": "Only explicit 2019-2021 annual gate contradictions retained in failed_experiments.md. Missing annual evidence is never inferred.",
+  "annotations": [
+    {
+      "record_id": "382fdfe83f4b1c08",
+      "failed_years": [2021],
+      "mechanism": "sample_concentration",
+      "evidence": "可扩容子集年度样本仅为 2/2/1，2021 年唯一一笔亏损 44.80 元，无法证明跨年稳定。",
+      "interpretation": "强趋势总体盈利不等于剩余仓位可安全扩容。"
+    },
+    {
+      "record_id": "235b4ac4f930ecd1",
+      "failed_years": [2021],
+      "mechanism": "regime_reversal",
+      "evidence": "BOLL 宽度上升在 2019-2020 较好，但 2021 年平均收益和胜率均落后于宽度未上升组。",
+      "interpretation": "波动扩张不是低位反转的通用确认。"
+    },
+    {
+      "record_id": "bfc4f80beac3955b",
+      "failed_years": [2021],
+      "mechanism": "sample_concentration",
+      "evidence": "温和趋势中的振荡指标领先序列年度样本仅 2/3/2，2021 年该组亏损 218 元，且没有 MACD 领先对照组。",
+      "interpretation": "交叉先后次序缺少可比较样本。"
+    },
+    {
+      "record_id": "f731258869d2f4db",
+      "failed_years": [2019, 2020, 2021],
+      "mechanism": "regime_reversal",
+      "evidence": "Kaufman ER 上升组在 2019 年收益和胜率、2020 年胜率、2021 年收益分别未胜出。",
+      "interpretation": "价格路径效率方向没有跨年一致性。"
+    },
+    {
+      "record_id": "13f0e3fd7e356bdf",
+      "failed_years": [2019, 2021],
+      "mechanism": "regime_reversal",
+      "evidence": "高组合依赖组 2019 和 2021 平均收益较低且 MAE 更差，但 2020 两笔交易平均收益高达 15.31%。",
+      "interpretation": "高相关既可能是拥挤，也可能是广泛强趋势。"
+    },
+    {
+      "record_id": "1cbf428266ab0e47",
+      "failed_years": [2020, 2021],
+      "mechanism": "regime_reversal",
+      "evidence": "多数宽度确认在 2020 年未同时改善胜率，2021 年则由低宽度组在收益和胜率上明显反超。",
+      "interpretation": "低市场宽度在部分年份恰好代表早期领涨。"
+    },
+    {
+      "record_id": "d2eb85f55958a1ab",
+      "failed_years": [2019, 2021],
+      "mechanism": "parameter_instability",
+      "evidence": "MACD(6,13,5) 仅改善 2020 年收益，2019 从 35.84% 降至 17.02%，2021 从 8.46% 降至 3.87%。",
+      "interpretation": "更快 MACD 增加短命交叉和路径敏感性。"
+    },
+    {
+      "record_id": "5cf2ab1a3eff08ad",
+      "failed_years": [2019, 2021],
+      "mechanism": "regime_reversal",
+      "evidence": "临近压力位组在 2019 年反而收益更高，2021 年虽收益略低但胜率更高，均未满足统一拦截门槛。",
+      "interpretation": "压力位附近既可能受阻，也可能处于有效起涨。"
+    },
+    {
+      "record_id": "66c91b1446196115",
+      "failed_years": [2019, 2020],
+      "mechanism": "sample_concentration",
+      "evidence": "过度延伸突破总共只有两笔：2019 一笔且仍盈利，2020 为零笔，无法建立跨年反追高规则。",
+      "interpretation": "方向看似合理，但样本不足以形成交易规则。"
+    },
+    {
+      "record_id": "998639769a2b4ff4",
+      "failed_years": [2019, 2020],
+      "mechanism": "regime_reversal",
+      "evidence": "份额正流入组在 2019、2020 的收益和胜率均不优于非正流入组，到 2021 才同时占优。",
+      "interpretation": "ETF 份额方向的含义随市场状态变化。"
+    },
+    {
+      "record_id": "976db877599fa83e",
+      "failed_years": [2020, 2021],
+      "mechanism": "parameter_instability",
+      "evidence": "最接近主线的 cross_window=4 仅改善 2019，2020 从 49.74% 降至 37.30%，2021 从 8.46% 降至 4.89%。",
+      "interpretation": "四日窗口留下更多陈旧交叉。"
+    },
+    {
+      "record_id": "8c37b5051204357d",
+      "failed_years": [2019, 2021],
+      "mechanism": "execution_inconsistency",
+      "evidence": "10:00 相对 09:35 的成交改善在 2019、2021 分别为 -3.08bp、-0.95bp，且 2021 年组合收益下降。",
+      "interpretation": "等待改变了后续路径，却没有稳定改善成交价格。"
+    },
+    {
+      "record_id": "fa0e275192d3161b",
+      "failed_years": [2020],
+      "mechanism": "tail_execution",
+      "evidence": "2020 年 23/29 笔改善且中位数 +9.52bp，但均值 -0.78bp；513500 在 2020-02-03 单笔恶化 119.45bp，显示失败由追价尾部主导。",
+      "interpretation": "固定被动等待具有小额频繁改善、少数大额追价损失的逆向选择。"
+    }
+  ]
+}

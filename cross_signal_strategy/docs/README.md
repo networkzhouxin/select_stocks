@@ -15,5 +15,6 @@ Key files:
 - `validation_summary.md`: frozen cross-period validation summary and adoption recommendation.
 - `decisions.md`: adopted decisions and rationale.
 - `failed_experiments.md`: rejected experiments and why not to repeat them casually.
+- `failure_year_fragility_atlas.md`: 训练期失败年份脆弱性地图；只汇总台账中明确保留的逐年反例，不授权重新调参。
 - `validation_protocol.md`: frozen out-of-sample validation protocol before inspecting reserved-period results.
 - `platform_architecture.md`: 中文平台架构、PTrade 实盘适配职责、替代平台比较与当前选型结论。

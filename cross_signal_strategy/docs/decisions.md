@@ -925,3 +925,15 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Allowed validation influence: none; only approved 2019-2021 minute data and the 2018 read-only warm-up were used. Reserved validation periods were not read.
 - Affected files: isolated local execution helper, isolated research report, tests, and research-governance documents only.
 - Status: rejected and exhausted; formal JoinQuant, PTrade, local-mainline, and production multi-factor strategy files remain unchanged.
+
+### Record The Failure-Year Fragility Atlas Without Reopening Research
+
+- Date: 2026-07-18.
+- Decision: Add a training-governance atlas that parses all 53 retained failed or non-adopted experiments and manually annotates only the 13 records that preserve explicit annual gate contradictions. Missing annual evidence remains unreported rather than inferred. This does not authorize a strategy change.
+- Test-first evidence: Seven focused tests first failed for the absent parser, annotations, report, documentation index, and decision record. The parser excludes the empty ledger template, verifies 53 unique real entries, rejects unknown IDs and non-training years, and requires non-empty evidence for every annotation.
+- Training evidence: Explicit contradiction counts are 7/6/10 for 2019/2020/2021. The counts are not performance scores and one experiment may contribute more than one year. The formal local mainline annual returns remain +35.84%/+49.74%/+8.46%, so 2020 is not a mainline weak year.
+- Interpretation: The most common annotated cause is market-regime reversal. The 2020 minute-overlay failure is separately classified as execution-tail risk: 23 of 29 buys improved and the median was +9.52 basis points, but one `513500` fallback on 2020-02-03 worsened by 119.45 basis points and pulled the unweighted annual mean below zero. The more frequent 2021 contradictions show that many confirmation variables reverse meaning across regimes; they do not justify 2021-specific tuning.
+- Research boundary: Keep `cross-v0.3.2` frozen. Do not reopen indicator periods, thresholds, cross windows, execution clocks, limit offsets, or ETF exceptions from this atlas. The only pre-registered independent direction remains QDII underlying-index direction, which stays blocked until official final-value and historical `available_at` evidence is complete.
+- Data boundary: The atlas reads only `failed_experiments.md` and its curated annotation file. It opens no market-data directory and reads no validation-period result.
+- Affected files: `cross_signal_strategy/research/failure_year_atlas.py`, `tests/test_cross_signal_failure_year_atlas.py`, `cross_signal_strategy/docs/failure_year_fragility_annotations.json`, `cross_signal_strategy/docs/failure_year_fragility_atlas.md`, `cross_signal_strategy/docs/README.md`, and `cross_signal_strategy/docs/decisions.md`.
+- Status: adopted as research-governance documentation; formal JoinQuant, PTrade, local-mainline, ETF pool, parameters, execution rules, and production multi-factor files remain unchanged.
