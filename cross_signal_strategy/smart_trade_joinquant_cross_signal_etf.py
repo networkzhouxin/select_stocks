@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Cross-Signal ETF Strategy v0.1 for JoinQuant.
+Cross-Signal ETF Strategy v0.3.2 for JoinQuant.
 
 Research protocol:
 - Develop first on 2019-01-01 to 2021-12-31 only.
@@ -11,10 +11,12 @@ Research protocol:
 import numpy as np
 import pandas as pd
 import builtins as _builtins
+import hashlib
 from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
+DEPLOYMENT_BUILD_ID = "20260718.1"
 
 
 try:
@@ -76,6 +78,17 @@ def get_default_etf_pool():
         "518880.XSHG",
         "159985.XSHE",
     ]
+
+
+def business_config_fingerprint(params=None, etf_pool=None):
+    p = params or get_default_params()
+    pool = etf_pool or get_default_etf_pool()
+    param_text = "|".join(
+        "%s=%r" % (key, p[key]) for key in sorted(p)
+    )
+    pool_text = ",".join(str(code).split(".")[0] for code in pool)
+    payload = "%s|%s|%s" % (STRATEGY_VERSION, param_text, pool_text)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def get_a_share_etf_codes():
@@ -219,6 +232,9 @@ def initialize(context):
         g.params["max_hold"],
         g.params["base_ratio"],
         g.params["min_signal_hold_days"]))
+    log.info("[release fingerprint] build=%s business=%s state_schema=n/a" % (
+        DEPLOYMENT_BUILD_ID,
+        business_config_fingerprint(g.params, g.etf_pool)))
     log.info(format_self_check())
     log.info("[indicator params] %s" % format_indicator_params(g.params))
 
@@ -800,8 +816,8 @@ def do_trading(context):
     current_data = get_current_data()
     is_rebalance = today.weekday() in p["rebalance_weekdays"]
 
-    log.info("[cross-v0.1] date=%s signal_date=%s rebalance=%s" % (
-        today, prev_date, is_rebalance))
+    log.info("[%s] date=%s signal_date=%s rebalance=%s" % (
+        STRATEGY_VERSION, today, prev_date, is_rebalance))
 
     stop_hits = check_atr_stops(context, current_data)
     for code, stop_price, price in stop_hits:
@@ -809,7 +825,7 @@ def do_trading(context):
 
     if not is_rebalance:
         if not stop_hits:
-            log.info("[cross-v0.1] non-rebalance day: stop check passed")
+            log.info("[%s] non-rebalance day: stop check passed" % STRATEGY_VERSION)
         return
 
     all_scores = []
@@ -830,7 +846,7 @@ def do_trading(context):
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
         summary = " | ".join("%s=%d" % (k, v) for k, v in sorted(reason_counts.items()))
         samples = " | ".join("%s:%s" % (c, r) for c, r in sorted(skip_reasons.items())[:6])
-        log.info("[cross-v0.1] no valid scores")
+        log.info("[%s] no valid scores" % STRATEGY_VERSION)
         log.info("[score skip summary] %s" % summary)
         log.info("[score skip samples] %s" % samples)
         return
@@ -919,7 +935,7 @@ def do_trading(context):
 
     candidates = filter_buy_candidates(all_scores, held_after_sell, p)
     if not candidates:
-        log.info("[cross-v0.1] no buy candidates above threshold")
+        log.info("[%s] no buy candidates above threshold" % STRATEGY_VERSION)
         return
 
     bought = 0
@@ -947,8 +963,8 @@ def after_close(context):
     cash = context.portfolio.available_cash
     holds = current_hold_codes(context)
     log.info("=" * 60)
-    log.info("[cross-v0.1 close] total=%.2f cash=%.2f holdings=%d/%d" % (
-        total, cash, len(holds), g.params["max_hold"]))
+    log.info("[%s close] total=%.2f cash=%.2f holdings=%d/%d" % (
+        STRATEGY_VERSION, total, cash, len(holds), g.params["max_hold"]))
     for code in holds:
         price = current_price(current_data, code)
         pos = context.portfolio.positions[code]

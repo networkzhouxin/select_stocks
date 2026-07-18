@@ -110,6 +110,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260718.1"
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -122,6 +123,19 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
         "518880.SS",
         "159985.SZ",
     ]
+    assert pt.business_config_fingerprint() == jq.business_config_fingerprint()
+
+
+def test_formal_ptrade_source_has_no_stale_release_labels_and_logs_fingerprint():
+    source = (
+        ROOT
+        / "cross_signal_strategy"
+        / "smart_trade_ptrade_cross_signal_etf.py"
+    ).read_text(encoding="utf-8")
+
+    assert "[cross-v0.1]" not in source
+    assert "[发布指纹]" in source
+    assert "LIVE_STATE_SCHEMA_VERSION" in source
 
 
 def test_ptrade_strategy_does_not_use_platform_forbidden_os_module():
@@ -262,6 +276,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "_numeric_score",
         "_valid_pair",
         "build_signal_snapshot",
+        "business_config_fingerprint",
         "buy_position_scale",
         "calc_atr",
         "calc_bollinger",
@@ -3055,6 +3070,9 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "`before_trading_start`" in notes
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
+    assert "[发布指纹]" in notes
+    assert "20260718.1" in notes
+    assert "1506a0e834fe" in notes
 
 
 def test_release_docs_describe_resilient_ptrade_state_recovery():

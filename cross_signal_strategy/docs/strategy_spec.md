@@ -162,9 +162,9 @@ A single weak signal may tighten risk, while multi-indicator downside resonance 
 - Max holdings: 3.
 - Base capital usage: 0.95 of account value. The original 0.75 setting was only the inherited initial test baseline; the 2019-2021 training-only exposure diagnostic showed capital utilization, not signal scarcity, was the first structural bottleneck. Keep a 5% cash buffer instead of testing fine-grained higher ratios.
 - Position sizing: equal-weight among selected holdings for v0.1. Do not add volatility-inverse sizing yet, so signal quality can be evaluated before sizing complexity.
-- Rebalance days: Tuesday and Thursday, same as the current production strategy.
+- Current formal schedule: Monday through Friday; every trading day evaluates the frozen signal path.
 - Daily stop check: 09:35.
-- Rotation buy/sell: 09:35 on rebalance days.
+- Current formal rotation: 09:35 every trading day; orders are submitted only when the frozen buy, sell, or ATR conditions are met.
 - After-close logging: 15:30.
 
 ## Risk Management

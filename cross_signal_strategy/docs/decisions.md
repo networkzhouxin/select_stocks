@@ -903,3 +903,14 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Failure interpretation: An empty `traced_index_code`, unsupported index identifier, metadata error, or price-query error is a platform-capability result. The probe must not replace the underlying index with the ETF price or another proxy.
 - Overfitting and future-function control: The callback is hard-limited to four fixed training dates, places no trades, reads no validation-period data, and changes no signal, threshold, pool, ranking, position, stop, or execution rule.
 - Status: second-stage diagnostic complete; 513050 and 513500 remain blocked from the formal `available_at` bundle until publisher-level evidence or an explicitly approved contract change exists. No formal JoinQuant, PTrade, local-mainline, or production multi-factor strategy changed.
+
+### Add A Reproducible Cross-Signal Release Identity And Gate
+
+- Date: 2026-07-18.
+- Decision: Keep every `cross-v0.3.2` business rule frozen while adding deployment build `20260718.1`, a 12-character SHA256 business-configuration fingerprint, dynamic formal-version log labels, and a read-only release verifier. The fingerprint covers the strategy version, sorted frozen parameters, and the normalized nine-ETF pool; platform code suffixes are deliberately excluded.
+- Test-first evidence: New tests first failed on the stale `v0.1` source/log labels, missing build and fingerprint, absent verifier, and outdated Tuesday/Thursday documentation. After implementation, the focused suite passed 175 tests. The final `python cross_signal_strategy/tools/verify_release.py --run-tests` check passed with business fingerprint `1506a0e834fe`, 529 tests passed, and 78 unrelated tests deselected.
+- Release checks: three formal entries exist and parse; JoinQuant/PTrade version, build, parameters and normalized ETF pool match; all frozen pure-business functions remain AST-identical; PTrade does not use the forbidden `os` module; live-state schema version is positive; formal source contains no stale `[cross-v0.1]` label.
+- Interpretation: This change makes copied PTrade deployments independently identifiable and turns the existing parity contracts into one repeatable command. The fingerprint and verifier are observation-only and are never read by signal scoring, ranking, position sizing, stop calculation, scheduling, or order submission.
+- Affected files: formal JoinQuant and PTrade adapters, `cross_signal_strategy/tools/verify_release.py`, release/deployment documentation, and repository tests.
+- Allowed validation influence: none; no market data, return series, training result, or reserved validation result was read or used.
+- Status: adopted as a release-engineering milestone; strategy logic, parameters, ETF pool, execution time, risk rules, local replay, and production multi-factor files remain unchanged.

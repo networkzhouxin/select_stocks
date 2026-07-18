@@ -10,6 +10,19 @@
 - This port contains no multi-factor weights, Tuesday/Thursday rotation,
   switch threshold, or multi-factor bear-market rules.
 
+The formal release identity is printed once during initialization:
+
+```text
+[发布指纹] 构建=20260718.1 业务配置=1506a0e834fe 状态结构=1
+```
+
+The build identifies the copied deployment artifact. The business fingerprint
+is calculated from the frozen strategy version, parameters, and normalized
+nine-ETF pool, so the JoinQuant and PTrade files must print the same value.
+The state schema is PTrade-only and does not participate in trading decisions.
+Any mismatch from this documented identity requires a fresh local release
+check before simulation or live trading continues.
+
 The indicator calculations, cross detection, buy/sell scoring, candidate
 filtering, position sizing, minimum signal hold, and ATR stop formula are
 frozen to the JoinQuant `cross-v0.3.2` mainline. Only platform access and live

@@ -53,3 +53,19 @@ def test_cross_signal_readme_documents_the_archived_layout():
     assert "local/" in readme
     assert "research/" in readme
     assert "tools/" in readme
+
+
+def test_current_spec_documents_daily_signal_evaluation():
+    spec = (STRATEGY_ROOT / "docs" / "strategy_spec.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Current formal schedule: Monday through Friday" in spec
+    assert "Current formal rotation: 09:35 every trading day" in spec
+
+
+def test_cross_signal_readme_documents_release_verification_command():
+    readme = (STRATEGY_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "tools/verify_release.py" in readme
+    assert "--run-tests" in readme

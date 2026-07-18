@@ -19,6 +19,7 @@ from datetime import datetime
 # A/B 检查点保存可序列化的风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
+DEPLOYMENT_BUILD_ID = "20260718.1"
 LIVE_STATE_SCHEMA_VERSION = 1
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
@@ -105,6 +106,17 @@ def get_default_etf_pool():
         "518880.SS",
         "159985.SZ",
     ]
+
+
+def business_config_fingerprint(params=None, etf_pool=None):
+    p = params or get_default_params()
+    pool = etf_pool or get_default_etf_pool()
+    param_text = "|".join(
+        "%s=%r" % (key, p[key]) for key in sorted(p)
+    )
+    pool_text = ",".join(str(code).split(".")[0] for code in pool)
+    payload = "%s|%s|%s" % (STRATEGY_VERSION, param_text, pool_text)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _lock_frozen_business_config():
@@ -610,6 +622,10 @@ def initialize(context):
         g.params["max_hold"],
         g.params["base_ratio"],
         g.params["min_signal_hold_days"]))
+    log.info("[发布指纹] 构建=%s 业务配置=%s 状态结构=%d" % (
+        DEPLOYMENT_BUILD_ID,
+        business_config_fingerprint(g.params, g.etf_pool),
+        LIVE_STATE_SCHEMA_VERSION))
     log.info(_format_self_check_for_log())
     log.info("[指标参数] %s" % format_indicator_params(g.params))
 
@@ -1959,7 +1975,7 @@ def do_trading(context):
 
     if not is_rebalance:
         if not stop_hits:
-            log.info("[cross-v0.1] 非调仓日，止损检查完成且未触发")
+            log.info("[%s] 非调仓日，止损检查完成且未触发" % STRATEGY_VERSION)
         return
 
     all_scores = []
@@ -1984,7 +2000,7 @@ def do_trading(context):
             "%s:%s" % (c, _format_reason_for_log(r))
             for c, r in sorted(skip_reasons.items())[:6]
         )
-        log.info("[cross-v0.1] 没有有效评分")
+        log.info("[%s] 没有有效评分" % STRATEGY_VERSION)
         log.info("[评分跳过汇总] %s" % summary)
         log.info("[评分跳过样例] %s" % samples)
         return

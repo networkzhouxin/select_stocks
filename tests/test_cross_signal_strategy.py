@@ -21,6 +21,25 @@ strategy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(strategy)
 
 
+def test_formal_joinquant_source_has_no_stale_release_labels():
+    source = (
+        ROOT
+        / "cross_signal_strategy"
+        / "smart_trade_joinquant_cross_signal_etf.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Strategy v0.1 for JoinQuant" not in source
+    assert "[cross-v0.1]" not in source
+
+
+def test_joinquant_exposes_stable_release_fingerprint():
+    fingerprint = strategy.business_config_fingerprint()
+
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260718.1"
+    assert len(fingerprint) == 12
+    assert all(ch in "0123456789abcdef" for ch in fingerprint)
+
+
 def test_recent_cross_detection_uses_last_three_days():
     fast = strategy.pd.Series([4.0, 4.0, 4.0, 4.0, 7.0])
     slow = strategy.pd.Series([5.0, 5.0, 5.0, 5.0, 5.0])
