@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Parity and live-safety tests for the PTrade cross-signal strategy."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import ast
 import importlib.util
 from pathlib import Path
@@ -110,7 +110,8 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260718.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260718.2"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 2
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -564,6 +565,7 @@ def test_live_state_dual_slots_alternate_generations_and_use_protocol4(tmp_path)
     slot_paths = pt._live_state_slot_paths(path=state_path)
     first = pickle.loads(Path(slot_paths["a"]).read_bytes())
     assert first["schema_version"] == pt.LIVE_STATE_SCHEMA_VERSION
+    assert first["business_config_fingerprint"] == pt.business_config_fingerprint()
     assert first["generation"] == 1
     assert first["payload"][:2] == b"\x80\x04"
 
@@ -601,6 +603,18 @@ def test_live_state_envelope_rejects_checksum_mismatch():
     envelope["checksum"] = "0" * 64
 
     with pytest.raises(ValueError, match="checksum"):
+        pt._decode_live_state_envelope(envelope)
+
+
+def test_live_state_envelope_rejects_business_fingerprint_mismatch():
+    state = {
+        field: getattr(make_g(), field)
+        for field in pt.LIVE_STATE_FIELDS
+    }
+    envelope = pt._encode_live_state_envelope(state, generation=1)
+    envelope["business_config_fingerprint"] = "incompatible-business-config"
+
+    with pytest.raises(ValueError, match="business fingerprint"):
         pt._decode_live_state_envelope(envelope)
 
 
@@ -689,6 +703,10 @@ def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monk
         pt, "_persist_live_state", lambda: calls.append("persist") or True,
         raising=False,
     )
+    monkeypatch.setattr(
+        pt, "get_open_orders", lambda: calls.append("open-orders") or [],
+        raising=False,
+    )
     pt.g = make_g(sold_today={"513100.SS": True})
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={})
@@ -701,9 +719,51 @@ def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monk
     assert calls == [
         "trade", "persist",
         "recover", "persist",
-        ("state-recovery", True), "close", "persist",
+        ("state-recovery", True), "open-orders", "close", "persist",
     ]
     assert pt.g.sold_today == {}
+
+
+def test_after_trading_end_logs_unfinished_orders_without_mutating_guards(monkeypatch):
+    warnings = []
+    pending_orders = {"513100.SS": {"order_id": "buy-1"}}
+    pending_sells = {"513500.SS": {"order_id": "sell-1"}}
+    pt.g = make_g(
+        __pending_orders=pending_orders.copy(),
+        __pending_sells=pending_sells.copy(),
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_open_orders",
+        lambda: [
+            types.SimpleNamespace(
+                id="broker-order-1",
+                symbol="513100.SS",
+                status="2",
+                amount=1000,
+                filled=200,
+            )
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "after_close", lambda context: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda: True)
+    monkeypatch.setattr(pt.log, "warning", lambda message: warnings.append(message))
+    context = types.SimpleNamespace(portfolio=types.SimpleNamespace(positions={}))
+
+    pt.after_trading_end(context, data=None)
+
+    assert any(
+        "[盘后委托核对]" in message and "broker-order-1" in message
+        for message in warnings
+    )
+    assert pt.g.__pending_orders == pending_orders
+    assert pt.g.__pending_sells == pending_sells
 
 
 def test_order_and_trade_callbacks_checkpoint_state(monkeypatch):
@@ -718,6 +778,29 @@ def test_order_and_trade_callbacks_checkpoint_state(monkeypatch):
     pt.on_trade_response(types.SimpleNamespace(), [])
 
     assert len(persisted) == 2
+
+
+def test_callbacks_reject_non_dict_records_without_crashing(monkeypatch):
+    class CallbackLike:
+        def get(self, key, default=None):
+            return default
+
+    warnings = []
+    persisted = []
+    pt.g = make_g()
+    monkeypatch.setattr(pt.log, "warning", lambda message: warnings.append(message))
+    monkeypatch.setattr(
+        pt,
+        "_persist_live_state",
+        lambda: persisted.append(True) or True,
+        raising=False,
+    )
+
+    pt.on_order_response(types.SimpleNamespace(), [CallbackLike()])
+    pt.on_trade_response(types.SimpleNamespace(), [CallbackLike()])
+
+    assert len(persisted) == 2
+    assert sum("回报格式异常" in message for message in warnings) == 2
 
 
 def test_ptrade_scoring_and_stop_math_match_joinquant_mainline():
@@ -745,6 +828,94 @@ def test_ptrade_scoring_and_stop_math_match_joinquant_mainline():
     assert pt.calc_stop_price(10.0, 0.2, 8.0) == jq.calc_stop_price(10.0, 0.2, 8.0)
 
 
+def test_joinquant_and_ptrade_choose_same_buy_on_same_synthetic_day(monkeypatch):
+    today = date(2026, 7, 14)
+    prev_date = date(2026, 7, 13)
+    jq_code = "513100.XSHG"
+    pt_code = "513100.SS"
+    jq_score = make_buy_score(jq_code)
+    pt_score = make_buy_score(pt_code)
+    for score in (jq_score, pt_score):
+        score.update({
+            "close": 2.0,
+            "loose_reversal_count": 0,
+            "rsi_turn_up": False,
+            "rsi6_delta": 0.0,
+            "macd_turn_up": False,
+            "dif_delta": 0.0,
+            "kdj_turn_up": False,
+            "k_delta": 0.0,
+            "j_delta": 0.0,
+        })
+
+    jq_orders = []
+    jq.g = types.SimpleNamespace(
+        params=jq.get_default_params(),
+        etf_pool=[jq_code],
+        highest_since_buy={},
+        entry_atr={},
+        buy_date={},
+        last_scores={},
+    )
+    jq_context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 14, 9, 35),
+        portfolio=types.SimpleNamespace(
+            positions={}, total_value=20000.0, available_cash=20000.0),
+    )
+    monkeypatch.setattr(jq, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(
+        jq,
+        "get_current_data",
+        lambda: {jq_code: types.SimpleNamespace(paused=False, last_price=2.0)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        jq,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (dict(jq_score), None),
+    )
+    monkeypatch.setattr(
+        jq, "get_trade_days", lambda **kwargs: [prev_date, today], raising=False)
+    monkeypatch.setattr(
+        jq,
+        "order_target_value",
+        lambda code, value: jq_orders.append(("buy", code.split(".")[0])),
+        raising=False,
+    )
+
+    pt_orders = []
+    pt.g = make_g(etf_pool=[pt_code])
+    pt_context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 14, 9, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000.0, cash=20000.0),
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (dict(pt_score), None),
+    )
+    monkeypatch.setattr(
+        pt, "get_trade_days", lambda **kwargs: [prev_date, today], raising=False)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, shares, limit_price=None: (
+            pt_orders.append(("buy", code.split(".")[0])) or "buy-order-1"
+        ),
+        raising=False,
+    )
+
+    jq.do_trading(jq_context)
+    pt.do_trading(pt_context)
+
+    assert jq_orders == pt_orders == [("buy", "513100")]
+
+
 def test_ptrade_normalizes_callback_codes_to_universe_format():
     assert pt.normalize_code("513100") == "513100.SS"
     assert pt.normalize_code("159915") == "159915.SZ"
@@ -762,6 +933,44 @@ def test_live_price_fails_closed_when_snapshot_is_unavailable(monkeypatch):
 
     assert pt.get_current_price("513100.SS") is None
     assert history_called == []
+
+
+def test_live_price_rejects_snapshot_from_previous_session(monkeypatch):
+    pt.g = make_g()
+    stale_time = datetime.now() - timedelta(days=1)
+    monkeypatch.setattr(
+        pt,
+        "get_snapshot",
+        lambda code: {
+            code: {
+                "last_px": 2.0,
+                "hsTimeStamp": stale_time.strftime("%Y%m%d%H%M%S"),
+            }
+        },
+        raising=False,
+    )
+
+    assert pt.get_current_price("513100.SS") is None
+    assert pt.g.__last_snapshot == {}
+
+
+def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
+    pt.g = make_g()
+    current_time = datetime.now()
+    monkeypatch.setattr(
+        pt,
+        "get_snapshot",
+        lambda code: {
+            code: {
+                "last_px": 2.0,
+                "hsTimeStamp": current_time.strftime("%Y%m%d%H%M%S"),
+            }
+        },
+        raising=False,
+    )
+
+    assert pt.get_current_price("513100.SS") == pytest.approx(2.0)
+    assert pt.g.__last_snapshot["513100.SS"]["last_px"] == pytest.approx(2.0)
 
 
 def test_iopv_observation_uses_the_same_snapshot_as_the_live_buy_price():
@@ -1100,6 +1309,8 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
         last_scores={"513100.SS": {"buy_score": 60}},
     )
     orders = []
+    messages = []
+    monkeypatch.setattr(pt.log, "info", lambda message: messages.append(message))
     monkeypatch.setattr(pt, "get_current_price", lambda code: 1.1)
     monkeypatch.setattr(pt, "get_sell_limit_price", lambda code, price: 1.0)
     monkeypatch.setattr(
@@ -1116,6 +1327,10 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
     assert "513100.SS" in pt.g.highest_since_buy
     assert pt.g.__pending_sells["513100.SS"]["requested_qty"] == 500
     assert pt.g.__pending_sells["513100.SS"]["order_id"] == "sell-order-1"
+    assert any(
+        message.startswith("[卖出委托]") and "sell-order-1" in message
+        for message in messages
+    )
 
 
 def test_sell_submission_failure_does_not_create_guard(monkeypatch):
@@ -1800,6 +2015,10 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
         context, [make_buy_score()], date(2026, 7, 13)
     ) == 1
     assert ("order", (("513100.SS", 3100), {"limit_price": 2.0})) in events
+    assert any(
+        kind == "log" and value.startswith("[买入委托]") and "buy-order-1" in value
+        for kind, value in events
+    )
     observations = [
         (index, value)
         for index, (kind, value) in enumerate(events)
@@ -3071,7 +3290,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260718.1" in notes
+    assert "20260718.2" in notes
     assert "1506a0e834fe" in notes
 
 
@@ -3090,5 +3309,10 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "[状态恢复汇总]" in deployment
     assert "账户接管:交割单" in deployment
     assert "one account runs one active" in deployment
+    assert "same calendar date as the running process" in deployment
+    assert "reads `get_open_orders()` without cancelling or resubmitting" in deployment
+    assert "business-configuration fingerprint" in deployment
+    assert "Malformed callback records" in deployment
     assert "Harden PTrade Checkpoints And Recovery Gating" in decisions
+    assert "Harden Cross-Signal Live Engineering Without Changing Business Rules" in decisions
     assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions

@@ -19,8 +19,8 @@ from datetime import datetime
 # A/B 检查点保存可序列化的风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260718.1"
-LIVE_STATE_SCHEMA_VERSION = 1
+DEPLOYMENT_BUILD_ID = "20260718.2"
+LIVE_STATE_SCHEMA_VERSION = 2
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
@@ -182,9 +182,12 @@ def _live_state_slot_paths(path=None):
     }
 
 
-def _live_state_checksum(schema_version, generation, producer_version, payload):
-    header = "%s|%s|%s|" % (
-        schema_version, generation, producer_version)
+def _live_state_checksum(
+        schema_version, generation, producer_version, payload,
+        business_fingerprint=None):
+    fingerprint = business_fingerprint or business_config_fingerprint()
+    header = "%s|%s|%s|%s|" % (
+        schema_version, generation, producer_version, fingerprint)
     return hashlib.sha256(header.encode("utf-8") + payload).hexdigest()
 
 
@@ -199,6 +202,7 @@ def _encode_live_state_envelope(state, generation):
         "schema_version": LIVE_STATE_SCHEMA_VERSION,
         "generation": generation,
         "producer_strategy_version": STRATEGY_VERSION,
+        "business_config_fingerprint": business_config_fingerprint(),
         "payload": payload,
     }
     envelope["checksum"] = _live_state_checksum(
@@ -206,6 +210,7 @@ def _encode_live_state_envelope(state, generation):
         generation,
         envelope["producer_strategy_version"],
         payload,
+        envelope["business_config_fingerprint"],
     )
     return envelope
 
@@ -222,11 +227,14 @@ def _decode_live_state_envelope(envelope):
     producer_version = envelope.get("producer_strategy_version")
     if not isinstance(producer_version, str) or not producer_version:
         raise ValueError("invalid producer strategy version")
+    fingerprint = envelope.get("business_config_fingerprint")
+    if fingerprint != business_config_fingerprint():
+        raise ValueError("business fingerprint mismatch")
     payload = envelope.get("payload")
     if not isinstance(payload, bytes):
         raise ValueError("invalid state payload bytes")
     expected = _live_state_checksum(
-        schema_version, generation, producer_version, payload)
+        schema_version, generation, producer_version, payload, fingerprint)
     if envelope.get("checksum") != expected:
         raise ValueError("state checksum mismatch")
     body = pickle.loads(payload)
@@ -678,6 +686,7 @@ def after_trading_end(context, data):
     g.__data = data
     if g.__is_live:
         _recover_live_state_with_available_sources(context, allow_deliver=True)
+        _audit_after_close_open_orders()
     after_close(context)
     g.sold_today = {}
     if g.__is_live:
@@ -1553,6 +1562,37 @@ def _reconcile_open_orders(context):
     return True
 
 
+def _audit_after_close_open_orders():
+    """盘后只读核对未完成委托，不撤单、不重建盘中防重守卫。"""
+    try:
+        open_orders = get_open_orders()
+    except Exception as exc:
+        log.error("[盘后委托核对] get_open_orders调用失败: %s" % exc)
+        return False
+    if not isinstance(open_orders, list):
+        log.error("[盘后委托核对] 返回类型异常: %s" % type(open_orders).__name__)
+        return False
+    if not open_orders:
+        log.info("[盘后委托核对] 未发现未完成委托")
+        return True
+    for order_obj in open_orders:
+        order_id = str(_order_field(order_obj, "id", "") or "")
+        raw_code = (
+            _order_field(order_obj, "symbol", "")
+            or _order_field(order_obj, "stock_code", "")
+        )
+        code = normalize_code(raw_code) if raw_code else "未知"
+        status = str(_order_field(order_obj, "status", "") or "")
+        amount = _safe_float(_order_field(order_obj, "amount", 0))
+        filled = _safe_float(_order_field(order_obj, "filled", 0))
+        log.warning(
+            "[盘后委托核对] 仍有未完成委托 代码=%s 委托编号=%s "
+            "状态=%s 委托数量=%.0f 已成交=%.0f" % (
+                code, order_id or "未知", status or "未知", amount, filled)
+        )
+    return False
+
+
 def _clear_position_state(code):
     code = normalize_code(code)
     g.highest_since_buy.pop(code, None)
@@ -1597,6 +1637,18 @@ def _snapshot_age_seconds(raw_timestamp, observed_at):
     try:
         snapshot_dt = datetime.strptime(digits[:14], "%Y%m%d%H%M%S")
         return (observed_at - snapshot_dt).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _snapshot_session_date(raw_timestamp):
+    if raw_timestamp in (None, ""):
+        return None
+    digits = "".join(ch for ch in str(raw_timestamp) if ch.isdigit())
+    if len(digits) < 8:
+        return None
+    try:
+        return datetime.strptime(digits[:8], "%Y%m%d").date()
     except (TypeError, ValueError):
         return None
 
@@ -1677,6 +1729,17 @@ def get_current_price(code):
     if getattr(g, "__is_live", False):
         try:
             snapshot = _snapshot_record(get_snapshot(code), code)
+            snapshot_date = _snapshot_session_date(
+                snapshot.get("hsTimeStamp") if snapshot else None)
+            current_date = datetime.now().date()
+            if snapshot_date != current_date:
+                log.warning(
+                    "[行情快照] %s时间戳不是当前交易日，已拒绝使用: %s" % (
+                        code,
+                        snapshot.get("hsTimeStamp") if snapshot else None,
+                    )
+                )
+                return None
             price = float(snapshot.get("last_px", 0)) if snapshot else 0.0
             if price > 0:
                 g.__last_snapshot[code] = snapshot
@@ -1785,6 +1848,7 @@ def execute_sell(code, context, reason):
     if order_id is None:
         log.error("[卖出] %s委托提交后未返回委托编号" % code)
         return False
+    log.info("[卖出委托] %s 委托编号=%s" % (code, order_id))
     if getattr(g, "__is_live", False):
         g.sell_retry_reasons.pop(code, None)
         g.sold_today[code] = True
@@ -1927,6 +1991,7 @@ def execute_buy_candidates(context, all_scores, today):
         if order_id is None:
             log.error("[买入] %s委托提交后未返回委托编号" % code)
             continue
+        log.info("[买入委托] %s 委托编号=%s" % (code, order_id))
         if getattr(g, "__is_live", False):
             g.__pending_orders[code] = {
                 "requested_qty": shares,
@@ -2926,6 +2991,9 @@ def on_order_response(context, order_list):
         return
     orders = order_list if isinstance(order_list, list) else [order_list]
     for response in orders:
+        if not isinstance(response, dict):
+            log.warning("[委托回报格式异常] 已忽略类型=%s" % type(response).__name__)
+            continue
         code = normalize_code(response.get("stock_code"))
         status = str(response.get("status", ""))
         if not code or status not in ("5", "6", "9"):
@@ -2974,6 +3042,9 @@ def on_trade_response(context, trade_list):
         return
     trades = trade_list if isinstance(trade_list, list) else [trade_list]
     for trade in trades:
+        if not isinstance(trade, dict):
+            log.warning("[成交回报格式异常] 已忽略类型=%s" % type(trade).__name__)
+            continue
         if str(trade.get("real_type", "")) == "2":
             log.info("[成交回报] 已忽略撤单推送")
             continue

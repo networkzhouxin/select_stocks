@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260718.1 业务配置=1506a0e834fe 状态结构=1
+[发布指纹] 构建=20260718.2 业务配置=1506a0e834fe 状态结构=2
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -72,6 +72,8 @@ of the requested time. That result must not be compared with the JoinQuant
   the entire response instead of allowing an unbounded history window.
 - The current-day snapshot price is used only for execution and ATR-stop
   evaluation. It never enters the T-1 signal calculation.
+- In live mode, `hsTimeStamp` must be parseable and have the same calendar date as the running process. A missing, malformed, or prior-session snapshot
+  fails closed before its price can be used for an order or ATR comparison.
 - If both PTrade trading-calendar APIs fail, the strategy submits no orders. It
   never guesses the previous trading day from weekdays.
 - If the separate minimum-hold calendar query fails, normal signal sells are
@@ -101,6 +103,11 @@ of the requested time. That result must not be compared with the JoinQuant
   not as an empty order list.
 - Multiple or opposite-side open orders for one ETF cannot be represented by a
   single guard, so reconciliation fails closed instead of discarding an order.
+- `after_trading_end` reads `get_open_orders()` without cancelling or resubmitting anything. Every unfinished broker order is logged before the
+  daily checkpoint is saved.
+- A successful buy or sell submission writes the returned broker order ID.
+- Malformed callback records that are not dictionaries are logged and skipped;
+  they cannot terminate the callback loop or synthesize position state.
 - Open-order requested and filled quantities must be finite, positive where
   required, and internally consistent. Malformed quantities block trading.
 - PTrade may send an early callback with a blank `order_id`. It is ignored
@@ -162,14 +169,15 @@ of the requested time. That result must not be compared with the JoinQuant
 - The explicit state checkpoint uses two independent files, `.pkl.a` and `.pkl.b`,
   under PTrade's research path. Each envelope contains a separate
   state-schema version, a monotonically increasing generation, the producer
-  strategy version, a SHA256 checksum, and a protocol-4 pickle payload. Each
-  save overwrites only the older valid slot; no `os` call or rename operation
-  is required.
+  strategy version, the business-configuration fingerprint, a SHA256 checksum,
+  and a protocol-4 pickle payload. Each save overwrites only the older valid
+  slot; no `os` call or rename operation is required.
 - Restore validates both slots and selects the highest valid generation. If the
   newest slot is truncated, malformed, or has a checksum mismatch, the previous
   valid slot remains available. A producer strategy-version difference is
-  accepted only when the state-schema version is supported. An unknown schema
-  or missing required field is rejected without partially applying state.
+  accepted only when both the state-schema version and business-configuration
+  fingerprint are compatible. An unknown schema, fingerprint mismatch, or
+  missing required field is rejected without partially applying state.
 - The anonymous checkpoint identity is derived from the account and trade name
   so simulation and live instances cannot overwrite each other's state. The
   payload contains risk state, execution dates, deferred T-1 scores, and

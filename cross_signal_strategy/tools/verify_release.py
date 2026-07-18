@@ -276,6 +276,8 @@ def verify_release(repo_root, run_tests=False):
             "-m",
             "pytest",
             "-q",
+            "-p",
+            "no:cacheprovider",
             "tests",
             "-k",
             "cross_signal",
@@ -290,6 +292,10 @@ def verify_release(repo_root, run_tests=False):
         )
         output = (completed.stdout + completed.stderr).strip()
         detail = output.splitlines()[-1] if output else "无测试输出"
+        if completed.returncode != 0 and (
+            "PermissionError" in output or "WinError 5" in output
+        ):
+            detail = "测试环境不可用: " + detail
         checks.append(_check(
             "tests",
             "cross-signal完整自动化测试",
