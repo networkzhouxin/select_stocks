@@ -52,6 +52,9 @@ spring-cloud-alibaba-docs/**/*.html
 walkforward/__pycache__/
 __pycache__/
 
+# Local Git worktrees
+.worktrees/
+
 # Local market data secrets and downloads
 local_data/itick/.env.local
 local_data/itick/downloads/
