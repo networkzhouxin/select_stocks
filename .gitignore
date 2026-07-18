@@ -55,3 +55,4 @@ __pycache__/
 # Local market data secrets and downloads
 local_data/itick/.env.local
 local_data/itick/downloads/
+.idea
