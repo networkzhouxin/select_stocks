@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 52 real ledger entries.
+- Recorded failed or non-adopted experiments: 53 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -16,6 +16,8 @@ it does not change any score, order, position, or risk rule.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
 - The completed fixed `cross_window=1/2/3/4` comparison remains closed; window 3 is retained.
 - The completed fixed `09:35/10:00` execution-time comparison remains closed; `09:35` is retained.
+- The completed fixed ordinary-buy minute execution overlay remains closed; its
+  aggregate fill improvement did not remain positive in 2020.
 - One independent QDII underlying-index direction observation is pre-registered.
   Four raw 2018-2021 value series are staged and hashed, but the observation
   remains blocked because `SPX` and `H30533` lack approved historical
@@ -45,6 +47,7 @@ it does not change any score, order, position, or risk rule.
 | `horizontal_price_structure` | exhausted | The fixed 20-day T-2-safe/one-ATR observation failed annual consistency; do not search alternate windows, thresholds, pivots, breakout rules, or volume profiles. |
 | `controlled_breakout_anti_chase` | exhausted | The fixed 20-day T-2-safe observation found only 2 extended breakouts, failed total and annual sample gates, and did not permit a candidate. Do not search another `RSI6 >= 75`, MA20 10%, window, AND rule, breakout reward, or sell change. |
 | `etf_share_flow_shadow` | exhausted | The fixed five-observation sign-only attribution covered all 52 eligible domestic buys, but non-positive flow led average return in 2019/2020 while positive flow led both metrics in 2021. No candidate was permitted. |
+| `intraday_execution_overlay_v1` | exhausted | The fixed 09:35 arrival-price limit with six five-minute cycles and a 10:05 fallback matched 92/92 ordinary buys, but average execution worsened in 2020. No full portfolio candidate was permitted. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -68,6 +71,17 @@ non-positive. Non-positive flow led average return in 2019 and 2020, but
 positive flow led both average return and win rate in 2021. The annual gate
 therefore failed. Do not search another period, threshold, magnitude bucket,
 fund-size/NAV interaction, QDII extension, or sell rule from this result.
+
+`intraday_execution_overlay_v1` also consumed its only fixed experiment. It
+froze the formal 09:35 ordinary-buy code and quantity, prohibited same-minute
+and touch-only fills, allowed six five-minute passive-limit cycles, and used the
+first executable minute at or after 10:05 as the market fallback. All 92
+eligible buys were comparable: 75 filled passively and 17 used the fallback.
+Average signed execution improvement was +2.63 basis points overall, but the
+annual averages were +1.02/-0.78/+6.73 basis points in 2019/2020/2021. The
+pre-registered every-year gate therefore failed before a full portfolio
+candidate could exist. Do not search nearby times, cycle counts, limit prices,
+fallbacks, ETF exceptions, or sell-side overlays from this result.
 
 ## Mandatory Sequence
 

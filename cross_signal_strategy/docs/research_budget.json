@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 52,
+  "expected_failed_experiment_count": 53,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -231,6 +231,41 @@
       "eligible_coverage": 1.0,
       "observation_gate_passed": false,
       "annual_direction_consistent": false
+    },
+    {
+      "key": "intraday_execution_overlay_v1",
+      "label": "User-authorized ordinary-buy minute execution overlay",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The one fixed ordinary-buy execution overlay matched all 92 eligible training orders and improved aggregate arrival cost by about 2.63 basis points, but its 2020 average was about 0.78 basis point worse. The pre-registered every-year gate failed, so no portfolio candidate was permitted and nearby times, cycle counts, prices, fallback rules, ETF exceptions, or sell overlays are prohibited post hoc.",
+      "arrival_time": "09:35",
+      "decision_interval_minutes": 5,
+      "decision_cycles": 6,
+      "fallback_time": "10:05",
+      "eligible_side": "ordinary_buy_only",
+      "limit_price": "09:35_arrival_price",
+      "same_minute_fill": "forbidden",
+      "touch_only_fill": "forbidden",
+      "fallback": "first_executable_minute_at_or_after_10:05",
+      "validation_influence": "none",
+      "data_scope": "2019_2021_training_only",
+      "prohibit_alternatives": true,
+      "eligible_orders": 92,
+      "matched_orders": 92,
+      "passive_limit_fills": 75,
+      "market_fallback_fills": 17,
+      "average_signed_improvement": 0.000263,
+      "annual_average_signed_improvement": {
+        "2019": 0.000102,
+        "2020": -0.000078,
+        "2021": 0.000673
+      },
+      "group_average_signed_improvement": {
+        "non_qdii": 0.000412,
+        "qdii": 0.000040
+      },
+      "gate_passed": false,
+      "gate_reason": "2020 average execution price does not improve"
     }
   ]
 }

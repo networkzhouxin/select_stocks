@@ -23,7 +23,7 @@ from cross_signal_strategy.research.research_budget import audit_research_budget
 TRAINING_START = "2019-01-01"
 TRAINING_END = "2021-12-31"
 SELECTED_MAINLINE_COUNT = 1
-DOCS_ROOT = Path(__file__).resolve().parent / "docs"
+DOCS_ROOT = Path(__file__).resolve().parents[1] / "docs"
 FAILED_EXPERIMENTS_PATH = DOCS_ROOT / "failed_experiments.md"
 RESEARCH_BUDGET_PATH = DOCS_ROOT / "research_budget.json"
 

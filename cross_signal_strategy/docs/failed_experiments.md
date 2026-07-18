@@ -577,3 +577,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The aggregate improvement came from a materially different downstream order path rather than a stable execution-price advantage. Waiting until 10:00 helped QDII fills on average but hurt non-QDII fills, and the annual direction was inconsistent. Selecting 10:00 from total return alone would fit the strongest training years while ignoring the stated mechanism and the weaker 2021 result.
 Can it be revisited? no as an intraday execution-time search
 Conditions for revisiting: Retain `09:35`. Do not test 09:36, 09:40, 09:45, 10:15, 10:30, 10:35, VWAP windows, per-ETF clocks, QDII-only clocks, regime-dependent clocks, or timing interactions from this result. Reopening requires new prospective execution evidence and a separately reserved confirmation sample, not another pass over 2019-2021.
+
+Date: 2026-07-18
+Version: `cross-v0.3.2-intraday-execution-overlay-v1`
+Experiment: Freeze every formal 09:35 ordinary-buy code and share amount, submit one passive limit at the raw 09:35 arrival price for six five-minute decision cycles, forbid same-minute and touch-only fills, and use the first executable minute at or after 10:05 as a market fallback. Keep T-1 signals, ranking, pool, sizing, all sells, ATR exits, fees, and the formal strategy unchanged.
+Hypothesis: A short passive execution window may capture ordinary intraday mean reversion after a valid daily cross signal without delaying the strategy enough to damage fills across market regimes.
+Training diagnostic result: All 92 eligible 2019-2021 ordinary buys were matched. Seventy-five filled through the passive limit path and 17 used the market fallback. Average side-adjusted execution improvement was +0.0263% overall. Annual averages were +0.0102% in 2019, -0.0078% in 2020, and +0.0673% in 2021. Non-QDII averaged +0.0412%; QDII averaged +0.0040%.
+Candidate result: Not implemented because the pre-registered gate required positive average execution improvement in every training year, and 2020 was negative. The full portfolio candidate and JoinQuant candidate were therefore not permitted.
+JoinQuant training result: Not run because the local counterfactual gate failed.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The small aggregate benefit was not regime-stable. The fixed waiting mechanism marginally worsened 2020 ordinary-buy execution, while the QDII benefit was only 0.40 basis point. Advancing to a portfolio backtest or selecting a nearby time after seeing these outcomes would turn one execution hypothesis into post-hoc parameter mining.
+Can it be revisited? no as an arrival-price passive-limit window with a fixed morning fallback
+Conditions for revisiting: Retain formal 09:35 execution. Do not search nearby arrival times, cycle lengths, cycle counts, limit offsets, fallback times, QDII/domestic exceptions, or sell-side overlays from this result. Reopening requires a new independent market-microstructure mechanism and explicit authorization.

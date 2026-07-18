@@ -2620,6 +2620,34 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-07-18 Ordinary-Buy Minute Execution Overlay Gate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` order path with one pre-registered execution-only counterfactual
+Engine: local replay and read-only one-minute training data; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Locked execution rule:
+- Freeze each formal 09:35 ordinary-buy code and share amount before reading later minutes.
+- Use the raw 09:35 arrival price as one passive buy limit.
+- Scan only later executable bars before 10:05; the 09:35 bar cannot fill its own order.
+- Require `low < limit`; equality is not treated as a fill because bar data cannot prove queue priority.
+- If still unfilled, use the first executable minute at or after 10:05 as the market fallback.
+- Leave signal sells, ATR exits, target sizing, fees, and every formal strategy rule unchanged.
+
+Coverage and result:
+- 92 eligible ordinary buys; 92 matched (100% coverage).
+- 75 passive-limit fills and 17 market fallbacks.
+- Overall average signed execution improvement: +0.0263% (+2.63 basis points).
+- 2019/2020/2021: +0.0102% / -0.0078% / +0.0673%.
+- Non-QDII/QDII: +0.0412% / +0.0040%.
+
+Decision:
+- Reject before full portfolio replay because 2020 failed the locked positive-per-year execution gate.
+- Do not create JoinQuant or PTrade candidates and do not inspect reserved validation periods.
+- Do not search neighboring times, cycle counts, price offsets, fallbacks, ETF exceptions, or sell overlays.
+- Keep all three formal `cross-v0.3.2` strategy entries unchanged at 09:35.
+
 ## 2026-07-18 Fixed 09:35 Versus 10:00 Execution-Time Gate
 
 Period: 2019-01-01 to 2021-12-31

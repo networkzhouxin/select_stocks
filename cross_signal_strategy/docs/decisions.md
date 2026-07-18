@@ -914,3 +914,14 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Affected files: formal JoinQuant and PTrade adapters, `cross_signal_strategy/tools/verify_release.py`, release/deployment documentation, and repository tests.
 - Allowed validation influence: none; no market data, return series, training result, or reserved validation result was read or used.
 - Status: adopted as a release-engineering milestone; strategy logic, parameters, ETF pool, execution time, risk rules, local replay, and production multi-factor files remain unchanged.
+
+### Reject The Pre-Registered Ordinary-Buy Minute Execution Overlay
+
+- Date: 2026-07-18.
+- Decision: Consume the one user-authorized `intraday_execution_overlay_v1` budget without creating a formal strategy candidate. Freeze each official 09:35 ordinary-buy code and quantity, test one arrival-price passive limit for six five-minute cycles with a first-executable-minute fallback at or after 10:05, and stop at the counterfactual gate.
+- Test-first evidence: Execution semantics and budget constraints were written as failing tests before implementation. The final focused suite passed 30 tests, and the release verifier passed 538 tests with 78 unrelated tests deselected. The complete training run matched all 92 eligible ordinary buys, with 75 passive fills and 17 fallbacks.
+- Training evidence: Average signed execution improvement was +2.63 basis points overall, split +1.02/-0.78/+6.73 basis points in 2019/2020/2021 and +4.12/+0.40 basis points for non-QDII/QDII. The locked positive-in-every-year gate failed in 2020.
+- Interpretation: The aggregate improvement is too small and regime-dependent to justify a new order path. Running a full portfolio candidate or searching a nearby execution schedule after this result would be post-hoc selection.
+- Allowed validation influence: none; only approved 2019-2021 minute data and the 2018 read-only warm-up were used. Reserved validation periods were not read.
+- Affected files: isolated local execution helper, isolated research report, tests, and research-governance documents only.
+- Status: rejected and exhausted; formal JoinQuant, PTrade, local-mainline, and production multi-factor strategy files remain unchanged.

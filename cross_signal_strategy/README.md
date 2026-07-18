@@ -113,6 +113,7 @@ These are starting defaults, not optimized parameters.
 - `research/cmf_diagnostics.py`: observation-only CMF(20) attribution using adjusted T-1 signal frames; it does not alter strategy scores or orders.
 - `research/strong_trend_capacity_diagnostics.py`: training-only strong-trend entry, idle-slot, cash-headroom, and close-path excursion diagnostics; it never changes order targets.
 - `research/gap_execution_diagnostics.py`: training-only attribution of T-day 09:35 execution gaps normalized by frozen T-1 ATR; it does not filter orders.
+- `research/intraday_execution_observation.py`: rejected one-shot ordinary-buy execution counterfactual. It freezes formal 09:35 intent and quantity, tests the single pre-registered passive-limit/fallback path, and stops before portfolio replay because 2020 execution worsened.
 - `research/iopv_quality_diagnostics.py`: read-only 2019-2021 minute-data audit for IOPV completeness, 09:35 point coverage, executable premium distributions, and zero-trade IOPV movement; it does not alter signals or orders.
 - `docs/iopv_data_quality.md`: evidence and usage boundary for local historical IOPV; the data is diagnostic-only until exact point-in-time availability is proved.
 - `archive/probes/smart_trade_joinquant_cross_signal_iopv_probe.py`: temporary no-order JoinQuant capability probe for current-data IOPV, same-day NAV leakage, and 09:34/09:35/09:36 minute boundaries. Run only as documented in its header; it is not a strategy candidate.

@@ -14,6 +14,15 @@ AUDIT_DOC = ROOT / "cross_signal_strategy" / "docs" / "multiple_testing_audit.md
 DECISIONS_DOC = ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
 
 
+def test_cli_uses_the_strategy_docs_directory_for_ledger_inputs():
+    from cross_signal_strategy.research import multiple_testing_audit as module
+
+    assert module.FAILED_EXPERIMENTS_PATH == AUDIT_DOC.parent / "failed_experiments.md"
+    assert module.RESEARCH_BUDGET_PATH == AUDIT_DOC.parent / "research_budget.json"
+    assert module.FAILED_EXPERIMENTS_PATH.is_file()
+    assert module.RESEARCH_BUDGET_PATH.is_file()
+
+
 def days_from_returns(start_value, dated_returns):
     from cross_signal_strategy.local.local_backtester import DayResult
 
@@ -161,9 +170,9 @@ def test_repository_records_audit_result_and_evidence_limits():
     audit_text = AUDIT_DOC.read_text(encoding="utf-8")
     decisions_text = DECISIONS_DOC.read_text(encoding="utf-8")
 
-    assert "minimum trial count: 53" in audit_text
-    assert "0.00657136" in audit_text
-    assert "0.00329664" in audit_text
+    assert "minimum trial count: 54" in audit_text
+    assert "0.00669537" in audit_text
+    assert "0.00335884" in audit_text
     assert "maximum trials passing the 5% PSR/Bonferroni approximation: 403" in audit_text
     assert "Canonical DSR: unavailable" in audit_text
     assert "PBO: unavailable" in audit_text

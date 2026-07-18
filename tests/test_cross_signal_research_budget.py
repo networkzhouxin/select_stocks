@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 52
-    assert report.expected_failed_experiment_count == 52
+    assert report.failed_experiment_count == 53
+    assert report.expected_failed_experiment_count == 53
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -170,6 +170,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     share_flow.pop("planned_experiment", None)
+    intraday = next(
+        item for item in payload["families"]
+        if item["key"] == "intraday_execution_overlay_v1"
+    )
+    intraday.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    intraday.pop("planned_experiment", None)
     market = next(item for item in payload["families"] if item["key"] == "market_breadth")
     market.update({
         "status": "open",
@@ -197,6 +206,60 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
     assert budget.max_total_open_experiments == 0
+
+
+def test_user_authorized_intraday_overlay_is_consumed_after_fixed_training_gate():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["intraday_execution_overlay_v1"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"]
+        if item["key"] == "intraday_execution_overlay_v1"
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["arrival_time"] == "09:35"
+    assert raw["decision_interval_minutes"] == 5
+    assert raw["decision_cycles"] == 6
+    assert raw["fallback_time"] == "10:05"
+    assert raw["eligible_side"] == "ordinary_buy_only"
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+    assert raw["eligible_orders"] == 92
+    assert raw["matched_orders"] == 92
+    assert raw["passive_limit_fills"] == 75
+    assert raw["market_fallback_fills"] == 17
+    assert raw["average_signed_improvement"] == pytest.approx(0.000263)
+    assert raw["annual_average_signed_improvement"] == {
+        "2019": pytest.approx(0.000102),
+        "2020": pytest.approx(-0.000078),
+        "2021": pytest.approx(0.000673),
+    }
+    assert raw["group_average_signed_improvement"] == {
+        "non_qdii": pytest.approx(0.000412),
+        "qdii": pytest.approx(0.000040),
+    }
+    assert raw["gate_passed"] is False
+    assert raw["gate_reason"] == "2020 average execution price does not improve"
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is False
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=2,
+    ).allowed is False
 
 
 def test_user_authorized_cross_window_budget_is_consumed_after_fixed_matrix():
