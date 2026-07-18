@@ -10,6 +10,7 @@ import types
 from datetime import date, datetime
 
 import numpy as np
+import pandas as pd
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -521,3 +522,92 @@ def test_platform_lookup_supports_joinquant_index_only_containers():
 
     assert strategy.mapping_get(IndexOnly(), "AAA") == "quote"
     assert strategy.mapping_get(IndexOnly(), "MISSING") is None
+
+
+def make_joinquant_batch_frame():
+    dates = pd.date_range("2020-01-02", periods=67, freq="B")
+    rows = []
+    for code in ("000001.XSHE", "600000.XSHG"):
+        for index, timestamp in enumerate(dates):
+            paused = code == "000001.XSHE" and index == 10
+            rows.append({
+                "time": timestamp,
+                "code": code,
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.0,
+                "volume": 0.0 if paused else 1000.0,
+                "paused": paused,
+            })
+    return pd.DataFrame(rows)
+
+
+def test_batch_loader_preserves_shared_axis_and_requests_paused_field(monkeypatch):
+    captured = {}
+
+    def fake_get_price(codes, **kwargs):
+        captured["codes"] = codes
+        captured.update(kwargs)
+        return make_joinquant_batch_frame()
+
+    monkeypatch.setattr(strategy, "get_price", fake_get_price, raising=False)
+    codes = ["000001.XSHE", "600000.XSHG"]
+
+    histories = strategy._load_daily_bars_batch(
+        codes, date(2020, 4, 3))
+
+    assert captured["skip_paused"] is False
+    assert "paused" in captured["fields"]
+    assert set(histories) == set(codes)
+
+
+def test_batch_loader_removes_filled_paused_rows_per_security(monkeypatch):
+    monkeypatch.setattr(
+        strategy,
+        "get_price",
+        lambda *args, **kwargs: make_joinquant_batch_frame(),
+        raising=False,
+    )
+
+    histories = strategy._load_daily_bars_batch(
+        ["000001.XSHE", "600000.XSHG"], date(2020, 4, 3))
+
+    assert len(histories["000001.XSHE"]["close"]) == 66
+    assert np.all(histories["000001.XSHE"]["volume"] > 0)
+    assert len(histories["600000.XSHG"]["close"]) == 67
+
+
+def test_scan_candidates_records_loaded_stale_and_signal_counts(monkeypatch):
+    prev_date = date(2020, 4, 3)
+    valid = make_valid_bars()
+    valid["last_date"] = prev_date
+    stale = make_valid_bars()
+    stale["last_date"] = date(2020, 4, 2)
+    no_signal = make_valid_bars()
+    no_signal["volume"][65] = 100.0
+    no_signal["last_date"] = prev_date
+    histories = {
+        "AAA": valid,
+        "BBB": stale,
+        "CCC": no_signal,
+    }
+    strategy.g = types.SimpleNamespace()
+    monkeypatch.setattr(
+        strategy,
+        "_load_daily_bars_batch",
+        lambda codes, requested_date: {
+            code: histories[code] for code in codes
+        },
+    )
+
+    candidates = strategy.scan_candidates(["AAA", "BBB", "CCC"], prev_date)
+
+    assert [candidate["code"] for candidate in candidates] == ["AAA"]
+    assert strategy.g.last_scan_stats == {
+        "universe": 3,
+        "loaded": 3,
+        "stale": 1,
+        "evaluated": 2,
+        "signals": 1,
+    }

@@ -73,6 +73,7 @@ def initialize(context):
     g.market_open = False
     g.candidates = []
     g.exit_reasons = {}
+    g.last_scan_stats = {}
     g.managed_codes = set()
     g.stop_prices = {}
     g.entry_dates = {}
@@ -193,8 +194,8 @@ def _load_daily_bars_batch(codes, prev_date):
         end_date=prev_date,
         count=HISTORY_COUNT,
         frequency="daily",
-        fields=["open", "high", "low", "close", "volume"],
-        skip_paused=True,
+        fields=["open", "high", "low", "close", "volume", "paused"],
+        skip_paused=False,
         fq="pre",
         panel=False,
     )
@@ -211,6 +212,14 @@ def _load_daily_bars_batch(codes, prev_date):
         for code, code_frame in grouped:
             if "time" in code_frame.columns:
                 code_frame = code_frame.sort_values("time")
+            volume = np.asarray(code_frame["volume"], dtype=float)
+            tradable = np.isfinite(volume) & (volume > 0)
+            if "paused" in code_frame.columns:
+                paused = np.asarray(code_frame["paused"], dtype=bool)
+                tradable &= ~paused
+            code_frame = code_frame.loc[tradable]
+            if code_frame.empty:
+                continue
             result[code] = _frame_to_bars(code_frame)
     except (AttributeError, KeyError, TypeError, ValueError):
         return {}
@@ -220,22 +229,40 @@ def _load_daily_bars_batch(codes, prev_date):
 def scan_candidates(universe, prev_date):
     """Scan the point-in-time universe using daily bars ending at T-1."""
     candidates = []
+    stats = {
+        "universe": len(universe),
+        "loaded": 0,
+        "stale": 0,
+        "evaluated": 0,
+        "signals": 0,
+    }
     for start in range(0, len(universe), HISTORY_BATCH_SIZE):
         batch = universe[start:start + HISTORY_BATCH_SIZE]
         histories = _load_daily_bars_batch(batch, prev_date)
+        stats["loaded"] += len(histories)
         for code in batch:
             bars = histories.get(code)
             if bars is None:
                 continue
             last_date = bars.get("last_date")
             if last_date is not None and last_date != prev_date:
+                stats["stale"] += 1
                 continue
+            stats["evaluated"] += 1
             signal = detect_convergence_breakout(bars)
             if signal is None:
                 continue
+            stats["signals"] += 1
             candidate = dict(signal)
             candidate["code"] = code
             candidates.append(candidate)
+    g.last_scan_stats = stats
+    _log_info(
+        "[V4 scan] universe=%d loaded=%d stale=%d evaluated=%d signals=%d" % (
+            stats["universe"], stats["loaded"], stats["stale"],
+            stats["evaluated"], stats["signals"],
+        )
+    )
     return rank_candidates(candidates)
 
 
@@ -296,6 +323,10 @@ def prepare_daily_state(context):
         g.candidates = scan_candidates(universe, prev_date)
     else:
         g.candidates = []
+        g.last_scan_stats = {
+            "universe": 0, "loaded": 0, "stale": 0,
+            "evaluated": 0, "signals": 0,
+        }
 
     _log_info(
         "[V4 snapshot] signal_date=%s market=%s candidates=%d exits=%d" % (
