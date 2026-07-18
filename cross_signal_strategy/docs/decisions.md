@@ -937,3 +937,27 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Data boundary: The atlas reads only `failed_experiments.md` and its curated annotation file. It opens no market-data directory and reads no validation-period result.
 - Affected files: `cross_signal_strategy/research/failure_year_atlas.py`, `tests/test_cross_signal_failure_year_atlas.py`, `cross_signal_strategy/docs/failure_year_fragility_annotations.json`, `cross_signal_strategy/docs/failure_year_fragility_atlas.md`, `cross_signal_strategy/docs/README.md`, and `cross_signal_strategy/docs/decisions.md`.
 - Status: adopted as research-governance documentation; formal JoinQuant, PTrade, local-mainline, ETF pool, parameters, execution rules, and production multi-factor files remain unchanged.
+
+### Close The Publisher Evidence Audit Without Unlocking QDII
+
+- Date: 2026-07-18.
+- Decision: Keep `513500/SPX` and `513050/H30533` absent from `APPROVED_AVAILABILITY_POLICIES`. Do not create the formal underlying-index root and do not run the pre-registered direction observation.
+- S&P DJI evidence: The official Equity Indices Policies & Practices states that official EOD prices are validated before index-file distribution, but incorrect closes, missed corporate actions, and calculation/data errors may trigger recalculation. Events found within two trading days are generally recalculated and reposted; later events can still be decided by the Index Committee. The document provides neither an immutable finality cutoff nor row-level historical distribution timestamps for 2018-2021.
+- CSI evidence: The official H30533 methodology confirms a cross-market Hong Kong/other-overseas constituent set. CSI's stock-index calculation rules state only that closing indices are published every index trading day; the official documents do not specify H30533's exact publication clock, timezone, immutable finality cutoff, or a historical 2018-2021 publication SLA.
+- Root-cause conclusion: Raw close coverage is not the blocker. The missing fact is historical point-in-time final availability. Ordinary exchange closes, current download timestamps, FRED observation dates, natural-date shifts, or later-visible official histories cannot prove that fact.
+- Reopen condition: New primary publisher evidence must supply historical point-in-time distribution records or an explicit final-value cutoff applicable to 2018-2021. Repeating web searches or adopting a conservative guessed delay does not qualify.
+- Test-first evidence: A focused documentation test first failed because the official evidence and exact blockers were absent. The acquisition gate itself remained closed throughout.
+- Allowed validation influence: none; this audit used official methodology/governance documents only and read no new market series or validation-period result.
+- Affected files: `tests/test_cross_signal_underlying_source_acquisition.py`, `cross_signal_strategy/docs/underlying_source_acquisition.md`, `cross_signal_strategy/docs/underlying_market_direction.md`, `cross_signal_strategy/docs/research_budget.md`, and `cross_signal_strategy/docs/decisions.md`.
+- Status: evidence audit closed without unlock; formal JoinQuant, PTrade, local-mainline, ETF pool, parameters, orders, risk rules, and production multi-factor files remain unchanged.
+
+### Adopt A Prospective PTrade Log Archive Without Opening Research
+
+- Date: 2026-07-18.
+- Decision: Add an external, content-addressed archive for future exported PTrade logs. Bind every accepted file to formal `cross-v0.3.2`, deployment build `20260718.1`, and business fingerprint `1506a0e834fe`; reject pre-protocol, unidentified, or mixed-release input.
+- Test-first evidence: The parser, fail-closed identity checks, immutable source behavior, idempotent SHA256 archive, manifest boundary, CLI release lookup, and documentation contract were written as failing tests before implementation. The focused suite passes after implementation.
+- Interpretation: Existing PTrade logs already contain release identity, 09:35 execution boundaries, orders, fills, IOPV observations, and 10:35 recovery events. Preserving those exports provides a prospective evidence chain without adding a scheduler, market-data request, or strategy-side log call.
+- Research boundary: The manifest stores timestamps, dates, hashes, and event counts only; it does not calculate prices, returns, win rates, or signal quality. Prospective collection does not reopen any exhausted family. Before future analysis, first freeze a hypothesis; logs already seen are discovery material, and only later continuous logs may be an independent confirmation sample.
+- Data and validation boundary: No market-data root or validation-period result is read. The archive cannot be used to tune against validation periods or to create ETF-specific exceptions after seeing outcomes.
+- Affected files: `cross_signal_strategy/research/prospective_log_archive.py`, `cross_signal_strategy/tools/archive_ptrade_forward_logs.py`, `tests/test_cross_signal_prospective_log_archive.py`, `cross_signal_strategy/docs/prospective_live_log_protocol.md`, `cross_signal_strategy/docs/README.md`, `cross_signal_strategy/docs/research_budget.md`, and `cross_signal_strategy/docs/decisions.md`.
+- Status: adopted as evidence preservation only; formal JoinQuant, PTrade, local-mainline, parameters, ETF pool, schedules, orders, risk rules, and production multi-factor files remain unchanged.

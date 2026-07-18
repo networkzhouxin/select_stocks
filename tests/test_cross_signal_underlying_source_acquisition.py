@@ -14,6 +14,11 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+ACQUISITION_AUDIT = (
+    ROOT / "cross_signal_strategy" / "docs" / "underlying_source_acquisition.md"
+)
+DECISIONS = ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
+
 
 def _raw_frame(dates=("2019-01-02", "2019-01-03"), closes=(100.0, 101.0)):
     return pd.DataFrame({"session_date": list(dates), "close": list(closes)})
@@ -164,6 +169,22 @@ def test_contract_bundle_is_all_or_nothing_when_any_policy_is_blocked():
 
     with pytest.raises(AvailabilityEvidenceMissing, match="513050,513500"):
         build_contract_bundle(frames)
+
+
+def test_publisher_evidence_audit_preserves_unproved_finality_blockers():
+    audit = ACQUISITION_AUDIT.read_text(encoding="utf-8")
+    decisions = DECISIONS.read_text(encoding="utf-8")
+
+    assert "S&P DJI Equity Indices Policies & Practices" in audit
+    assert "两个交易日" in audit
+    assert "更晚" in audit
+    assert "中证指数有限公司股票指数计算规则" in audit
+    assert "指数交易日每日发布" in audit
+    assert "精确发布时间" in audit
+    assert "不可再修订" in audit
+    assert "formal_publishable=false" in audit
+    assert "blocked_codes=513050,513500" in audit
+    assert "Close The Publisher Evidence Audit Without Unlocking QDII" in decisions
 
 
 def test_raw_staging_manifest_has_hashes_and_cannot_target_approved_root(

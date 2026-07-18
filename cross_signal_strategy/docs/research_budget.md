@@ -23,6 +23,13 @@ it does not change any score, order, position, or risk rule.
   remains blocked because `SPX` and `H30533` lack approved historical
   final-value availability policies. The formal source root does not exist.
   A blocked observation is not an open experiment budget.
+- The 2026-07-18 publisher-evidence audit is closed without an unlock: S&P DJI
+  permits EOD recalculation and reposting, while CSI documents daily H30533
+  publication without an exact historical clock, timezone, or finality cutoff.
+- Prospective log collection does not reopen a research family. Future PTrade
+  exports may be archived from 2026-07-18 onward, but their outcomes cannot be
+  evaluated until a hypothesis and a later independent confirmation sample are
+  frozen in advance.
 
 ## Frozen Families
 
@@ -61,6 +68,9 @@ formal point-in-time data and cannot run the observation. The approved root
 must remain absent until all four publication-time policies pass. Its exact
 schema and frozen gate are documented in `underlying_market_direction.md` and
 the acquisition evidence is documented in `underlying_source_acquisition.md`.
+The publisher-evidence audit may reopen only for new primary evidence that
+proves 2018-2021 point-in-time final availability; another search result or an
+assumed market-close timestamp is not sufficient.
 
 `etf_share_flow_shadow` consumed its only fixed observation. It used the
 isolated read-only root
@@ -97,3 +107,9 @@ fallbacks, ETF exceptions, or sell-side overlays from this result.
 The gate is intentionally strict: every open family permits exactly one
 pre-registered variant. A request for multiple variants is rejected before a
 backtest can turn into winner selection.
+
+The PTrade forward-log archive is an evidence-preservation tool, not an
+experiment. It records immutable raw-log hashes and non-performance event
+counts only. Logs already collected when a future question is formulated are
+discovery material; only continuously archived logs generated after that
+question is pre-registered can serve as its independent confirmation sample.
