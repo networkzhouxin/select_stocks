@@ -15,3 +15,4 @@ Key files:
 - `decisions.md`: adopted decisions and rationale.
 - `failed_experiments.md`: rejected experiments and why not to repeat them casually.
 - `validation_protocol.md`: frozen out-of-sample validation protocol before inspecting reserved-period results.
+- `platform_architecture.md`: 中文平台架构、PTrade 实盘适配职责、替代平台比较与当前选型结论。
