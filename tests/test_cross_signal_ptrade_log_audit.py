@@ -38,12 +38,22 @@ def normal_day_lines(include_conditional_events=True):
         line(
             "2026-07-20 08:55:00",
             "INFO",
-            "[状态恢复汇总] 检查点来源=检查点A 代次=3",
+            "[PTrade框架g] 状态=未提供 代次=不适用 原因=未发现持久状态元数据",
         ),
         line(
             "2026-07-20 08:55:00",
             "INFO",
-            "[状态恢复汇总] 代码=513100.SS 数量=100 成本=1.000000 买入日期=2026-07-17 ATR=0.020000 持仓最高收盘价=1.050000 状态=已验证 来源=检查点A",
+            "[连续状态恢复] 来源=状态台账 代次=3",
+        ),
+        line(
+            "2026-07-20 08:55:00",
+            "INFO",
+            "[持仓风险恢复] 来源=账户接管:交割单",
+        ),
+        line(
+            "2026-07-20 08:55:00",
+            "INFO",
+            "[持仓风险恢复] 代码=513100.SS 数量=100 成本=1.000000 买入日期=2026-07-17 ATR=0.020000 持仓最高收盘价=1.050000 状态=已验证 来源=账户接管:交割单",
         ),
         line(
             "2026-07-20 09:35:00",
@@ -121,7 +131,7 @@ def test_no_halt_and_no_order_are_conditional_not_failures(audit):
 
 def test_unverified_position_fails_recovery_gate(audit):
     lines = normal_day_lines(include_conditional_events=False)
-    lines[2] = lines[2].replace("状态=已验证", "状态=未验证")
+    lines[4] = lines[4].replace("状态=已验证", "状态=未验证")
 
     report = audit.audit_runtime_log("\n".join(lines))
 

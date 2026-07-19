@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260720.3 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260720.4 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -200,11 +200,13 @@ of the requested time. That result must not be compared with the JoinQuant
 - State journal writes run after the 09:35 and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   broker-validated before it can supply intraday continuity or old-position fallback.
-- After reconciliation, one `[状态恢复汇总]` source line and one line per
-  held ETF report quantity, broker cost, buy date, entry ATR, highest close,
-  `已验证`/`未验证` status, and evidence source. Displayed sources include
-  `状态台账`, `PTrade持久状态`, `当前策略成交`,
-  `账户接管:交割单`, and `未验证`.
+- 恢复日志分成三个独立维度：`[PTrade框架g]` 说明普通 `g` 是否未提供、
+  已接受、已拒绝或因台账更新而未采用；`[连续状态恢复]` 说明日内连续状态
+  来自 `状态台账`、`PTrade持久状态` 还是无可用来源，并单独显示代次；
+  `[持仓风险恢复]` 说明当前持仓的买入日期、ATR 和最高收盘价实际来自
+  `状态台账`、`PTrade持久状态`、`当前策略成交`、`账户接管:交割单`、
+  `混合恢复` 或 `未验证`。每只持仓继续单独报告数量、券商成本、买入日期、
+  入场 ATR、最高收盘价、验证状态和证据来源。
 - An unverified holding continues to block its own automatic ATR and signal
   exits. In addition, all new buys are blocked while any currently held ETF is
   unverified. Verified holdings retain their normal exit behavior, so recovery
@@ -286,8 +288,9 @@ python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --
    the `[买入]` submission log; both `有效=True` and `有效=False` must leave
    the submitted quantity unchanged.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
-   Verify that a `[状态恢复汇总]` line identifies the journal generation, and
-   every held ETF is listed with the expected source
+   Verify that `[PTrade框架g]`, `[连续状态恢复]`, and `[持仓风险恢复]`
+   identify the framework state decision, journal generation, and actual
+   position-risk source separately, and every held ETF is listed with the expected source
    and `已验证` status. Confirm that `execution_date`, deferred state, buy
    dates, entry ATR values, and trailing highs are unchanged.
 5. In simulation only, back up and then append a truncated tail to the journal.

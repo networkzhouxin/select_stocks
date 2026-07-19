@@ -155,15 +155,25 @@ def _check_initialization(events):
 
 
 def _check_recovery(events):
-    headers = [
+    ptrade_g = [
         event
         for event in events
-        if event.message.startswith("[状态恢复汇总] 检查点来源=")
+        if event.message.startswith("[PTrade框架g] 状态=")
+    ]
+    continuity = [
+        event
+        for event in events
+        if event.message.startswith("[连续状态恢复] 来源=")
+    ]
+    risk_headers = [
+        event
+        for event in events
+        if event.message.startswith("[持仓风险恢复] 来源=")
     ]
     positions = [
         event
         for event in events
-        if event.message.startswith("[状态恢复汇总] 代码=")
+        if event.message.startswith("[持仓风险恢复] 代码=")
     ]
     unverified = [event for event in positions if "状态=未验证" in event.message]
     if unverified:
@@ -178,13 +188,27 @@ def _check_recovery(events):
             STATUS_FAIL,
             "存在未验证持仓=%s" % (",".join(codes) or "未知"),
         )
-    if not headers:
-        return _result("recovery", "状态恢复", STATUS_INSUFFICIENT, "未找到状态恢复汇总")
+    missing = []
+    if not ptrade_g:
+        missing.append("PTrade框架g")
+    if not continuity:
+        missing.append("连续状态恢复")
+    if not risk_headers:
+        missing.append("持仓风险恢复")
+    if missing:
+        return _result(
+            "recovery",
+            "状态恢复",
+            STATUS_INSUFFICIENT,
+            "缺少恢复诊断=%s" % ",".join(missing),
+        )
     return _result(
         "recovery",
         "状态恢复",
         STATUS_PASS,
-        "检查点汇总=%d条，已验证持仓=%d条" % (len(headers), len(positions)),
+        "PTrade框架g=%d条，连续状态=%d条，持仓来源=%d条，已验证持仓=%d条" % (
+            len(ptrade_g), len(continuity), len(risk_headers), len(positions)
+        ),
     )
 
 

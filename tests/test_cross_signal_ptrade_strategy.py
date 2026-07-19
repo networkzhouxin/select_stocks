@@ -69,6 +69,9 @@ def make_g(**overrides):
         "__state_path": None,
         "__state_restore_source": None,
         "__state_restore_generation": None,
+        "__persisted_g_status": None,
+        "__persisted_g_reason": None,
+        "__persisted_g_generation": None,
         "__position_recovery_source": {},
         "__startup_recovery_done": False,
     }
@@ -116,7 +119,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.3"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.4"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -490,6 +493,22 @@ def test_persisted_g_state_is_accepted_when_broker_position_is_unchanged():
     assert state["buy_date"] == {code: buy_date}
     assert state["entry_atr"] == {code: 0.05}
     assert state["highest_since_buy"] == {code: 1.2}
+    assert pt.g.__persisted_g_status == "accepted"
+    assert pt.g.__persisted_g_reason == "validated"
+    assert pt.g.__persisted_g_generation == 7
+
+
+def test_missing_persisted_g_state_records_explicit_not_provided_diagnostic():
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    pt.g = make_g()
+
+    assert pt._load_persisted_g_state(context) is None
+    assert pt.g.__persisted_g_status == "not-provided"
+    assert pt.g.__persisted_g_reason == "metadata-missing"
+    assert pt.g.__persisted_g_generation is None
 
 
 @pytest.mark.parametrize(
@@ -519,6 +538,9 @@ def test_persisted_g_state_is_rejected_when_broker_position_changed(
     )
 
     assert pt._load_persisted_g_state(context) is None
+    assert pt.g.__persisted_g_status == "rejected"
+    assert pt.g.__persisted_g_reason == "broker-position-snapshot-mismatch"
+    assert pt.g.__persisted_g_generation == 7
 
 
 def test_persist_live_state_records_broker_bound_g_metadata(tmp_path):
@@ -793,6 +815,9 @@ def test_before_trading_rejects_persisted_g_when_matching_journal_is_newer(
     assert pt.g.entry_atr == {code: 0.06}
     assert pt.g.__state_restore_source == "journal"
     assert pt.g.__state_restore_generation == 8
+    assert pt.g.__persisted_g_status == "superseded"
+    assert pt.g.__persisted_g_reason == "newer-journal"
+    assert pt.g.__persisted_g_generation == 7
 
 
 def test_before_trading_recovers_broker_before_journal_risk_fallback(
@@ -3463,6 +3488,8 @@ def test_live_recovery_summary_logs_state_journal_and_each_holding(monkeypatch):
         highest_since_buy={"513100.SS": 1.35},
         __state_restore_source="journal",
         __state_restore_generation=8,
+        __persisted_g_status="not-provided",
+        __persisted_g_reason="metadata-missing",
         __position_recovery_source={"513100.SS": "journal"},
     )
     messages = []
@@ -3479,7 +3506,16 @@ def test_live_recovery_summary_logs_state_journal_and_each_holding(monkeypatch):
     pt._log_live_recovery_summary(context)
 
     assert any(
-        "恢复来源=状态台账 代次=8" in message
+        "[PTrade框架g] 状态=未提供 代次=不适用 原因=未发现持久状态元数据"
+        in message
+        for message in messages
+    )
+    assert any(
+        "[连续状态恢复] 来源=状态台账 代次=8" in message
+        for message in messages
+    )
+    assert any(
+        "[持仓风险恢复] 来源=状态台账" in message
         for message in messages
     )
     holding = next(message for message in messages if "代码=513100.SS" in message)
@@ -3501,6 +3537,10 @@ def test_live_recovery_summary_reports_delivery_takeover_source(monkeypatch):
         buy_date={"513100.SS": date(2026, 3, 3)},
         entry_atr={"513100.SS": 0.05},
         highest_since_buy={"513100.SS": 1.35},
+        __state_restore_source="journal",
+        __state_restore_generation=3,
+        __persisted_g_status="not-provided",
+        __persisted_g_reason="metadata-missing",
         __position_recovery_source={
             "513100.SS": "account-takeover:get-deliver",
         },
@@ -3519,7 +3559,11 @@ def test_live_recovery_summary_reports_delivery_takeover_source(monkeypatch):
     pt._log_live_recovery_summary(context)
 
     assert any(
-        "恢复来源=账户接管:交割单 代次=不适用" in message
+        "[连续状态恢复] 来源=状态台账 代次=3" in message
+        for message in messages
+    )
+    assert any(
+        "[持仓风险恢复] 来源=账户接管:交割单" in message
         for message in messages
     )
 
@@ -3541,7 +3585,11 @@ def test_live_recovery_summary_reports_mixed_position_sources(monkeypatch):
         },
         entry_atr={"513100.SS": 0.05, "518880.SS": 0.08},
         highest_since_buy={"513100.SS": 1.35, "518880.SS": 4.90},
+        __state_restore_source="journal",
         __state_restore_generation=9,
+        __persisted_g_status="accepted",
+        __persisted_g_reason="validated",
+        __persisted_g_generation=7,
         __position_recovery_source={
             "513100.SS": "ptrade-g",
             "518880.SS": "account-takeover:get-deliver",
@@ -3561,7 +3609,15 @@ def test_live_recovery_summary_reports_mixed_position_sources(monkeypatch):
     pt._log_live_recovery_summary(context)
 
     assert any(
-        "恢复来源=混合恢复 代次=9" in message
+        "[PTrade框架g] 状态=已接受 代次=7 原因=校验通过" in message
+        for message in messages
+    )
+    assert any(
+        "[连续状态恢复] 来源=状态台账 代次=9" in message
+        for message in messages
+    )
+    assert any(
+        "[持仓风险恢复] 来源=混合恢复" in message
         for message in messages
     )
 
@@ -3820,7 +3876,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.3" in notes
+    assert "20260720.4" in notes
     assert "1506a0e834fe" in notes
 
 
@@ -3839,7 +3895,9 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "newer matching journal" in deployment
     assert "truncated tail" in deployment
     assert "all new buys are blocked" in deployment
-    assert "[状态恢复汇总]" in deployment
+    assert "[PTrade框架g]" in deployment
+    assert "[连续状态恢复]" in deployment
+    assert "[持仓风险恢复]" in deployment
     assert "账户接管:交割单" in deployment
     assert "one account runs one active" in deployment
     assert "same calendar date as the running process" in deployment

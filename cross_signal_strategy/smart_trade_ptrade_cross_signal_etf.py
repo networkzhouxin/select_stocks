@@ -19,7 +19,7 @@ from datetime import datetime
 # 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.3"
+DEPLOYMENT_BUILD_ID = "20260720.4"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
@@ -247,14 +247,16 @@ def _load_persisted_g_state(context):
     recorded_positions = getattr(g, "live_state_broker_positions", None)
     metadata = (schema_version, fingerprint, generation, recorded_positions)
     if all(value is None for value in metadata):
+        _set_persisted_g_diagnostic(
+            "not-provided", "metadata-missing", None)
         return None
     try:
         if schema_version != LIVE_STATE_SCHEMA_VERSION:
-            raise ValueError("state schema mismatch")
+            raise ValueError("state-schema-mismatch")
         if fingerprint != business_config_fingerprint():
-            raise ValueError("business fingerprint mismatch")
+            raise ValueError("business-fingerprint-mismatch")
         if not isinstance(generation, int) or generation <= 0:
-            raise ValueError("invalid state generation")
+            raise ValueError("invalid-state-generation")
         state = _validated_live_state({
             field: getattr(g, field, None)
             for field in LIVE_STATE_FIELDS
@@ -262,7 +264,7 @@ def _load_persisted_g_state(context):
         current_positions = _broker_position_snapshot(context)
         if not _broker_position_snapshots_match(
                 recorded_positions, current_positions):
-            raise ValueError("broker position snapshot mismatch")
+            raise ValueError("broker-position-snapshot-mismatch")
 
         buy_dates = _normalized_state_mapping(state["buy_date"])
         entry_atr = _normalized_state_mapping(state["entry_atr"])
@@ -279,11 +281,48 @@ def _load_persisted_g_state(context):
                 not _is_positive_finite(entry_atr.get(code)) or
                 not _is_positive_finite(highest.get(code))
             ):
-                raise ValueError("incomplete position risk state: %s" % code)
+                raise ValueError("incomplete-position-risk-state:%s" % code)
+        _set_persisted_g_diagnostic("accepted", "validated", generation)
         return generation, state
     except Exception as exc:
-        log.warning("[PTrade持久状态] 校验失败，已拒绝恢复: %s" % exc)
+        reason = str(exc)
+        _set_persisted_g_diagnostic("rejected", reason, generation)
+        log.warning(
+            "[PTrade框架g] 校验失败，已拒绝恢复: %s" %
+            _format_persisted_g_reason_for_log(reason)
+        )
         return None
+
+
+def _set_persisted_g_diagnostic(status, reason, generation):
+    """记录本次启动对普通 g 的判断；双下划线字段不交给平台持久化。"""
+    g.__persisted_g_status = status
+    g.__persisted_g_reason = reason
+    g.__persisted_g_generation = generation
+
+
+def _format_persisted_g_status_for_log(status):
+    return {
+        "not-provided": "未提供",
+        "accepted": "已接受",
+        "rejected": "已拒绝",
+        "superseded": "已接受但未采用",
+    }.get(str(status or ""), "未检查")
+
+
+def _format_persisted_g_reason_for_log(reason):
+    text = str(reason or "")
+    if text.startswith("incomplete-position-risk-state:"):
+        return "持仓风险状态不完整:%s" % text.split(":", 1)[1]
+    return {
+        "metadata-missing": "未发现持久状态元数据",
+        "validated": "校验通过",
+        "state-schema-mismatch": "状态结构版本不匹配",
+        "business-fingerprint-mismatch": "业务配置指纹不匹配",
+        "invalid-state-generation": "状态代次无效",
+        "broker-position-snapshot-mismatch": "券商持仓快照不匹配",
+        "newer-journal": "状态台账代次更新",
+    }.get(text, text or "无")
 
 
 def _record_persisted_g_state(state, generation, broker_positions):
@@ -839,6 +878,9 @@ def initialize(context):
     g.__state_path = None
     g.__state_restore_source = None
     g.__state_restore_generation = None
+    g.__persisted_g_status = None
+    g.__persisted_g_reason = None
+    g.__persisted_g_generation = None
     g.__position_recovery_source = {}
     g.__startup_recovery_done = False
 
@@ -902,6 +944,10 @@ def before_trading_start(context, data):
                     use_persisted_g = True
                     g.__state_restore_source = "ptrade-g"
                     g.__state_restore_generation = persisted_g_generation
+                else:
+                    _set_persisted_g_diagnostic(
+                        "superseded", "newer-journal",
+                        persisted_g_generation)
             continuity_state = (
                 persisted_g_state if use_persisted_g else journal_state)
             if continuity_state is not None:
@@ -3148,15 +3194,34 @@ def _recovery_summary_source(context):
 
 
 def _log_live_recovery_summary(context):
-    source = _recovery_summary_source(context)
+    persisted_g_status = getattr(g, "__persisted_g_status", None)
+    persisted_g_reason = getattr(g, "__persisted_g_reason", None)
+    persisted_g_generation = getattr(g, "__persisted_g_generation", None)
+    persisted_g_generation_text = (
+        persisted_g_generation
+        if isinstance(persisted_g_generation, int) and
+        persisted_g_generation > 0
+        else "不适用"
+    )
+    log.info("[PTrade框架g] 状态=%s 代次=%s 原因=%s" % (
+        _format_persisted_g_status_for_log(persisted_g_status),
+        persisted_g_generation_text,
+        _format_persisted_g_reason_for_log(persisted_g_reason),
+    ))
+
+    continuity_source = getattr(g, "__state_restore_source", None)
     generation = getattr(g, "__state_restore_generation", None)
     generation_text = (
         generation
         if isinstance(generation, int) and generation > 0
         else "不适用"
     )
-    log.info("[状态恢复汇总] 恢复来源=%s 代次=%s" % (
-        _format_recovery_source_for_log(source), generation_text))
+    log.info("[连续状态恢复] 来源=%s 代次=%s" % (
+        _format_recovery_source_for_log(continuity_source), generation_text))
+
+    source = _recovery_summary_source(context)
+    log.info("[持仓风险恢复] 来源=%s" % (
+        _format_recovery_source_for_log(source)))
 
     source_map = getattr(g, "__position_recovery_source", {})
     if not isinstance(source_map, dict):
@@ -3183,7 +3248,7 @@ def _log_live_recovery_summary(context):
         if not position_source:
             position_source = source if verified else "unverified"
         log.info(
-            "[状态恢复汇总] 代码=%s 数量=%.0f 成本=%.6f 买入日期=%s "
+            "[持仓风险恢复] 代码=%s 数量=%.0f 成本=%.6f 买入日期=%s "
             "ATR=%.6f 持仓最高收盘价=%.6f 状态=%s 来源=%s" % (
                 code,
                 amount,

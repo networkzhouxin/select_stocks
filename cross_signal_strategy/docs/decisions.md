@@ -1004,3 +1004,13 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Source contract: If all held positions share one source, report that source. If held positions use different sources, report `混合恢复`. If there are no positions and no restored state, report `无持仓`. A missing or invalid persistent-state generation is rendered as `不适用`.
 - Test-first evidence: Failing tests first reproduced both the all-delivery mislabel and a mixed-source case. Existing journal-source coverage remains in force.
 - Business boundary: No indicator, signal, threshold, ETF pool, ranking, position size, execution time, order behavior, stop rule, recovery calculation, or JoinQuant performance behavior changed. Business fingerprint remains `1506a0e834fe`; the production multi-factor strategy is untouched.
+
+### Separate PTrade Framework, Continuity, And Position Recovery Diagnostics
+
+- Date: 2026-07-20.
+- Decision: Release deployment build `20260720.4` without changing the frozen `cross-v0.3.2` business configuration. Split startup recovery reporting into `[PTrade框架g]`, `[连续状态恢复]`, and `[持仓风险恢复]` so one line no longer combines unrelated evidence dimensions.
+- Reason: A same-strategy restart can have no framework-restored ordinary `g`, recover continuity from the append-only journal, and reconstruct every held position from delivery records. Reporting only `账户接管:交割单 代次=3` was factually incomplete because the delivery record proved position risk facts while generation 3 belonged to the journal.
+- Diagnostic contract: Ordinary `g` reports `未提供`, `已接受`, `已拒绝`, or `已接受但未采用`, with a Chinese reason and its own generation. Continuity reports its source and generation independently. Position recovery aggregates the actual per-position evidence source and continues to list every holding's verification details.
+- Audit contract: The read-only PTrade runtime-log auditor now requires all three diagnostic dimensions and still fails closed on any `未验证` holding. A rejected ordinary `g` is not itself a trading failure when journal or broker evidence completes recovery.
+- Test-first evidence: Seven focused tests first failed for missing ordinary-`g` diagnostics and the old combined summary; a separate newer-journal test failed before recording the superseded state. The runtime-log auditor tests then failed against the new format before its parser was updated.
+- Business boundary: Recovery priority, broker reconstruction, delivery replay, journal fallback, signals, indicators, thresholds, ETF pool, orders, stops, and schedules are unchanged. Business fingerprint remains `1506a0e834fe`; the production multi-factor strategy is untouched.
