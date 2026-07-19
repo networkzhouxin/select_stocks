@@ -66,6 +66,7 @@ def make_g(**overrides):
         "__state_restore_source": None,
         "__state_restore_generation": None,
         "__position_recovery_source": {},
+        "__startup_recovery_done": False,
     }
     values.update(overrides)
     return types.SimpleNamespace(**values)
@@ -111,8 +112,8 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260718.2"
-    assert pt.LIVE_STATE_SCHEMA_VERSION == 2
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.1"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -369,6 +370,7 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
         buy_date={"513100.SS": signal_date},
         last_scores={"513100.SS": make_buy_score()},
         sold_today={"159915.SZ": True},
+        sell_retry_reasons={"513500.SS": "ATR止损重试"},
         paused_pool_codes={"513880.SS"},
         unverified_positions={"159985.SZ"},
         execution_date=today,
@@ -383,6 +385,7 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
     pt.g.buy_date = {}
     pt.g.last_scores = {}
     pt.g.sold_today = {}
+    pt.g.sell_retry_reasons = {}
     pt.g.paused_pool_codes = set()
     pt.g.unverified_positions = set()
     pt.g.execution_date = None
@@ -396,12 +399,64 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
     assert pt.g.entry_atr == {"513100.SS": 0.05}
     assert pt.g.buy_date == {"513100.SS": signal_date}
     assert pt.g.sold_today == {"159915.SZ": True}
+    assert pt.g.sell_retry_reasons == {"513500.SS": "ATR止损重试"}
     assert pt.g.paused_pool_codes == {"513880.SS"}
     assert pt.g.unverified_positions == {"159985.SZ"}
     assert pt.g.execution_date == today
     assert pt.g.deferred_signal_date == signal_date
     assert pt.g.params == {"buy_threshold": 777}
     assert pt.g.etf_pool == ["510300.SS"]
+
+
+def test_state_journal_rejects_state_when_broker_position_changed(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    original_position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    original_context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={"513100.SS": original_position}))
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 1.2},
+        entry_atr={"513100.SS": 0.05},
+        buy_date={"513100.SS": date(2026, 7, 10)},
+    )
+
+    assert pt._persist_live_state(original_context, path=state_path) is True
+
+    changed_position = types.SimpleNamespace(
+        amount=600, cost_basis=1.0, last_sale_price=1.1)
+    changed_context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={"513100.SS": changed_position}))
+    pt.g = make_g()
+
+    assert pt._restore_live_state(changed_context, path=state_path) is False
+    assert pt.g.highest_since_buy == {}
+    assert pt.g.entry_atr == {}
+    assert pt.g.buy_date == {}
+
+
+def test_state_journal_restores_state_when_broker_position_is_unchanged(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={"513100.SS": position}))
+    buy_date = date(2026, 7, 10)
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 1.2},
+        entry_atr={"513100.SS": 0.05},
+        buy_date={"513100.SS": buy_date},
+    )
+
+    assert pt._persist_live_state(context, path=state_path) is True
+
+    pt.g = make_g()
+    assert pt._restore_live_state(context, path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 1.2}
+    assert pt.g.entry_atr == {"513100.SS": 0.05}
+    assert pt.g.buy_date == {"513100.SS": buy_date}
 
 
 def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch, tmp_path):
@@ -425,6 +480,9 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
     live_path = pt._live_state_path()
 
     assert len({simulation_path, other_account_path, live_path}) == 3
+    assert Path(simulation_path).name.startswith(
+        "cross_signal_v032_live_state_v3_")
+    assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
         state_parent(other_account_path),
@@ -434,9 +492,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
     assert user_name_calls == [False, False]
 
 
-def test_automatic_live_state_path_is_isolated_by_ptrade_strategy_instance(
-    monkeypatch, tmp_path
-):
+def test_automatic_live_state_path_survives_manual_restart(monkeypatch, tmp_path):
     monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
     monkeypatch.setattr(
         pt, "get_user_name", lambda real_trade: "account-a", raising=False
@@ -448,7 +504,7 @@ def test_automatic_live_state_path_is_isolated_by_ptrade_strategy_instance(
     pt.g = make_g(state_instance_id="strategy-instance-b")
     second_path = pt._live_state_path()
 
-    assert first_path != second_path
+    assert first_path == second_path
 
 
 def test_automatic_live_state_path_fails_closed_without_instance_identity(
@@ -535,7 +591,9 @@ def test_live_state_io_uses_initialize_cached_path(monkeypatch, tmp_path):
     assert pt.g.highest_since_buy == {}
 
 
-def test_before_trading_resolves_live_state_path_before_restore(monkeypatch, tmp_path):
+def test_before_trading_recovers_broker_before_journal_risk_fallback(
+    monkeypatch, tmp_path
+):
     state_path = tmp_path / "cross-signal-state.pkl"
     today = date(2026, 7, 13)
     pt.g = make_g(__state_path=None, execution_date=today)
@@ -547,13 +605,27 @@ def test_before_trading_resolves_live_state_path_before_restore(monkeypatch, tmp
         lambda: calls.append("path") or str(state_path),
     )
 
-    def restore():
-        assert pt.g.__state_path == str(state_path)
-        calls.append("restore")
-        return False
+    journal_state = {"journal": "state"}
 
-    monkeypatch.setattr(pt, "_restore_live_state", restore)
+    def load(context):
+        assert pt.g.__state_path == str(state_path)
+        calls.append("load-journal")
+        return journal_state
+
+    monkeypatch.setattr(pt, "_load_live_state", load, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "_restore_live_state_continuity",
+        lambda state: calls.append(("continuity", state)),
+        raising=False,
+    )
     monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: calls.append("lock"))
+    monkeypatch.setattr(
+        pt,
+        "_clear_live_risk_state_for_broker_recovery",
+        lambda: calls.append("clear-risk"),
+        raising=False,
+    )
     monkeypatch.setattr(
         pt, "_reconcile_open_orders", lambda context: calls.append("orders") or True
     )
@@ -562,8 +634,21 @@ def test_before_trading_resolves_live_state_path_before_restore(monkeypatch, tmp
         "_recover_live_state_with_available_sources",
         lambda context, allow_deliver: calls.append(("recover", allow_deliver)),
     )
+    monkeypatch.setattr(
+        pt,
+        "_restore_live_state_risk_fallback",
+        lambda context, state: calls.append(("fallback", state)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt, "recover_live_state", lambda context: calls.append("validate")
+    )
     monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
-    monkeypatch.setattr(pt, "_persist_live_state", lambda: True)
+    monkeypatch.setattr(
+        pt,
+        "_persist_live_state",
+        lambda context: calls.append("persist") or True,
+    )
     context = types.SimpleNamespace(
         blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
         portfolio=types.SimpleNamespace(positions={}),
@@ -571,45 +656,173 @@ def test_before_trading_resolves_live_state_path_before_restore(monkeypatch, tmp
 
     pt.before_trading_start(context, data=None)
 
-    assert calls == ["path", "restore", "lock", "orders", ("recover", True)]
+    assert calls == [
+        "path",
+        "load-journal",
+        ("continuity", journal_state),
+        "lock",
+        "clear-risk",
+        "orders",
+        ("recover", True),
+        ("fallback", journal_state),
+        "validate",
+        "persist",
+    ]
 
 
-def test_live_state_dual_slots_alternate_generations_and_use_protocol4(tmp_path):
+def test_journal_risk_fallback_does_not_overwrite_broker_recovery():
+    code = "513100.SS"
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={code: position}))
+    broker_buy_date = date(2026, 7, 10)
+    pt.g = make_g(
+        highest_since_buy={code: 1.3},
+        entry_atr={code: 0.06},
+        buy_date={code: broker_buy_date},
+        unverified_positions=set(),
+        __position_recovery_source={code: "account-takeover:get-deliver"},
+    )
+    journal_state = {
+        "highest_since_buy": {code: 1.2},
+        "entry_atr": {code: 0.05},
+        "buy_date": {code: date(2026, 7, 9)},
+    }
+
+    restored = pt._restore_live_state_risk_fallback(context, journal_state)
+
+    assert restored == set()
+    assert pt.g.highest_since_buy == {code: 1.3}
+    assert pt.g.entry_atr == {code: 0.06}
+    assert pt.g.buy_date == {code: broker_buy_date}
+    assert pt.g.__position_recovery_source == {
+        code: "account-takeover:get-deliver"
+    }
+
+
+def test_journal_risk_fallback_fills_only_unproved_old_position():
+    code = "513100.SS"
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={code: position}))
+    journal_buy_date = date(2020, 1, 2)
+    pt.g = make_g(unverified_positions={code})
+    journal_state = {
+        "highest_since_buy": {code: 1.2},
+        "entry_atr": {code: 0.05},
+        "buy_date": {code: journal_buy_date},
+    }
+
+    restored = pt._restore_live_state_risk_fallback(context, journal_state)
+
+    assert restored == {code}
+    assert pt.g.highest_since_buy == {code: 1.2}
+    assert pt.g.entry_atr == {code: 0.05}
+    assert pt.g.buy_date == {code: journal_buy_date}
+    assert pt.g.__position_recovery_source == {code: "journal"}
+
+
+def test_before_trading_uses_matching_journal_when_delivery_cannot_prove_old_buy(
+    monkeypatch, tmp_path
+):
+    code = "513100.SS"
+    state_path = tmp_path / "cross-signal-state.pkl"
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 20, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    old_buy_date = date(2020, 1, 2)
+    pt.g = make_g(
+        highest_since_buy={code: 1.2},
+        entry_atr={code: 0.05},
+        buy_date={code: old_buy_date},
+    )
+    assert pt._persist_live_state(context, path=state_path) is True
+
+    pt.g = make_g(__state_path=str(state_path))
+    monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: None)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+
+    def broker_recovery(context, allow_deliver):
+        assert allow_deliver is True
+        pt.g.unverified_positions = {code}
+        pt.g.__position_recovery_source = {code: "unverified"}
+
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources", broker_recovery
+    )
+    monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
+
+    pt.before_trading_start(context, data=None)
+
+    assert pt.g.buy_date == {code: old_buy_date}
+    assert pt.g.entry_atr == {code: 0.05}
+    assert pt.g.highest_since_buy == {code: 1.2}
+    assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source == {code: "journal"}
+    assert pt.g.__startup_recovery_done is True
+
+
+def test_live_state_uses_one_append_only_journal(tmp_path):
     state_path = tmp_path / "cross-signal-state.pkl"
     pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
 
     assert pt._persist_live_state(path=state_path) is True
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
 
-    slot_paths = pt._live_state_slot_paths(path=state_path)
-    first = pickle.loads(Path(slot_paths["a"]).read_bytes())
+    assert state_path.exists()
+    assert not Path(str(state_path) + ".a").exists()
+    assert not Path(str(state_path) + ".b").exists()
+    with state_path.open("rb") as handle:
+        first = pickle.load(handle)
+        second = pickle.load(handle)
+        with pytest.raises(EOFError):
+            pickle.load(handle)
+
     assert first["schema_version"] == pt.LIVE_STATE_SCHEMA_VERSION
     assert first["business_config_fingerprint"] == pt.business_config_fingerprint()
     assert first["generation"] == 1
     assert first["payload"][:2] == b"\x80\x04"
-
-    pt.g.highest_since_buy = {"513100.SS": 3.0}
-    assert pt._persist_live_state(path=state_path) is True
-
-    second = pickle.loads(Path(slot_paths["b"]).read_bytes())
     assert second["generation"] == 2
     assert second["payload"][:2] == b"\x80\x04"
 
 
-def test_live_state_restore_falls_back_when_newest_slot_is_truncated(tmp_path):
+def test_live_state_restore_uses_last_complete_record_when_tail_is_truncated(tmp_path):
     state_path = tmp_path / "cross-signal-state.pkl"
     pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
     assert pt._persist_live_state(path=state_path) is True
     pt.g.highest_since_buy = {"513100.SS": 3.0}
     assert pt._persist_live_state(path=state_path) is True
 
-    slot_paths = pt._live_state_slot_paths(path=state_path)
-    Path(slot_paths["b"]).write_bytes(b"truncated")
+    with state_path.open("ab") as handle:
+        handle.write(b"truncated")
     pt.g.highest_since_buy = {"513100.SS": 9.9}
 
     assert pt._restore_live_state(path=state_path) is True
-    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
-    assert pt.g.__state_restore_source == "checkpoint-a"
-    assert pt.g.__state_restore_generation == 1
+    assert pt.g.highest_since_buy == {"513100.SS": 3.0}
+    assert pt.g.__state_restore_source == "journal"
+    assert pt.g.__state_restore_generation == 2
+
+
+def test_live_state_persist_repairs_truncated_tail_before_appending(tmp_path):
+    state_path = tmp_path / "cross-signal-state.pkl"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+    assert pt._persist_live_state(path=state_path) is True
+    with state_path.open("ab") as handle:
+        handle.write(b"truncated")
+
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
+
+    pt.g.highest_since_buy = {"513100.SS": 9.9}
+    assert pt._restore_live_state(path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 3.0}
+    assert pt.g.__state_restore_generation == 2
 
 
 def test_live_state_envelope_rejects_checksum_mismatch():
@@ -650,13 +863,12 @@ def test_live_state_schema_accepts_compatible_producer_strategy_version(tmp_path
         envelope["producer_strategy_version"],
         envelope["payload"],
     )
-    slot_path = pt._live_state_slot_paths(path=state_path)["a"]
-    Path(slot_path).write_bytes(pickle.dumps(envelope, protocol=4))
+    state_path.write_bytes(pickle.dumps(envelope, protocol=4))
     pt.g = make_g(highest_since_buy={"513100.SS": 9.9})
 
     assert pt._restore_live_state(path=state_path) is True
     assert pt.g.highest_since_buy == {"513100.SS": 2.5}
-    assert pt.g.__state_restore_source == "checkpoint-a"
+    assert pt.g.__state_restore_source == "journal"
     assert pt.g.__state_restore_generation == 7
 
 
@@ -674,8 +886,7 @@ def test_live_state_unknown_schema_is_rejected_without_partial_restore(tmp_path)
         envelope["producer_strategy_version"],
         envelope["payload"],
     )
-    slot_path = pt._live_state_slot_paths(path=state_path)["a"]
-    Path(slot_path).write_bytes(pickle.dumps(envelope, protocol=4))
+    state_path.write_bytes(pickle.dumps(envelope, protocol=4))
     pt.g = make_g(
         highest_since_buy={"513100.SS": 2.5},
         entry_atr={"513100.SS": 0.05},
@@ -687,7 +898,7 @@ def test_live_state_unknown_schema_is_rejected_without_partial_restore(tmp_path)
     assert pt.g.__state_restore_source is None
 
 
-def test_live_state_legacy_file_restores_and_migrates_to_dual_slots(tmp_path):
+def test_live_state_unframed_legacy_file_is_not_trusted(tmp_path):
     state_path = tmp_path / "cross-signal-state.pkl"
     legacy_state = {
         field: getattr(make_g(highest_since_buy={"513100.SS": 2.5}), field)
@@ -699,12 +910,11 @@ def test_live_state_legacy_file_restores_and_migrates_to_dual_slots(tmp_path):
     }, protocol=4))
     pt.g = make_g(highest_since_buy={"513100.SS": 9.9})
 
-    assert pt._restore_live_state(path=state_path) is True
-    assert pt.g.highest_since_buy == {"513100.SS": 2.5}
-    assert pt.g.__state_restore_source == "legacy"
-    assert pt.g.__state_restore_generation == 0
-    slot_paths = pt._live_state_slot_paths(path=state_path)
-    assert Path(slot_paths["a"]).exists()
+    assert pt._restore_live_state(path=state_path) is False
+    assert pt.g.highest_since_buy == {"513100.SS": 9.9}
+    assert pt.g.__state_restore_source is None
+    assert not Path(str(state_path) + ".a").exists()
+    assert not Path(str(state_path) + ".b").exists()
 
 
 def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monkeypatch):
@@ -718,7 +928,7 @@ def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monk
         lambda context, allow_deliver: calls.append(("state-recovery", allow_deliver)),
     )
     monkeypatch.setattr(
-        pt, "_persist_live_state", lambda: calls.append("persist") or True,
+        pt, "_persist_live_state", lambda context: calls.append("persist") or True,
         raising=False,
     )
     monkeypatch.setattr(
@@ -770,7 +980,7 @@ def test_after_trading_end_logs_unfinished_orders_without_mutating_guards(monkey
         lambda context, allow_deliver: None,
     )
     monkeypatch.setattr(pt, "after_close", lambda context: None)
-    monkeypatch.setattr(pt, "_persist_live_state", lambda: True)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
     monkeypatch.setattr(pt.log, "warning", lambda message: warnings.append(message))
     context = types.SimpleNamespace(portfolio=types.SimpleNamespace(positions={}))
 
@@ -787,15 +997,16 @@ def test_after_trading_end_logs_unfinished_orders_without_mutating_guards(monkey
 def test_order_and_trade_callbacks_checkpoint_state(monkeypatch):
     persisted = []
     monkeypatch.setattr(
-        pt, "_persist_live_state", lambda: persisted.append(True) or True,
+        pt, "_persist_live_state", lambda context: persisted.append(context) or True,
         raising=False,
     )
     pt.g = make_g()
+    context = types.SimpleNamespace()
 
-    pt.on_order_response(types.SimpleNamespace(), [])
-    pt.on_trade_response(types.SimpleNamespace(), [])
+    pt.on_order_response(context, [])
+    pt.on_trade_response(context, [])
 
-    assert len(persisted) == 2
+    assert persisted == [context, context]
 
 
 def test_callbacks_reject_non_dict_records_without_crashing(monkeypatch):
@@ -810,14 +1021,15 @@ def test_callbacks_reject_non_dict_records_without_crashing(monkeypatch):
     monkeypatch.setattr(
         pt,
         "_persist_live_state",
-        lambda: persisted.append(True) or True,
+        lambda context: persisted.append(context) or True,
         raising=False,
     )
+    context = types.SimpleNamespace()
 
-    pt.on_order_response(types.SimpleNamespace(), [CallbackLike()])
-    pt.on_trade_response(types.SimpleNamespace(), [CallbackLike()])
+    pt.on_order_response(context, [CallbackLike()])
+    pt.on_trade_response(context, [CallbackLike()])
 
-    assert len(persisted) == 2
+    assert persisted == [context, context]
     assert sum("回报格式异常" in message for message in warnings) == 2
 
 
@@ -3036,7 +3248,7 @@ def test_live_recovery_rebuilds_same_day_buy_from_strategy_trades(monkeypatch):
     assert pt.g.__position_recovery_source == {"513100.SS": "get-trades"}
 
 
-def test_live_recovery_summary_logs_checkpoint_and_each_holding(monkeypatch):
+def test_live_recovery_summary_logs_state_journal_and_each_holding(monkeypatch):
     position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={"513100.SS": position})
@@ -3045,9 +3257,9 @@ def test_live_recovery_summary_logs_checkpoint_and_each_holding(monkeypatch):
         buy_date={"513100.SS": date(2026, 3, 3)},
         entry_atr={"513100.SS": 0.05},
         highest_since_buy={"513100.SS": 1.35},
-        __state_restore_source="checkpoint-b",
+        __state_restore_source="journal",
         __state_restore_generation=8,
-        __position_recovery_source={"513100.SS": "checkpoint-b"},
+        __position_recovery_source={"513100.SS": "journal"},
     )
     messages = []
     monkeypatch.setattr(
@@ -3063,7 +3275,7 @@ def test_live_recovery_summary_logs_checkpoint_and_each_holding(monkeypatch):
     pt._log_live_recovery_summary(context)
 
     assert any(
-        "检查点来源=检查点-b 代次=8" in message
+        "恢复来源=状态台账 代次=8" in message
         for message in messages
     )
     holding = next(message for message in messages if "代码=513100.SS" in message)
@@ -3073,7 +3285,7 @@ def test_live_recovery_summary_logs_checkpoint_and_each_holding(monkeypatch):
     assert "ATR=0.050000" in holding
     assert "持仓最高收盘价=1.350000" in holding
     assert "状态=已验证" in holding
-    assert "来源=检查点-b" in holding
+    assert "来源=状态台账" in holding
 
 
 @pytest.mark.parametrize(
@@ -3211,7 +3423,7 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     assert state_path_calls == []
     assert pt.g.__state_path is None
     assert pt.g.__mode_verified is True
-    assert re.fullmatch(r"[0-9a-f]{32}", pt.g.state_instance_id)
+    assert not hasattr(pt.g, "state_instance_id")
 
 
 def test_initialize_backtest_uses_only_backtest_cost_configuration(monkeypatch):
@@ -3322,7 +3534,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "JoinQuant" in notes
     assert "PTrade" in notes
     assert "configuration lock" in notes
-    assert "explicit state checkpoint" in notes
+    assert "append-only state journal" in notes
     assert "two tasks" in notes
     assert "after_trading_end" in notes
     assert "path is resolved and cached at the start of" in notes
@@ -3330,7 +3542,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260718.2" in notes
+    assert "20260720.1" in notes
     assert "1506a0e834fe" in notes
 
 
@@ -3342,9 +3554,11 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
         ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
     ).read_text(encoding="utf-8")
 
-    assert "`.pkl.a` and `.pkl.b`" in deployment
+    assert "single append-only journal" in deployment
     assert "state-schema version" in deployment
-    assert "legacy single-file checkpoint" in deployment
+    assert "broker position snapshot" in deployment
+    assert "broker evidence is attempted first" in deployment
+    assert "truncated tail" in deployment
     assert "all new buys are blocked" in deployment
     assert "[状态恢复汇总]" in deployment
     assert "账户接管:交割单" in deployment
@@ -3356,3 +3570,4 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "Harden PTrade Checkpoints And Recovery Gating" in decisions
     assert "Harden Cross-Signal Live Engineering Without Changing Business Rules" in decisions
     assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions
+    assert "Replace A/B Checkpoints With Broker-First State Journal" in decisions

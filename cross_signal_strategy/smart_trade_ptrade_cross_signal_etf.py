@@ -11,17 +11,16 @@ import pandas as pd
 import builtins as _builtins
 import hashlib
 import pickle
-import uuid
 from datetime import datetime
 
 
 # 一、冻结的业务配置与持久化边界
 # 参数和 ETF 池由代码固定，防止 PTrade 在重启恢复 g 时覆盖正式版业务配置。
-# A/B 检查点保存可序列化的风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
+# 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260718.2"
-LIVE_STATE_SCHEMA_VERSION = 2
+DEPLOYMENT_BUILD_ID = "20260720.1"
+LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
@@ -29,7 +28,7 @@ IOPV_OBSERVE_CODES = frozenset((
     "513880.SS",
     "513050.SS",
 ))
-LIVE_STATE_FILENAME = "cross_signal_v032_live_state_%s.pkl"
+LIVE_STATE_FILENAME = "cross_signal_v032_live_state_v3_%s.journal"
 DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
     "highest_since_buy",
@@ -37,6 +36,7 @@ LIVE_STATE_FIELDS = (
     "buy_date",
     "last_scores",
     "sold_today",
+    "sell_retry_reasons",
     "paused_pool_codes",
     "unverified_positions",
     "execution_date",
@@ -161,11 +161,6 @@ def _live_state_path(path=None):
             log.error("[状态] 接口%s返回空值，检查点已停用" % getter_name)
             return None
         identity.append(str(value))
-    instance_id = getattr(g, "state_instance_id", None)
-    if not isinstance(instance_id, str) or not instance_id.strip():
-        log.error("[状态] 策略实例标识无效，检查点已停用")
-        return None
-    identity.append(instance_id.strip())
     identity_text = "|".join(identity)
     identity_hash = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:12]
     root_text = str(root).rstrip("/\\")
@@ -178,16 +173,6 @@ def _cached_live_state_path(path=None):
     return getattr(g, "__state_path", None)
 
 
-def _live_state_slot_paths(path=None):
-    state_path = _cached_live_state_path(path)
-    if state_path is None:
-        return {}
-    return {
-        "a": state_path + ".a",
-        "b": state_path + ".b",
-    }
-
-
 def _live_state_checksum(
         schema_version, generation, producer_version, payload,
         business_fingerprint=None):
@@ -197,13 +182,73 @@ def _live_state_checksum(
     return hashlib.sha256(header.encode("utf-8") + payload).hexdigest()
 
 
-def _encode_live_state_envelope(state, generation):
+def _validated_broker_position_snapshot(snapshot):
+    if snapshot is None:
+        return None
+    if not isinstance(snapshot, dict):
+        raise ValueError("invalid broker position snapshot")
+    validated = {}
+    for raw_code, raw_position in snapshot.items():
+        code = normalize_code(raw_code)
+        if not code or not isinstance(raw_position, dict):
+            raise ValueError("invalid broker position entry")
+        amount = _safe_float(raw_position.get("amount"), np.nan)
+        cost = _safe_float(raw_position.get("cost"), np.nan)
+        if not _is_positive_finite(amount) or not _is_positive_finite(cost):
+            raise ValueError("invalid broker position facts: %s" % code)
+        validated[code] = {
+            "amount": float(amount),
+            "cost": float(cost),
+        }
+    return validated
+
+
+def _broker_position_snapshot(context):
+    if context is None:
+        return None
+    snapshot = {}
+    for raw_code, position in _positions(context).items():
+        amount = _pos_amount(position)
+        if amount <= 0:
+            continue
+        code = normalize_code(raw_code)
+        cost = _pos_cost(position)
+        if not code or not _is_positive_finite(amount) or not _is_positive_finite(cost):
+            raise ValueError("unprovable broker position: %s" % raw_code)
+        if code in snapshot:
+            raise ValueError("duplicate broker position: %s" % code)
+        snapshot[code] = {"amount": amount, "cost": cost}
+    return _validated_broker_position_snapshot(snapshot)
+
+
+def _broker_position_snapshots_match(recorded, current):
+    recorded = _validated_broker_position_snapshot(recorded)
+    current = _validated_broker_position_snapshot(current)
+    if recorded is None or current is None:
+        return recorded is None and current is None
+    if set(recorded) != set(current):
+        return False
+    for code in recorded:
+        old = recorded[code]
+        new = current[code]
+        if old["amount"] != new["amount"]:
+            return False
+        tolerance = max(1e-8, abs(old["cost"]) * 1e-8)
+        if abs(old["cost"] - new["cost"]) > tolerance:
+            return False
+    return True
+
+
+def _encode_live_state_envelope(state, generation, broker_positions=None):
     generation = int(generation)
     if generation <= 0:
         raise ValueError("invalid state generation")
     validated = _validated_live_state(state)
-    payload = pickle.dumps(
-        {"state": validated}, protocol=LIVE_STATE_PICKLE_PROTOCOL)
+    payload = pickle.dumps({
+        "state": validated,
+        "broker_positions": _validated_broker_position_snapshot(
+            broker_positions),
+    }, protocol=LIVE_STATE_PICKLE_PROTOCOL)
     envelope = {
         "schema_version": LIVE_STATE_SCHEMA_VERSION,
         "generation": generation,
@@ -246,39 +291,58 @@ def _decode_live_state_envelope(envelope):
     body = pickle.loads(payload)
     if not isinstance(body, dict):
         raise ValueError("invalid state payload")
-    return generation, _validated_live_state(body.get("state"))
+    return (
+        generation,
+        _validated_live_state(body.get("state")),
+        _validated_broker_position_snapshot(body.get("broker_positions")),
+    )
 
 
-def _read_live_state_slot(slot_path):
-    try:
-        with open(slot_path, "rb") as handle:
-            envelope = pickle.load(handle)
-        generation, state = _decode_live_state_envelope(envelope)
-        return generation, state
-    except FileNotFoundError:
-        return None
-    except Exception as exc:
-        log.error("[状态] 检查点槽位无效 %s: %s" % (slot_path, exc))
-        return None
-
-
-def _read_legacy_live_state(state_path):
+def _scan_live_state_journal(state_path):
+    records = []
+    last_complete_offset = 0
+    tail_damaged = False
     try:
         with open(state_path, "rb") as handle:
-            payload = pickle.load(handle)
-        if not isinstance(payload, dict):
-            raise ValueError("invalid state payload")
-        if payload.get("strategy_version") != STRATEGY_VERSION:
-            raise ValueError("strategy version mismatch")
-        return _validated_live_state(payload.get("state"))
+            handle.seek(0, 2)
+            file_size = handle.tell()
+            handle.seek(0)
+            while True:
+                record_start = handle.tell()
+                try:
+                    envelope = pickle.load(handle)
+                except EOFError:
+                    if record_start < file_size:
+                        tail_damaged = True
+                        log.warning(
+                            "[状态台账] 尾部记录不完整，已使用此前有效记录")
+                    break
+                except Exception as exc:
+                    tail_damaged = True
+                    log.warning("[状态台账] 尾部记录不完整，已使用此前有效记录: %s" % exc)
+                    break
+                last_complete_offset = handle.tell()
+                try:
+                    generation, state, broker_positions = (
+                        _decode_live_state_envelope(envelope))
+                except Exception as exc:
+                    log.error("[状态台账] 记录无效: %s" % exc)
+                    continue
+                records.append((generation, state, broker_positions))
     except FileNotFoundError:
-        return None
+        return [], 0, False
     except Exception as exc:
-        log.error("[状态] 恢复失败: %s" % exc)
-        return None
+        log.error("[状态台账] 读取失败: %s" % exc)
+        return [], 0, False
+    return records, last_complete_offset, tail_damaged
 
 
-def _persist_live_state(path=None):
+def _read_live_state_journal(state_path):
+    records, _, _ = _scan_live_state_journal(state_path)
+    return records
+
+
+def _persist_live_state(context=None, path=None):
     state_path = _cached_live_state_path(path)
     if state_path is None:
         return False
@@ -287,21 +351,18 @@ def _persist_live_state(path=None):
         for field in LIVE_STATE_FIELDS
     }
     try:
-        slot_paths = _live_state_slot_paths(path=state_path)
-        valid_slots = {}
-        for slot, slot_path in slot_paths.items():
-            loaded = _read_live_state_slot(slot_path)
-            if loaded is not None:
-                valid_slots[slot] = loaded[0]
-        if not valid_slots:
-            target_slot = "a"
-            generation = 1
-        else:
-            latest_slot = max(valid_slots, key=valid_slots.get)
-            target_slot = "b" if latest_slot == "a" else "a"
-            generation = max(valid_slots.values()) + 1
-        envelope = _encode_live_state_envelope(state, generation)
-        with open(slot_paths[target_slot], "wb") as handle:
+        records, last_complete_offset, tail_damaged = (
+            _scan_live_state_journal(state_path))
+        if tail_damaged:
+            with open(state_path, "r+b") as handle:
+                handle.truncate(last_complete_offset)
+            log.warning("[状态台账] 已移除不完整尾部，继续追加新记录")
+        generation = max(
+            (item[0] for item in records), default=0
+        ) + 1
+        envelope = _encode_live_state_envelope(
+            state, generation, _broker_position_snapshot(context))
+        with open(state_path, "ab") as handle:
             pickle.dump(
                 envelope, handle, protocol=LIVE_STATE_PICKLE_PROTOCOL)
         return True
@@ -322,6 +383,7 @@ def _validated_live_state(state):
         "buy_date",
         "last_scores",
         "sold_today",
+        "sell_retry_reasons",
     )
     for field in mapping_fields:
         if not isinstance(state[field], dict):
@@ -342,33 +404,105 @@ def _validated_live_state(state):
     return validated
 
 
-def _restore_live_state(path=None):
+def _load_live_state(context=None, path=None):
     state_path = _cached_live_state_path(path)
     if state_path is None:
-        return False
+        return None
     g.__state_restore_source = None
     g.__state_restore_generation = None
-    valid_slots = []
-    for slot, slot_path in _live_state_slot_paths(path=state_path).items():
-        loaded = _read_live_state_slot(slot_path)
-        if loaded is not None:
-            valid_slots.append((loaded[0], slot, loaded[1]))
-    if valid_slots:
-        generation, slot, state = max(valid_slots, key=lambda item: item[0])
-        restore_source = "checkpoint-%s" % slot
-    else:
-        state = _read_legacy_live_state(state_path)
-        generation = 0
-        restore_source = "legacy"
+    records = _read_live_state_journal(state_path)
+    if not records:
+        return None
+    generation, state, recorded_positions = max(
+        records, key=lambda item: item[0])
+    current_positions = _broker_position_snapshot(context)
+    if not _broker_position_snapshots_match(
+            recorded_positions, current_positions):
+        log.warning("[状态台账] 当前券商持仓与记录不一致，已拒绝恢复")
+        return None
+    g.__state_restore_source = "journal"
+    g.__state_restore_generation = generation
+    return state
+
+
+def _restore_live_state(context=None, path=None):
+    state = _load_live_state(context=context, path=path)
     if state is None:
         return False
     for field in LIVE_STATE_FIELDS:
         setattr(g, field, state[field])
-    g.__state_restore_source = restore_source
-    g.__state_restore_generation = generation
-    if restore_source == "legacy":
-        _persist_live_state(path=state_path)
     return True
+
+
+def _restore_live_state_continuity(state):
+    state = _validated_live_state(state)
+    for field in (
+        "last_scores",
+        "sold_today",
+        "sell_retry_reasons",
+        "paused_pool_codes",
+        "execution_date",
+        "deferred_scores",
+        "deferred_signal_date",
+    ):
+        setattr(g, field, state[field])
+
+
+def _clear_live_risk_state_for_broker_recovery():
+    g.highest_since_buy = {}
+    g.entry_atr = {}
+    g.buy_date = {}
+    g.unverified_positions = set()
+    g.__position_recovery_source = {}
+
+
+def _normalized_state_mapping(mapping):
+    if not isinstance(mapping, dict):
+        return {}
+    return {
+        normalize_code(code): value
+        for code, value in mapping.items()
+        if normalize_code(code)
+    }
+
+
+def _restore_live_state_risk_fallback(context, state):
+    if not isinstance(state, dict):
+        return set()
+    journal_highest = _normalized_state_mapping(
+        state.get("highest_since_buy"))
+    journal_atr = _normalized_state_mapping(state.get("entry_atr"))
+    journal_buy_date = _normalized_state_mapping(state.get("buy_date"))
+    restored = set()
+    source_map = getattr(g, "__position_recovery_source", None)
+    if not isinstance(source_map, dict):
+        source_map = {}
+        g.__position_recovery_source = source_map
+
+    for code in current_hold_codes(context):
+        current_complete = (
+            _as_date(g.buy_date.get(code)) is not None and
+            _is_positive_finite(g.entry_atr.get(code)) and
+            _is_positive_finite(g.highest_since_buy.get(code))
+        )
+        if current_complete:
+            continue
+        buy_date = _as_date(journal_buy_date.get(code))
+        atr = journal_atr.get(code)
+        highest = journal_highest.get(code)
+        if (
+            buy_date is None or
+            not _is_positive_finite(atr) or
+            not _is_positive_finite(highest)
+        ):
+            continue
+        g.buy_date[code] = buy_date
+        g.entry_atr[code] = float(atr)
+        g.highest_since_buy[code] = float(highest)
+        g.unverified_positions.discard(code)
+        source_map[code] = "journal"
+        restored.add(code)
+    return restored
 
 
 def get_a_share_etf_codes():
@@ -562,6 +696,7 @@ def _format_recovery_source_for_log(source):
     return {
         "get-trades": "当前策略成交",
         "get-deliver": "交割单",
+        "journal": "状态台账",
         "unverified": "未验证",
         "ptrade-g": "PTrade持久状态",
     }.get(text, text or "无")
@@ -609,8 +744,6 @@ def initialize(context):
     g.execution_date = None
     g.deferred_scores = []
     g.deferred_signal_date = None
-    # 非私有变量由 PTrade 持久化：同一策略重启沿用，新建策略实例重新生成。
-    g.state_instance_id = uuid.uuid4().hex
     g.__last_snapshot = {}
     g.__pending_orders = {}
     g.__pending_sells = {}
@@ -623,6 +756,7 @@ def initialize(context):
     g.__state_restore_source = None
     g.__state_restore_generation = None
     g.__position_recovery_source = {}
+    g.__startup_recovery_done = False
 
     try:
         set_universe(g.etf_pool)
@@ -660,11 +794,16 @@ def handle_data(context, data):
 def before_trading_start(context, data):
     g.__data = data
     g.__last_snapshot = {}
+    startup_recovery = bool(
+        g.__is_live and not getattr(g, "__startup_recovery_done", False))
+    journal_state = None
     if g.__is_live:
-        g.__position_recovery_source = {}
         if _cached_live_state_path() is None:
             g.__state_path = _live_state_path()
-        _restore_live_state()
+        if startup_recovery:
+            journal_state = _load_live_state(context)
+            if journal_state is not None:
+                _restore_live_state_continuity(journal_state)
     _lock_frozen_business_config()
     today = _as_date(get_context_datetime(context))
     if today is None:
@@ -679,15 +818,21 @@ def before_trading_start(context, data):
         g.deferred_scores = []
         g.deferred_signal_date = None
     if g.__is_live:
+        if startup_recovery:
+            _clear_live_risk_state_for_broker_recovery()
         _reconcile_open_orders(context)
         _recover_live_state_with_available_sources(context, allow_deliver=True)
+        if startup_recovery and journal_state is not None:
+            _restore_live_state_risk_fallback(context, journal_state)
+            recover_live_state(context)
+        g.__startup_recovery_done = True
         _log_live_recovery_summary(context)
     else:
         g.__pending_orders = {}
         g.__pending_sells = {}
         g.__order_state_unknown = False
     if g.__is_live:
-        _persist_live_state()
+        _persist_live_state(context)
 
 
 def after_trading_end(context, data):
@@ -698,17 +843,17 @@ def after_trading_end(context, data):
     after_close(context)
     g.sold_today = {}
     if g.__is_live:
-        _persist_live_state()
+        _persist_live_state(context)
 
 
 def _do_trading_wrapper(context):
     do_trading(context)
-    _persist_live_state()
+    _persist_live_state(context)
 
 
 def _halt_recover_wrapper(context):
     halt_recover(context)
-    _persist_live_state()
+    _persist_live_state(context)
 
 
 # 三、技术指标与交叉信号
@@ -2255,7 +2400,7 @@ def halt_recover(context):
 
 
 # 七、实盘状态恢复与成交回报
-# 恢复顺序为检查点、当日策略成交、历史交割单和券商持仓；证据不足的持仓标记为未验证。
+# 启动时先用当日成交、历史交割单和券商持仓重建；仅对无法覆盖的老持仓使用状态台账回退。
 # 未验证持仓禁止自动卖出和新增买入，避免凭空构造买入日、ATR 或最高收盘价。
 
 def _has_incomplete_position_state(context):
@@ -2874,7 +3019,7 @@ def _log_live_recovery_summary(context):
     source = getattr(g, "__state_restore_source", None) or "ptrade-g"
     generation = getattr(g, "__state_restore_generation", None)
     generation_text = generation if generation is not None else "无"
-    log.info("[状态恢复汇总] 检查点来源=%s 代次=%s" % (
+    log.info("[状态恢复汇总] 恢复来源=%s 代次=%s" % (
         _format_recovery_source_for_log(source), generation_text))
 
     source_map = getattr(g, "__position_recovery_source", {})
@@ -3044,7 +3189,7 @@ def on_order_response(context, order_list):
                 g.sell_retry_reasons[code] = sell_pending.get("reason", "sell_retry")
                 log.error("[卖出拒绝或撤单] %s 状态=%s 原因=%s" % (
                     code, status, error))
-    _persist_live_state()
+    _persist_live_state(context)
 
 
 def on_trade_response(context, trade_list):
@@ -3096,4 +3241,4 @@ def on_trade_response(context, trade_list):
             _finish_terminal_sell(code, pending)
             log.info("[成交回报] 卖出 %s 数量=%.0f 价格=%.3f 累计成交=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
-    _persist_live_state()
+    _persist_live_state(context)

@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260718.2 业务配置=1506a0e834fe 状态结构=2
+[发布指纹] 构建=20260720.1 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -51,7 +51,7 @@ PTrade live mode registers two tasks, below the platform limit of five:
 - `after_trading_end` (normally around `15:30`): use PTrade's official
   lifecycle callback to reconcile state, update the highest closing price
   since entry, print the position risk summary, and write the closing
-  checkpoint. This is not an additional `run_daily` thread task.
+  append-only state journal. This is not an additional `run_daily` thread task.
 
 Initialization must prove the runtime mode with `is_trade()` before applying
 mode-specific settings. Live mode receives only live platform parameters;
@@ -166,37 +166,40 @@ of the requested time. That result must not be compared with the JoinQuant
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
-- The explicit state checkpoint uses two independent files, `.pkl.a` and `.pkl.b`,
-  under PTrade's research path. Each envelope contains a separate
-  state-schema version, a monotonically increasing generation, the producer
-  strategy version, the business-configuration fingerprint, a SHA256 checksum,
-  and a protocol-4 pickle payload. Each save overwrites only the older valid
-  slot; no `os` call or rename operation is required.
-- Restore validates both slots and selects the highest valid generation. If the
-  newest slot is truncated, malformed, or has a checksum mismatch, the previous
-  valid slot remains available. A producer strategy-version difference is
-  accepted only when both the state-schema version and business-configuration
-  fingerprint are compatible. An unknown schema, fingerprint mismatch, or
+- The explicit state store is a single append-only journal under PTrade's
+  research path. Every envelope contains a state-schema version, monotonically
+  increasing generation, producer strategy version, business-configuration fingerprint,
+  broker position snapshot, SHA256 checksum, and protocol-4
+  pickle payload. No `os` call or rename operation is required.
+- Restore validates every complete journal record and selects the highest valid
+  generation. A truncated tail never invalidates earlier complete records. On
+  the next save, only the incomplete tail bytes are removed before a new record
+  is appended. A checksum mismatch, unknown schema, fingerprint mismatch, or
   missing required field is rejected without partially applying state.
-- The anonymous checkpoint identity is derived from the account and trade name
+- Every broker position snapshot contains normalized ETF code, positive held
+  quantity, and positive broker cost. Restore is refused unless the current
+  broker position set, quantities, and costs still match the recorded snapshot.
+- The anonymous journal identity is derived from the account and trade name
   so simulation and live instances cannot overwrite each other's state. The
-  payload contains risk state, execution dates, deferred T-1 scores, and
-  halt/recovery state, but deliberately excludes strategy parameters and the
+  payload contains risk state, execution dates, deferred T-1 scores,
+  sell-retry reasons, and halt/recovery state, but deliberately excludes strategy parameters and the
   ETF pool. Both identity values are mandatory; otherwise checkpointing fails
   closed instead of using a shared filename. PTrade rejects `get_trade_name()`
   during `initialize`, so the path is resolved and cached at the start of
-  `before_trading_start`, before checkpoint restore and broker reconciliation.
-- The old `cross_signal_v032_live_state_<identity>.pkl` remains a read-only
-  legacy single-file checkpoint. It is considered only when neither dual slot
-  is valid. A successful legacy restore is immediately migrated by writing a
-  new A/B checkpoint; the legacy file is never deleted by the strategy.
-- State checkpoints run after the 09:35 and 10:35 tasks, from
+  `before_trading_start`, before journal inspection and broker reconciliation.
+- On each process start, broker evidence is attempted first for risk state:
+  current-strategy fills cover T-day trades, while account delivery records and
+  current broker positions rebuild older holdings. A matching journal can fill
+  only holdings that broker history cannot prove; it never overwrites a risk
+  state already reconstructed from broker evidence. If neither source proves a
+  holding, that holding remains unverified and exposure cannot increase.
+- State journal writes run after the 09:35 and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
-  restored before broker order reconciliation and position verification.
-- After reconciliation, one `[状态恢复汇总]` checkpoint line and one line per
+  broker-validated before it can supply intraday continuity or old-position fallback.
+- After reconciliation, one `[状态恢复汇总]` source line and one line per
   held ETF report quantity, broker cost, buy date, entry ATR, highest close,
   `已验证`/`未验证` status, and evidence source. Displayed sources include
-  `检查点-a`, `检查点-b`, `legacy`, `PTrade持久状态`, `当前策略成交`,
+  `状态台账`, `PTrade持久状态`, `当前策略成交`,
   `账户接管:交割单`, and `未验证`.
 - An unverified holding continues to block its own automatic ATR and signal
   exits. In addition, all new buys are blocked while any currently held ETF is
@@ -279,15 +282,16 @@ python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --
    the `[买入]` submission log; both `有效=True` and `有效=False` must leave
    the submitted quantity unchanged.
 4. In Guojin simulation, restart the strategy after 09:35 and before 10:35.
-   Verify that a `[状态恢复汇总]` checkpoint line identifies the selected
-   slot and generation, and every held ETF is listed with the expected source
+   Verify that a `[状态恢复汇总]` line identifies the journal generation, and
+   every held ETF is listed with the expected source
    and `已验证` status. Confirm that `execution_date`, deferred state, buy
    dates, entry ATR values, and trailing highs are unchanged.
-5. In simulation only, back up and then truncate the newest A/B slot. Restart
-   and verify that the log selects the older valid generation. Never perform
-   this drill on the live checkpoint files. A checksum/schema error or any
+5. In simulation only, back up and then append a truncated tail to the journal.
+   Restart and verify that the last complete generation is selected and the
+   next save removes only the truncated tail. Never perform this drill on the
+   live journal. A checksum/schema error or any
    `未验证` line requires operator review before enabling live capital.
-6. After a filled same-day simulation buy, make both A/B slots unavailable and
+6. After a filled same-day simulation buy, make the journal unavailable and
    restart. Verify that `get_trades()` reconstructs the exact fill
    price/date/ATR and that new buys remain blocked until every existing holding
    is verified. Separately test first-start account takeover after stopping the
