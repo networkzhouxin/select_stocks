@@ -54,6 +54,10 @@ def make_g(**overrides):
         "execution_date": None,
         "deferred_scores": [],
         "deferred_signal_date": None,
+        "live_state_schema_version": None,
+        "live_state_business_fingerprint": None,
+        "live_state_generation": None,
+        "live_state_broker_positions": None,
         "state_instance_id": "test-instance-default",
         "__last_snapshot": {},
         "__pending_orders": {},
@@ -112,7 +116,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.2"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -459,6 +463,90 @@ def test_state_journal_restores_state_when_broker_position_is_unchanged(tmp_path
     assert pt.g.buy_date == {"513100.SS": buy_date}
 
 
+def test_persisted_g_state_is_accepted_when_broker_position_is_unchanged():
+    code = "513100.SS"
+    buy_date = date(2026, 7, 10)
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 1.2},
+        entry_atr={code: 0.05},
+        buy_date={code: buy_date},
+        live_state_schema_version=pt.LIVE_STATE_SCHEMA_VERSION,
+        live_state_business_fingerprint=pt.business_config_fingerprint(),
+        live_state_generation=7,
+        live_state_broker_positions={
+            code: {"amount": 500.0, "cost": 1.0},
+        },
+    )
+
+    generation, state = pt._load_persisted_g_state(context)
+
+    assert generation == 7
+    assert state["buy_date"] == {code: buy_date}
+    assert state["entry_atr"] == {code: 0.05}
+    assert state["highest_since_buy"] == {code: 1.2}
+
+
+@pytest.mark.parametrize(
+    ("current_amount", "current_cost"),
+    [(600, 1.0), (500, 1.01)],
+)
+def test_persisted_g_state_is_rejected_when_broker_position_changed(
+    current_amount, current_cost
+):
+    code = "513100.SS"
+    position = types.SimpleNamespace(
+        amount=current_amount, cost_basis=current_cost, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 1.2},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+        live_state_schema_version=pt.LIVE_STATE_SCHEMA_VERSION,
+        live_state_business_fingerprint=pt.business_config_fingerprint(),
+        live_state_generation=7,
+        live_state_broker_positions={
+            code: {"amount": 500.0, "cost": 1.0},
+        },
+    )
+
+    assert pt._load_persisted_g_state(context) is None
+
+
+def test_persist_live_state_records_broker_bound_g_metadata(tmp_path):
+    code = "513100.SS"
+    state_path = tmp_path / "cross-signal-state.journal"
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={code: position}))
+    pt.g = make_g(
+        highest_since_buy={code: 1.2},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+    )
+
+    assert pt._persist_live_state(context, path=state_path) is True
+
+    assert pt.g.live_state_schema_version == pt.LIVE_STATE_SCHEMA_VERSION
+    assert (
+        pt.g.live_state_business_fingerprint ==
+        pt.business_config_fingerprint()
+    )
+    assert pt.g.live_state_generation == 1
+    assert pt.g.live_state_broker_positions == {
+        code: {"amount": 500.0, "cost": 1.0},
+    }
+
+
 def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch, tmp_path):
     user_name_calls = []
 
@@ -589,6 +677,122 @@ def test_live_state_io_uses_initialize_cached_path(monkeypatch, tmp_path):
     pt.g.highest_since_buy = {"513100.SS": 9.9}
     assert pt._restore_live_state() is True
     assert pt.g.highest_since_buy == {}
+
+
+def test_before_trading_prefers_valid_persisted_g_over_broker_history(
+    monkeypatch, tmp_path
+):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    buy_date = date(2026, 7, 10)
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 1.2},
+        entry_atr={code: 0.05},
+        buy_date={code: buy_date},
+        execution_date=today,
+        __state_path=str(tmp_path / "missing-state.journal"),
+        live_state_schema_version=pt.LIVE_STATE_SCHEMA_VERSION,
+        live_state_business_fingerprint=pt.business_config_fingerprint(),
+        live_state_generation=7,
+        live_state_broker_positions={
+            code: {"amount": 500.0, "cost": 1.0},
+        },
+    )
+    calls = []
+    monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: None)
+    monkeypatch.setattr(
+        pt, "_reconcile_open_orders", lambda context: calls.append("orders") or True
+    )
+    monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("valid persisted g must not query broker history")
+        ),
+    )
+    original_recover = pt.recover_live_state
+
+    def validate(context, *args, **kwargs):
+        calls.append("validate")
+        return original_recover(context, *args, **kwargs)
+
+    monkeypatch.setattr(pt, "recover_live_state", validate)
+    monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.before_trading_start(context, data=None)
+
+    assert calls == ["orders", "validate"]
+    assert pt.g.buy_date == {code: buy_date}
+    assert pt.g.entry_atr == {code: 0.05}
+    assert pt.g.highest_since_buy == {code: 1.2}
+    assert pt.g.unverified_positions == set()
+    assert pt.g.__state_restore_source == "ptrade-g"
+    assert pt.g.__position_recovery_source == {code: "ptrade-g"}
+
+
+def test_before_trading_rejects_persisted_g_when_matching_journal_is_newer(
+    monkeypatch, tmp_path
+):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 1.2},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+        execution_date=today,
+        __state_path=str(tmp_path / "state.journal"),
+        live_state_schema_version=pt.LIVE_STATE_SCHEMA_VERSION,
+        live_state_business_fingerprint=pt.business_config_fingerprint(),
+        live_state_generation=7,
+        live_state_broker_positions={
+            code: {"amount": 500.0, "cost": 1.0},
+        },
+    )
+    journal_state = {
+        field: getattr(pt.g, field) for field in pt.LIVE_STATE_FIELDS
+    }
+    journal_state["highest_since_buy"] = {code: 1.4}
+    journal_state["entry_atr"] = {code: 0.06}
+    calls = []
+
+    def load_journal(context):
+        pt.g.__state_restore_source = "journal"
+        pt.g.__state_restore_generation = 8
+        return journal_state
+
+    def broker_recovery(context, allow_deliver):
+        calls.append("broker")
+        pt.g.unverified_positions = {code}
+        pt.g.__position_recovery_source = {code: "unverified"}
+
+    monkeypatch.setattr(pt, "_load_live_state", load_journal)
+    monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: None)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources", broker_recovery)
+    monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.before_trading_start(context, data=None)
+
+    assert calls == ["broker"]
+    assert pt.g.highest_since_buy == {code: 1.4}
+    assert pt.g.entry_atr == {code: 0.06}
+    assert pt.g.__state_restore_source == "journal"
+    assert pt.g.__state_restore_generation == 8
 
 
 def test_before_trading_recovers_broker_before_journal_risk_fallback(
@@ -3542,7 +3746,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.1" in notes
+    assert "20260720.2" in notes
     assert "1506a0e834fe" in notes
 
 
@@ -3557,7 +3761,8 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "single append-only journal" in deployment
     assert "state-schema version" in deployment
     assert "broker position snapshot" in deployment
-    assert "broker evidence is attempted first" in deployment
+    assert "validated PTrade-persisted `g` state is attempted first" in deployment
+    assert "newer matching journal" in deployment
     assert "truncated tail" in deployment
     assert "all new buys are blocked" in deployment
     assert "[状态恢复汇总]" in deployment
@@ -3571,3 +3776,4 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "Harden Cross-Signal Live Engineering Without Changing Business Rules" in decisions
     assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions
     assert "Replace A/B Checkpoints With Broker-First State Journal" in decisions
+    assert "Prefer Broker-Validated PTrade G State On Restart" in decisions

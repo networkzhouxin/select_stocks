@@ -19,7 +19,7 @@ from datetime import datetime
 # 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.1"
+DEPLOYMENT_BUILD_ID = "20260720.2"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
@@ -239,6 +239,61 @@ def _broker_position_snapshots_match(recorded, current):
     return True
 
 
+def _load_persisted_g_state(context):
+    """读取并验证 PTrade 框架自动恢复的普通 g 状态。"""
+    schema_version = getattr(g, "live_state_schema_version", None)
+    fingerprint = getattr(g, "live_state_business_fingerprint", None)
+    generation = getattr(g, "live_state_generation", None)
+    recorded_positions = getattr(g, "live_state_broker_positions", None)
+    metadata = (schema_version, fingerprint, generation, recorded_positions)
+    if all(value is None for value in metadata):
+        return None
+    try:
+        if schema_version != LIVE_STATE_SCHEMA_VERSION:
+            raise ValueError("state schema mismatch")
+        if fingerprint != business_config_fingerprint():
+            raise ValueError("business fingerprint mismatch")
+        if not isinstance(generation, int) or generation <= 0:
+            raise ValueError("invalid state generation")
+        state = _validated_live_state({
+            field: getattr(g, field, None)
+            for field in LIVE_STATE_FIELDS
+        })
+        current_positions = _broker_position_snapshot(context)
+        if not _broker_position_snapshots_match(
+                recorded_positions, current_positions):
+            raise ValueError("broker position snapshot mismatch")
+
+        buy_dates = _normalized_state_mapping(state["buy_date"])
+        entry_atr = _normalized_state_mapping(state["entry_atr"])
+        highest = _normalized_state_mapping(state["highest_since_buy"])
+        unverified = set(
+            normalize_code(code) for code in state["unverified_positions"])
+        today = _as_date(get_context_datetime(context))
+        for code in current_positions:
+            buy_date = _as_date(buy_dates.get(code))
+            if (
+                code in unverified or
+                buy_date is None or
+                (today is not None and buy_date > today) or
+                not _is_positive_finite(entry_atr.get(code)) or
+                not _is_positive_finite(highest.get(code))
+            ):
+                raise ValueError("incomplete position risk state: %s" % code)
+        return generation, state
+    except Exception as exc:
+        log.warning("[PTrade持久状态] 校验失败，已拒绝恢复: %s" % exc)
+        return None
+
+
+def _record_persisted_g_state(state, generation, broker_positions):
+    g.live_state_schema_version = LIVE_STATE_SCHEMA_VERSION
+    g.live_state_business_fingerprint = business_config_fingerprint()
+    g.live_state_generation = int(generation)
+    g.live_state_broker_positions = _validated_broker_position_snapshot(
+        broker_positions)
+
+
 def _encode_live_state_envelope(state, generation, broker_positions=None):
     generation = int(generation)
     if generation <= 0:
@@ -344,24 +399,35 @@ def _read_live_state_journal(state_path):
 
 def _persist_live_state(context=None, path=None):
     state_path = _cached_live_state_path(path)
-    if state_path is None:
-        return False
     state = {
         field: getattr(g, field, None)
         for field in LIVE_STATE_FIELDS
     }
     try:
-        records, last_complete_offset, tail_damaged = (
-            _scan_live_state_journal(state_path))
+        validated_state = _validated_live_state(state)
+        broker_positions = _broker_position_snapshot(context)
+        records = []
+        last_complete_offset = 0
+        tail_damaged = False
+        if state_path is not None:
+            records, last_complete_offset, tail_damaged = (
+                _scan_live_state_journal(state_path))
+        persisted_generation = getattr(g, "live_state_generation", 0)
+        if not isinstance(persisted_generation, int) or persisted_generation < 0:
+            persisted_generation = 0
+        generation = max(
+            [persisted_generation] + [item[0] for item in records]
+        ) + 1
+        envelope = _encode_live_state_envelope(
+            validated_state, generation, broker_positions)
+        _record_persisted_g_state(
+            validated_state, generation, broker_positions)
+        if state_path is None:
+            return True
         if tail_damaged:
             with open(state_path, "r+b") as handle:
                 handle.truncate(last_complete_offset)
             log.warning("[状态台账] 已移除不完整尾部，继续追加新记录")
-        generation = max(
-            (item[0] for item in records), default=0
-        ) + 1
-        envelope = _encode_live_state_envelope(
-            state, generation, _broker_position_snapshot(context))
         with open(state_path, "ab") as handle:
             pickle.dump(
                 envelope, handle, protocol=LIVE_STATE_PICKLE_PROTOCOL)
@@ -446,6 +512,17 @@ def _restore_live_state_continuity(state):
         "deferred_signal_date",
     ):
         setattr(g, field, state[field])
+
+
+def _restore_persisted_g_risk_state(context, state):
+    state = _validated_live_state(state)
+    g.highest_since_buy = dict(state["highest_since_buy"])
+    g.entry_atr = dict(state["entry_atr"])
+    g.buy_date = dict(state["buy_date"])
+    g.unverified_positions = set(state["unverified_positions"])
+    g.__position_recovery_source = {
+        code: "ptrade-g" for code in current_hold_codes(context)
+    }
 
 
 def _clear_live_risk_state_for_broker_recovery():
@@ -744,6 +821,11 @@ def initialize(context):
     g.execution_date = None
     g.deferred_scores = []
     g.deferred_signal_date = None
+    # 普通 g 字段由 PTrade 框架自动持久化；盘前必须与券商持仓重新核验后才能使用。
+    g.live_state_schema_version = None
+    g.live_state_business_fingerprint = None
+    g.live_state_generation = None
+    g.live_state_broker_positions = None
     g.__last_snapshot = {}
     g.__pending_orders = {}
     g.__pending_sells = {}
@@ -796,14 +878,32 @@ def before_trading_start(context, data):
     g.__last_snapshot = {}
     startup_recovery = bool(
         g.__is_live and not getattr(g, "__startup_recovery_done", False))
+    persisted_g_state = None
+    use_persisted_g = False
     journal_state = None
     if g.__is_live:
         if _cached_live_state_path() is None:
             g.__state_path = _live_state_path()
         if startup_recovery:
+            persisted_g_candidate = _load_persisted_g_state(context)
             journal_state = _load_live_state(context)
-            if journal_state is not None:
-                _restore_live_state_continuity(journal_state)
+            if persisted_g_candidate is not None:
+                persisted_g_generation, persisted_g_state = persisted_g_candidate
+                journal_generation = getattr(
+                    g, "__state_restore_generation", None)
+                journal_is_newer = (
+                    journal_state is not None and
+                    isinstance(journal_generation, int) and
+                    journal_generation > persisted_g_generation
+                )
+                if not journal_is_newer:
+                    use_persisted_g = True
+                    g.__state_restore_source = "ptrade-g"
+                    g.__state_restore_generation = persisted_g_generation
+            continuity_state = (
+                persisted_g_state if use_persisted_g else journal_state)
+            if continuity_state is not None:
+                _restore_live_state_continuity(continuity_state)
     _lock_frozen_business_config()
     today = _as_date(get_context_datetime(context))
     if today is None:
@@ -819,12 +919,18 @@ def before_trading_start(context, data):
         g.deferred_signal_date = None
     if g.__is_live:
         if startup_recovery:
-            _clear_live_risk_state_for_broker_recovery()
+            if use_persisted_g:
+                _restore_persisted_g_risk_state(context, persisted_g_state)
+            else:
+                _clear_live_risk_state_for_broker_recovery()
         _reconcile_open_orders(context)
-        _recover_live_state_with_available_sources(context, allow_deliver=True)
-        if startup_recovery and journal_state is not None:
-            _restore_live_state_risk_fallback(context, journal_state)
+        if startup_recovery and use_persisted_g:
             recover_live_state(context)
+        else:
+            _recover_live_state_with_available_sources(context, allow_deliver=True)
+            if startup_recovery and journal_state is not None:
+                _restore_live_state_risk_fallback(context, journal_state)
+                recover_live_state(context)
         g.__startup_recovery_done = True
         _log_live_recovery_summary(context)
     else:

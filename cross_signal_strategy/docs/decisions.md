@@ -983,3 +983,15 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Business boundary: Signal calculations, indicators, thresholds, ETF pool, ranking, position sizing, 09:35/10:35 schedule, stop rules, and JoinQuant performance behavior are unchanged. The production multi-factor strategy is untouched.
 - Test-first evidence: Failing tests were added for restart-stable path identity, one-file journal generations, broker-snapshot accept/reject behavior, broker-first ordering, journal-only old-position fallback, sell-retry persistence, and truncated-tail repair before each implementation change.
 - Status: adopted as a live-engineering milestone pending one PTrade simulation restart log for build `20260720.1`.
+
+### Prefer Broker-Validated PTrade G State On Restart
+
+- Date: 2026-07-20.
+- Decision: Release deployment build `20260720.2` with the `cross-v0.3.2` business configuration unchanged. On a restart of the same PTrade strategy, first consider the framework-restored ordinary `g` state before querying delivery history.
+- Acceptance contract: `g` is usable only when its state schema, business fingerprint, positive generation, complete buy-date/ATR/highest-close fields, and recorded normalized code/quantity/cost snapshot all match current broker holdings. Current broker positions remain the source of truth; `g` is only a broker-bound cache of derived strategy state.
+- Freshness contract: The explicit journal and `g` share monotonically increasing generations. When a matching journal has a higher generation, reject the older `g` state and continue through broker reconstruction plus journal fallback. This prevents a stale highest close, ATR, sell retry, or deferred state from replacing a fresher record.
+- Fallback contract: Missing, malformed, mismatched, incomplete, or future-dated `g` state does not block the existing recovery chain. The strategy clears untrusted risk fields, queries current trades and delivery records, uses a matching journal only for remaining gaps, and leaves unproved holdings `UNVERIFIED`.
+- Deployment boundary: PTrade persists ordinary `g` fields only for the same strategy record. A newly created independent strategy does not inherit the stopped strategy's `g`; account delivery evidence and an identity-compatible journal remain necessary for that handover case.
+- Test-first evidence: Focused tests failed before implementation for missing `g` validation, missing broker-bound metadata, unwanted delivery-history queries despite valid `g`, changed-position rejection, and newer-journal precedence. The PTrade test file passed after the minimal implementation.
+- Business boundary: No indicator, signal, threshold, ETF pool, ranking, position size, execution time, stop rule, or JoinQuant performance behavior changed. No market data or validation-period result was read, and the production multi-factor strategy was not modified.
+- Status: adopted as a live-engineering reliability milestone pending one same-strategy PTrade restart log for build `20260720.2`.

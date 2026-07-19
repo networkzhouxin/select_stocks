@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260720.1 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260720.2 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -187,12 +187,16 @@ of the requested time. That result must not be compared with the JoinQuant
   closed instead of using a shared filename. PTrade rejects `get_trade_name()`
   during `initialize`, so the path is resolved and cached at the start of
   `before_trading_start`, before journal inspection and broker reconciliation.
-- On each process start, broker evidence is attempted first for risk state:
-  current-strategy fills cover T-day trades, while account delivery records and
-  current broker positions rebuild older holdings. A matching journal can fill
-  only holdings that broker history cannot prove; it never overwrites a risk
-  state already reconstructed from broker evidence. If neither source proves a
-  holding, that holding remains unverified and exposure cannot increase.
+- On each process start, validated PTrade-persisted `g` state is attempted first.
+  It is accepted only when its state schema, business fingerprint, generation,
+  complete per-position risk fields, and recorded code/quantity/cost snapshot
+  match current broker holdings. Current broker positions remain the source of
+  truth. A valid `g` state avoids an unnecessary delivery-history query; any
+  mismatch falls back to current-strategy fills, delivery records, and broker
+  reconstruction. If a newer matching journal exists, the older `g` state is
+  rejected so a stale highest close or ATR cannot replace fresher state. The
+  journal may fill only holdings that broker history cannot prove. If no source
+  proves a holding, it remains unverified and exposure cannot increase.
 - State journal writes run after the 09:35 and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   broker-validated before it can supply intraday continuity or old-position fallback.
