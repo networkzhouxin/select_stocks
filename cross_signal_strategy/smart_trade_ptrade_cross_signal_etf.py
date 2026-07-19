@@ -19,7 +19,7 @@ from datetime import datetime
 # 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.2"
+DEPLOYMENT_BUILD_ID = "20260720.3"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
@@ -774,6 +774,8 @@ def _format_recovery_source_for_log(source):
         "get-trades": "当前策略成交",
         "get-deliver": "交割单",
         "journal": "状态台账",
+        "mixed": "混合恢复",
+        "no-position": "无持仓",
         "unverified": "未验证",
         "ptrade-g": "PTrade持久状态",
     }.get(text, text or "无")
@@ -3121,10 +3123,38 @@ def recover_live_state(
             )
 
 
+def _recovery_summary_source(context):
+    """按逐仓实际来源生成汇总标签，避免把交割单接管误报为持久状态。"""
+    source_map = getattr(g, "__position_recovery_source", {})
+    if not isinstance(source_map, dict):
+        source_map = {}
+    fallback = getattr(g, "__state_restore_source", None)
+    sources = []
+    held = sorted(current_hold_codes(context))
+    for code in held:
+        source = source_map.get(code)
+        if not source and code in set(getattr(g, "unverified_positions", set())):
+            source = "unverified"
+        if not source:
+            source = fallback
+        if source:
+            sources.append(str(source))
+    if not held:
+        return fallback or "no-position"
+    unique_sources = set(sources)
+    if len(unique_sources) == 1 and len(sources) == len(held):
+        return sources[0]
+    return "mixed"
+
+
 def _log_live_recovery_summary(context):
-    source = getattr(g, "__state_restore_source", None) or "ptrade-g"
+    source = _recovery_summary_source(context)
     generation = getattr(g, "__state_restore_generation", None)
-    generation_text = generation if generation is not None else "无"
+    generation_text = (
+        generation
+        if isinstance(generation, int) and generation > 0
+        else "不适用"
+    )
     log.info("[状态恢复汇总] 恢复来源=%s 代次=%s" % (
         _format_recovery_source_for_log(source), generation_text))
 

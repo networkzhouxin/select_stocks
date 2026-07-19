@@ -116,7 +116,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.2"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.3"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3492,6 +3492,80 @@ def test_live_recovery_summary_logs_state_journal_and_each_holding(monkeypatch):
     assert "来源=状态台账" in holding
 
 
+def test_live_recovery_summary_reports_delivery_takeover_source(monkeypatch):
+    position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position})
+    )
+    pt.g = make_g(
+        buy_date={"513100.SS": date(2026, 3, 3)},
+        entry_atr={"513100.SS": 0.05},
+        highest_since_buy={"513100.SS": 1.35},
+        __position_recovery_source={
+            "513100.SS": "account-takeover:get-deliver",
+        },
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message % args if args else message),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+
+    pt._log_live_recovery_summary(context)
+
+    assert any(
+        "恢复来源=账户接管:交割单 代次=不适用" in message
+        for message in messages
+    )
+
+
+def test_live_recovery_summary_reports_mixed_position_sources(monkeypatch):
+    positions = {
+        "513100.SS": types.SimpleNamespace(
+            amount=400, cost_basis=1.18, last_sale_price=1.28),
+        "518880.SS": types.SimpleNamespace(
+            amount=200, cost_basis=4.68, last_sale_price=4.72),
+    }
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions=positions)
+    )
+    pt.g = make_g(
+        buy_date={
+            "513100.SS": date(2026, 3, 3),
+            "518880.SS": date(2026, 3, 4),
+        },
+        entry_atr={"513100.SS": 0.05, "518880.SS": 0.08},
+        highest_since_buy={"513100.SS": 1.35, "518880.SS": 4.90},
+        __state_restore_generation=9,
+        __position_recovery_source={
+            "513100.SS": "ptrade-g",
+            "518880.SS": "account-takeover:get-deliver",
+        },
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(message % args if args else message),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+
+    pt._log_live_recovery_summary(context)
+
+    assert any(
+        "恢复来源=混合恢复 代次=9" in message
+        for message in messages
+    )
+
+
 @pytest.mark.parametrize(
     ("allow_deliver", "expected_calls"),
     [(True, ["current", "deliver", "recover"]), (False, ["current", "recover"])],
@@ -3746,7 +3820,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.2" in notes
+    assert "20260720.3" in notes
     assert "1506a0e834fe" in notes
 
 

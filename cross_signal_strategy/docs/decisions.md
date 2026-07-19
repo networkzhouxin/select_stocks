@@ -995,3 +995,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Test-first evidence: Focused tests failed before implementation for missing `g` validation, missing broker-bound metadata, unwanted delivery-history queries despite valid `g`, changed-position rejection, and newer-journal precedence. The PTrade test file passed after the minimal implementation.
 - Business boundary: No indicator, signal, threshold, ETF pool, ranking, position size, execution time, stop rule, or JoinQuant performance behavior changed. No market data or validation-period result was read, and the production multi-factor strategy was not modified.
 - Status: adopted as a live-engineering reliability milestone pending one same-strategy PTrade restart log for build `20260720.2`.
+
+### Report The Actual PTrade Recovery Source
+
+- Date: 2026-07-20.
+- Decision: Release deployment build `20260720.3` without changing the frozen `cross-v0.3.2` business configuration. Derive the recovery-summary source from each current holding's verified source instead of defaulting an absent overall source to `ptrade-g`.
+- Reason: A newly created PTrade strategy correctly reconstructed all holdings from delivery records, but the overall summary incorrectly displayed `PTrade持久状态` with no generation. Per-position logs were correct; the aggregate label was misleading during a high-risk recovery audit.
+- Source contract: If all held positions share one source, report that source. If held positions use different sources, report `混合恢复`. If there are no positions and no restored state, report `无持仓`. A missing or invalid persistent-state generation is rendered as `不适用`.
+- Test-first evidence: Failing tests first reproduced both the all-delivery mislabel and a mixed-source case. Existing journal-source coverage remains in force.
+- Business boundary: No indicator, signal, threshold, ETF pool, ranking, position size, execution time, order behavior, stop rule, recovery calculation, or JoinQuant performance behavior changed. Business fingerprint remains `1506a0e834fe`; the production multi-factor strategy is untouched.
