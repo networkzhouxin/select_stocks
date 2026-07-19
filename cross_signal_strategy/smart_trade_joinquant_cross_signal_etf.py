@@ -466,6 +466,8 @@ def has_signal_sell_confirmation(snapshot):
 
 
 def _date_key(value):
+    if isinstance(value, np.str_):
+        value = str(value)
     return pd.Timestamp(value).strftime("%Y-%m-%d")
 
 

@@ -1171,6 +1171,27 @@ def test_signal_sell_requires_verified_trading_calendar_for_five_day_hold():
     )
 
 
+def test_signal_sell_accepts_ptrade_unicode_ndarray_calendar():
+    trade_days = pt.np.array(
+        [
+            "2026-07-10",
+            "2026-07-13",
+            "2026-07-14",
+            "2026-07-15",
+            "2026-07-16",
+            "2026-07-17",
+        ],
+        dtype="<U10",
+    )
+
+    assert pt.can_sell_with_verified_calendar(
+        date(2026, 7, 10),
+        date(2026, 7, 17),
+        min_hold_days=5,
+        trade_days=trade_days,
+    )
+
+
 def test_daily_signal_loader_uses_pre_adjusted_data_ending_at_t_minus_one(monkeypatch):
     captured = {}
 
