@@ -11,6 +11,7 @@ import pandas as pd
 import builtins as _builtins
 import hashlib
 import pickle
+import uuid
 from datetime import datetime
 
 
@@ -160,6 +161,11 @@ def _live_state_path(path=None):
             log.error("[状态] 接口%s返回空值，检查点已停用" % getter_name)
             return None
         identity.append(str(value))
+    instance_id = getattr(g, "state_instance_id", None)
+    if not isinstance(instance_id, str) or not instance_id.strip():
+        log.error("[状态] 策略实例标识无效，检查点已停用")
+        return None
+    identity.append(instance_id.strip())
     identity_text = "|".join(identity)
     identity_hash = hashlib.sha256(identity_text.encode("utf-8")).hexdigest()[:12]
     root_text = str(root).rstrip("/\\")
@@ -603,6 +609,8 @@ def initialize(context):
     g.execution_date = None
     g.deferred_scores = []
     g.deferred_signal_date = None
+    # 非私有变量由 PTrade 持久化：同一策略重启沿用，新建策略实例重新生成。
+    g.state_instance_id = uuid.uuid4().hex
     g.__last_snapshot = {}
     g.__pending_orders = {}
     g.__pending_sells = {}

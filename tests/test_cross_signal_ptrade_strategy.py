@@ -54,6 +54,7 @@ def make_g(**overrides):
         "execution_date": None,
         "deferred_scores": [],
         "deferred_signal_date": None,
+        "state_instance_id": "test-instance-default",
         "__last_snapshot": {},
         "__pending_orders": {},
         "__pending_sells": {},
@@ -431,6 +432,23 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
     } == {str(tmp_path)}
     assert "account-a" not in simulation_path
     assert user_name_calls == [False, False]
+
+
+def test_automatic_live_state_path_is_isolated_by_ptrade_strategy_instance(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        pt, "get_user_name", lambda real_trade: "account-a", raising=False
+    )
+    monkeypatch.setattr(pt, "get_trade_name", lambda: "cross-signal", raising=False)
+
+    pt.g = make_g(state_instance_id="strategy-instance-a")
+    first_path = pt._live_state_path()
+    pt.g = make_g(state_instance_id="strategy-instance-b")
+    second_path = pt._live_state_path()
+
+    assert first_path != second_path
 
 
 def test_automatic_live_state_path_fails_closed_without_instance_identity(
@@ -3193,6 +3211,7 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
     assert state_path_calls == []
     assert pt.g.__state_path is None
     assert pt.g.__mode_verified is True
+    assert re.fullmatch(r"[0-9a-f]{32}", pt.g.state_instance_id)
 
 
 def test_initialize_backtest_uses_only_backtest_cost_configuration(monkeypatch):
