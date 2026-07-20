@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260720.6 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260720.7 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -72,8 +72,12 @@ of the requested time. That result must not be compared with the JoinQuant
   the entire response instead of allowing an unbounded history window.
 - The current-day snapshot price is used only for execution and ATR-stop
   evaluation. It never enters the T-1 signal calculation.
-- In live mode, `hsTimeStamp` must be parseable and have the same calendar date as the running process. A missing, malformed, or prior-session snapshot
-  fails closed before its price can be used for an order or ATR comparison.
+- In live mode, `hsTimeStamp` must be parseable to the second, belong to the
+  same calendar date as the running process, not be later than the process
+  clock, and be no more than 300 seconds old. A missing, malformed, future,
+  prior-session, or older snapshot fails closed before its price can be used
+  for an order or ATR comparison. This is an execution-data safety boundary,
+  not a signal factor.
 - If both PTrade trading-calendar APIs fail, the strategy submits no orders. It
   never guesses the previous trading day from weekdays.
 - If the separate minimum-hold calendar query fails, normal signal sells are
@@ -84,6 +88,10 @@ of the requested time. That result must not be compared with the JoinQuant
 
 - ETF codes from callbacks are normalized to `.SS` or `.SZ`.
 - Buy and sell partial fills are accumulated from `on_trade_response`.
+- A non-empty official `business_id` is recorded inside its matching pending
+  order. A repeated push with the same成交编号 is ignored, so one broker fill
+  cannot be accumulated twice. Callbacks without `business_id` retain the
+  existing conservative order-ID matching path.
 - Every submitted order must return a PTrade order ID. A `None` result is a
   submission failure and never creates a pending guard. Callbacks are applied
   only when their `order_id` matches the current pending order for that ETF.
@@ -203,6 +211,12 @@ of the requested time. That result must not be compared with the JoinQuant
 - State journal writes run after the 09:35 and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   broker-validated before it can supply intraday continuity or old-position fallback.
+- After one complete scan, the process caches only the verified journal tail:
+  path, file length, latest generation, and payload digest. An unchanged state
+  and broker snapshot does not append another record or increase the
+  generation. A changed state appends from the cached tail without rescanning
+  the full file. Any externally changed length or incomplete tail invalidates
+  the cache and reopens the full validation-and-repair path.
 - 恢复日志分成三个独立维度：`[PTrade框架g]` 说明普通 `g` 是否未提供、
   已接受、已拒绝或因台账更新而未采用；`[连续状态恢复]` 说明日内连续状态
   来自 `状态台账`、`PTrade持久状态` 还是无可用来源，并单独显示代次；

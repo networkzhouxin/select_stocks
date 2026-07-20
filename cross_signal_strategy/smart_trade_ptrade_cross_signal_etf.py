@@ -19,9 +19,10 @@ from datetime import datetime
 # 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.6"
+DEPLOYMENT_BUILD_ID = "20260720.7"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
+LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
     "513500.SS",
@@ -472,6 +473,48 @@ def _read_live_state_journal(state_path):
     return records
 
 
+def _live_state_payload_digest(state, broker_positions):
+    envelope = _encode_live_state_envelope(
+        state, generation=1, broker_positions=broker_positions)
+    return hashlib.sha256(envelope["payload"]).hexdigest()
+
+
+def _journal_file_size(state_path):
+    try:
+        with open(state_path, "rb") as handle:
+            handle.seek(0, 2)
+            return handle.tell()
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        return None
+
+
+def _cache_journal_tail(
+    state_path, generation, state, broker_positions, file_size
+):
+    g.__state_journal_cache = {
+        "path": str(state_path),
+        "generation": int(generation),
+        "payload_digest": (
+            _live_state_payload_digest(state, broker_positions)
+            if generation > 0 and state is not None
+            else None
+        ),
+        "file_size": int(file_size),
+    }
+
+
+def _cached_journal_tail(state_path):
+    cache = getattr(g, "__state_journal_cache", None)
+    if not isinstance(cache, dict) or cache.get("path") != str(state_path):
+        return None
+    current_size = _journal_file_size(state_path)
+    if current_size is None or current_size != cache.get("file_size"):
+        return None
+    return cache
+
+
 def _persist_live_state(context=None, path=None):
     state_path = _cached_live_state_path(path)
     state = {
@@ -481,18 +524,50 @@ def _persist_live_state(context=None, path=None):
     try:
         validated_state = _validated_live_state(state)
         broker_positions = _broker_position_snapshot(context)
-        records = []
+        latest_generation = 0
+        latest_state = None
+        latest_broker_positions = None
+        latest_payload_digest = None
         last_complete_offset = 0
         tail_damaged = False
         if state_path is not None:
-            records, last_complete_offset, tail_damaged = (
-                _scan_live_state_journal(state_path))
+            cache = _cached_journal_tail(state_path)
+            if cache is not None:
+                latest_generation = cache["generation"]
+                latest_payload_digest = cache["payload_digest"]
+                last_complete_offset = cache["file_size"]
+            else:
+                records, last_complete_offset, tail_damaged = (
+                    _scan_live_state_journal(state_path))
+                if records:
+                    latest_generation, latest_state, latest_broker_positions = max(
+                        records, key=lambda item: item[0])
+                    latest_payload_digest = _live_state_payload_digest(
+                        latest_state, latest_broker_positions)
+                if not tail_damaged:
+                    _cache_journal_tail(
+                        state_path,
+                        latest_generation,
+                        latest_state,
+                        latest_broker_positions,
+                        last_complete_offset,
+                    )
         persisted_generation = getattr(g, "live_state_generation", 0)
         if not isinstance(persisted_generation, int) or persisted_generation < 0:
             persisted_generation = 0
-        generation = max(
-            [persisted_generation] + [item[0] for item in records]
-        ) + 1
+        current_payload_digest = _live_state_payload_digest(
+            validated_state, broker_positions)
+        if (
+            state_path is not None and
+            not tail_damaged and
+            latest_generation > 0 and
+            latest_generation >= persisted_generation and
+            latest_payload_digest == current_payload_digest
+        ):
+            _record_persisted_g_state(
+                validated_state, latest_generation, broker_positions)
+            return True
+        generation = max(persisted_generation, latest_generation) + 1
         envelope = _encode_live_state_envelope(
             validated_state, generation, broker_positions)
         _record_persisted_g_state(
@@ -506,6 +581,14 @@ def _persist_live_state(context=None, path=None):
         with open(state_path, "ab") as handle:
             pickle.dump(
                 envelope, handle, protocol=LIVE_STATE_PICKLE_PROTOCOL)
+            last_complete_offset = handle.tell()
+        _cache_journal_tail(
+            state_path,
+            generation,
+            validated_state,
+            broker_positions,
+            last_complete_offset,
+        )
         return True
     except Exception as exc:
         log.error("[状态] 保存失败: %s" % _format_state_error_for_log(exc))
@@ -551,11 +634,20 @@ def _load_live_state(context=None, path=None):
         return None
     g.__state_restore_source = None
     g.__state_restore_generation = None
-    records = _read_live_state_journal(state_path)
+    records, last_complete_offset, tail_damaged = (
+        _scan_live_state_journal(state_path))
     if not records:
         return None
     generation, state, recorded_positions = max(
         records, key=lambda item: item[0])
+    if not tail_damaged:
+        _cache_journal_tail(
+            state_path,
+            generation,
+            state,
+            recorded_positions,
+            last_complete_offset,
+        )
     current_positions = _broker_position_snapshot(context)
     if not _broker_position_snapshots_match(
             recorded_positions, current_positions):
@@ -959,6 +1051,7 @@ def initialize(context):
     g.__mode_verified = mode_verified
     # initialize 阶段不允许调用 get_trade_name；实例隔离的检查点路径延后到盘前阶段解析。
     g.__state_path = None
+    g.__state_journal_cache = None
     g.__state_restore_source = None
     g.__state_restore_generation = None
     g.__persisted_g_status = None
@@ -2131,16 +2224,34 @@ def get_current_price(code):
     if getattr(g, "__is_live", False):
         try:
             snapshot = _snapshot_record(get_snapshot(code), code)
+            observed_at = datetime.now()
+            raw_timestamp = snapshot.get("hsTimeStamp") if snapshot else None
             snapshot_date = _snapshot_session_date(
-                snapshot.get("hsTimeStamp") if snapshot else None)
-            current_date = datetime.now().date()
+                raw_timestamp)
+            current_date = observed_at.date()
             if snapshot_date != current_date:
                 log.warning(
                     "[行情快照] %s时间戳不是当前交易日，已拒绝使用: %s" % (
                         code,
-                        snapshot.get("hsTimeStamp") if snapshot else None,
+                        raw_timestamp,
                     )
                 )
+                return None
+            snapshot_age = _snapshot_age_seconds(raw_timestamp, observed_at)
+            if snapshot_age is None:
+                log.warning(
+                    "[行情快照] %s时间戳无法证明到秒，已拒绝使用: %s" % (
+                        code, raw_timestamp))
+                return None
+            if snapshot_age < 0:
+                log.warning(
+                    "[行情快照] %s时间戳晚于当前时间，已拒绝使用: %s" % (
+                        code, raw_timestamp))
+                return None
+            if snapshot_age > LIVE_SNAPSHOT_MAX_AGE_SECONDS:
+                log.warning(
+                    "[行情快照] %s行情已陈旧，已拒绝使用: 延迟=%.1f秒 时间戳=%s" % (
+                        code, snapshot_age, raw_timestamp))
                 return None
             price = float(snapshot.get("last_px", 0)) if snapshot else 0.0
             if price > 0:
@@ -3423,6 +3534,21 @@ def _response_matches_pending(response, pending):
     return bool(response_id and pending_id and response_id == pending_id)
 
 
+def _is_duplicate_trade_callback(trade, pending):
+    """按成交编号防止同一笔成交回报被重复累计。"""
+    business_id = str(trade.get("business_id", "") or "").strip()
+    if not business_id:
+        return False
+    seen = pending.get("seen_business_ids")
+    if not isinstance(seen, set):
+        seen = set()
+        pending["seen_business_ids"] = seen
+    if business_id in seen:
+        return True
+    seen.add(business_id)
+    return False
+
+
 def _finish_terminal_sell(code, pending):
     if pending.get("filled_qty", 0.0) < _pending_completion_qty(pending):
         return False
@@ -3513,6 +3639,10 @@ def on_trade_response(context, trade_list):
             if not _response_matches_pending(trade, pending):
                 log.warning("[成交回报] 已忽略旧的或无法匹配的买入委托 %s" % code)
                 continue
+            if _is_duplicate_trade_callback(trade, pending):
+                log.warning("[成交回报] 已忽略重复买入成交 代码=%s 成交编号=%s" % (
+                    code, trade.get("business_id")))
+                continue
             pending["filled_qty"] = pending.get("filled_qty", 0.0) + quantity
             if _is_positive_finite(price):
                 pending["filled_value"] = pending.get("filled_value", 0.0) + quantity * price
@@ -3531,6 +3661,10 @@ def on_trade_response(context, trade_list):
                 continue
             if not _response_matches_pending(trade, pending):
                 log.warning("[成交回报] 已忽略旧的或无法匹配的卖出委托 %s" % code)
+                continue
+            if _is_duplicate_trade_callback(trade, pending):
+                log.warning("[成交回报] 已忽略重复卖出成交 代码=%s 成交编号=%s" % (
+                    code, trade.get("business_id")))
                 continue
             pending["filled_qty"] = pending.get("filled_qty", 0.0) + quantity
             _finish_terminal_sell(code, pending)

@@ -119,7 +119,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.6"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.7"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -1127,6 +1127,51 @@ def test_live_state_uses_one_append_only_journal(tmp_path):
     assert second["payload"][:2] == b"\x80\x04"
 
 
+def test_live_state_does_not_append_an_identical_snapshot(tmp_path):
+    state_path = tmp_path / "cross-signal-state.journal"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+
+    assert pt._persist_live_state(path=state_path) is True
+    first_size = state_path.stat().st_size
+    assert pt.g.live_state_generation == 1
+
+    assert pt._persist_live_state(path=state_path) is True
+
+    assert state_path.stat().st_size == first_size
+    assert pt.g.live_state_generation == 1
+    with state_path.open("rb") as handle:
+        assert pickle.load(handle)["generation"] == 1
+        with pytest.raises(EOFError):
+            pickle.load(handle)
+
+
+def test_live_state_reuses_verified_journal_tail_for_changed_snapshot(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "cross-signal-state.journal"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+    original_scan = pt._scan_live_state_journal
+    scans = []
+
+    def tracking_scan(path):
+        scans.append(str(path))
+        return original_scan(path)
+
+    monkeypatch.setattr(pt, "_scan_live_state_journal", tracking_scan)
+    assert pt._persist_live_state(path=state_path) is True
+
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
+
+    assert scans == [str(state_path)]
+    assert pt.g.live_state_generation == 2
+    with state_path.open("rb") as handle:
+        assert pickle.load(handle)["generation"] == 1
+        assert pickle.load(handle)["generation"] == 2
+        with pytest.raises(EOFError):
+            pickle.load(handle)
+
+
 def test_live_state_restore_uses_last_complete_record_when_tail_is_truncated(tmp_path):
     state_path = tmp_path / "cross-signal-state.pkl"
     pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
@@ -1552,6 +1597,63 @@ def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
 
     assert pt.get_current_price("513100.SS") == pytest.approx(2.0)
     assert pt.g.__last_snapshot["513100.SS"]["last_px"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "20260720",
+        "20260720092500",
+        "20260720093600",
+    ],
+)
+def test_live_price_rejects_malformed_stale_or_future_snapshot(
+    monkeypatch, timestamp
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 7, 20, 9, 35, 0)
+
+    pt.g = make_g()
+    monkeypatch.setattr(pt, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        pt,
+        "get_snapshot",
+        lambda code: {
+            code: {
+                "last_px": 2.0,
+                "hsTimeStamp": timestamp,
+            }
+        },
+        raising=False,
+    )
+
+    assert pt.get_current_price("513100.SS") is None
+    assert pt.g.__last_snapshot == {}
+
+
+def test_live_price_accepts_snapshot_inside_five_minute_safety_window(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 7, 20, 9, 35, 0)
+
+    pt.g = make_g()
+    monkeypatch.setattr(pt, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        pt,
+        "get_snapshot",
+        lambda code: {
+            code: {
+                "last_px": 2.0,
+                "hsTimeStamp": "20260720093100",
+            }
+        },
+        raising=False,
+    )
+
+    assert pt.get_current_price("513100.SS") == pytest.approx(2.0)
 
 
 def test_iopv_observation_uses_the_same_snapshot_as_the_live_buy_price():
@@ -1984,6 +2086,66 @@ def test_partial_buy_callbacks_accumulate_before_pending_is_cleared():
     })
     assert "513100.SS" not in pt.g.__pending_orders
     assert pt.g.highest_since_buy["513100.SS"] == pytest.approx(1.16)
+
+
+def test_duplicate_buy_trade_callback_is_counted_once():
+    pt.g = make_g(
+        __pending_orders={
+            "513100.SS": {
+                "requested_qty": 500,
+                "filled_qty": 0,
+                "filled_value": 0.0,
+                "atr": 0.05,
+                "buy_date": date(2026, 7, 10),
+                "order_id": "buy-order-1",
+            }
+        }
+    )
+    trade = {
+        "stock_code": "513100",
+        "entrust_bs": "1",
+        "business_amount": 200,
+        "business_price": 1.10,
+        "business_id": "buy-fill-1",
+        "order_id": "buy-order-1",
+    }
+
+    pt.on_trade_response(types.SimpleNamespace(), trade)
+    pt.on_trade_response(types.SimpleNamespace(), dict(trade))
+
+    pending = pt.g.__pending_orders["513100.SS"]
+    assert pending["filled_qty"] == 200
+    assert pending["filled_value"] == pytest.approx(220.0)
+
+
+def test_duplicate_sell_trade_callback_is_counted_once():
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 1.2},
+        entry_atr={"513100.SS": 0.05},
+        buy_date={"513100.SS": date(2026, 6, 1)},
+        sold_today={"513100.SS": True},
+        __pending_sells={
+            "513100.SS": {
+                "requested_qty": 500,
+                "filled_qty": 0,
+                "order_id": "sell-order-1",
+            }
+        },
+    )
+    trade = {
+        "stock_code": "513100",
+        "entrust_bs": "2",
+        "business_amount": 200,
+        "business_price": 1.15,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-1",
+    }
+
+    pt.on_trade_response(types.SimpleNamespace(), trade)
+    pt.on_trade_response(types.SimpleNamespace(), dict(trade))
+
+    assert pt.g.__pending_sells["513100.SS"]["filled_qty"] == 200
+    assert "513100.SS" in pt.g.highest_since_buy
 
 
 def test_cancel_trade_push_is_not_counted_as_a_fill():
@@ -4063,7 +4225,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.6" in notes
+    assert "20260720.7" in notes
     assert "1506a0e834fe" in notes
 
 
