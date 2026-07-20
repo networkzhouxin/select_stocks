@@ -6,7 +6,7 @@
 |---|---|
 | 策略名称 | 上穿下穿 ETF 策略 |
 | 正式版本 | `cross-v0.3.2` |
-| 部署构建号 | `20260720.5` |
+| 部署构建号 | `20260720.6` |
 | 聚宽正式文件 | `smart_trade_joinquant_cross_signal_etf.py` |
 | PTrade 正式文件 | `smart_trade_ptrade_cross_signal_etf.py` |
 | 本地训练回放入口 | `local_training_run.py` |
@@ -243,7 +243,7 @@ RSI 两组只有在方向不冲突时才计分。
 ### 8.4 两个容易误解的阈值
 
 - `strong_buy_threshold=70`：用于识别持仓仍然具有较强买入结构；它不是额外加仓规则。
-- `risk_tighten_threshold=18`：当前正式版只记录风险收紧日志，不会单独改变止损线，也不会直接卖出。
+- `risk_tighten_threshold=18`：当前正式版只记录“卖出风险观察”日志，不会收紧止损线，也不会直接卖出。
 
 ## 9. ATR 移动止损
 

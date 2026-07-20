@@ -19,7 +19,7 @@ from datetime import datetime
 # 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.5"
+DEPLOYMENT_BUILD_ID = "20260720.6"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
@@ -325,6 +325,40 @@ def _format_persisted_g_reason_for_log(reason):
     }.get(text, text or "无")
 
 
+def _format_state_error_for_log(exc):
+    """将本策略产生的状态校验错误转换为稳定的中文诊断。"""
+    raw = str(exc or "").strip()
+    exact = {
+        "invalid state envelope": "状态记录外层结构无效",
+        "state schema mismatch": "状态结构版本不匹配",
+        "invalid state generation": "状态代次无效",
+        "invalid producer strategy version": "状态生产策略版本无效",
+        "business fingerprint mismatch": "业务配置指纹不匹配",
+        "invalid state payload bytes": "状态载荷字节无效",
+        "state checksum mismatch": "状态校验和不匹配",
+        "invalid state payload": "状态载荷无效",
+        "invalid state body": "状态主体无效",
+        "invalid deferred scores": "延后评分列表无效",
+        "invalid broker position snapshot": "券商持仓快照结构无效",
+        "invalid broker position entry": "券商持仓快照条目无效",
+    }
+    if raw in exact:
+        return exact[raw]
+    prefixes = (
+        ("missing state fields: ", "缺少状态字段: "),
+        ("invalid mapping field: ", "状态映射字段无效: "),
+        ("invalid set field: ", "状态集合字段无效: "),
+        ("invalid date field: ", "状态日期字段无效: "),
+        ("invalid broker position facts: ", "券商持仓事实无效: "),
+        ("unprovable broker position: ", "券商持仓无法证明: "),
+        ("duplicate broker position: ", "券商持仓代码重复: "),
+    )
+    for prefix, translated in prefixes:
+        if raw.startswith(prefix):
+            return translated + raw[len(prefix):]
+    return raw or exc.__class__.__name__
+
+
 def _record_persisted_g_state(state, generation, broker_positions):
     g.live_state_schema_version = LIVE_STATE_SCHEMA_VERSION
     g.live_state_business_fingerprint = business_config_fingerprint()
@@ -413,20 +447,22 @@ def _scan_live_state_journal(state_path):
                     break
                 except Exception as exc:
                     tail_damaged = True
-                    log.warning("[状态台账] 尾部记录不完整，已使用此前有效记录: %s" % exc)
+                    log.warning("[状态台账] 尾部记录不完整，已使用此前有效记录: %s" % (
+                        _format_state_error_for_log(exc)))
                     break
                 last_complete_offset = handle.tell()
                 try:
                     generation, state, broker_positions = (
                         _decode_live_state_envelope(envelope))
                 except Exception as exc:
-                    log.error("[状态台账] 记录无效: %s" % exc)
+                    log.error("[状态台账] 记录无效: %s" % (
+                        _format_state_error_for_log(exc)))
                     continue
                 records.append((generation, state, broker_positions))
     except FileNotFoundError:
         return [], 0, False
     except Exception as exc:
-        log.error("[状态台账] 读取失败: %s" % exc)
+        log.error("[状态台账] 读取失败: %s" % _format_state_error_for_log(exc))
         return [], 0, False
     return records, last_complete_offset, tail_damaged
 
@@ -472,7 +508,7 @@ def _persist_live_state(context=None, path=None):
                 envelope, handle, protocol=LIVE_STATE_PICKLE_PROTOCOL)
         return True
     except Exception as exc:
-        log.error("[状态] 保存失败: %s" % exc)
+        log.error("[状态] 保存失败: %s" % _format_state_error_for_log(exc))
         return False
 
 
@@ -579,6 +615,53 @@ def _normalized_state_mapping(mapping):
         normalize_code(code): value
         for code, value in mapping.items()
         if normalize_code(code)
+    }
+
+
+def _state_has_complete_held_risk(context, state):
+    """确认券商绑定状态可以证明全部当前持仓的风险字段。"""
+    try:
+        state = _validated_live_state(state)
+    except Exception:
+        return False
+    highest = _normalized_state_mapping(state["highest_since_buy"])
+    entry_atr = _normalized_state_mapping(state["entry_atr"])
+    buy_dates = _normalized_state_mapping(state["buy_date"])
+    unverified = {
+        normalize_code(code) for code in state["unverified_positions"]
+        if normalize_code(code)
+    }
+    today = _as_date(get_context_datetime(context))
+    if today is None:
+        return False
+    for code in current_hold_codes(context):
+        buy_date = _as_date(buy_dates.get(code))
+        if (
+            code in unverified or
+            buy_date is None or
+            buy_date > today or
+            not _is_positive_finite(entry_atr.get(code)) or
+            not _is_positive_finite(highest.get(code))
+        ):
+            return False
+    return True
+
+
+def _restore_journal_risk_state(context, state):
+    state = _validated_live_state(state)
+    g.highest_since_buy = _normalized_state_mapping(
+        state["highest_since_buy"])
+    g.entry_atr = _normalized_state_mapping(state["entry_atr"])
+    g.buy_date = {
+        code: _as_date(value)
+        for code, value in _normalized_state_mapping(state["buy_date"]).items()
+    }
+    g.unverified_positions = {
+        normalize_code(code) for code in state["unverified_positions"]
+        if normalize_code(code)
+    }
+    g.__position_recovery_source = {
+        code: "journal" for code in current_hold_codes(context)
     }
 
 
@@ -924,6 +1007,7 @@ def before_trading_start(context, data):
         g.__is_live and not getattr(g, "__startup_recovery_done", False))
     persisted_g_state = None
     use_persisted_g = False
+    use_journal_risk = False
     journal_state = None
     if g.__is_live:
         if _cached_live_state_path() is None:
@@ -958,6 +1042,12 @@ def before_trading_start(context, data):
         g.__order_state_unknown = True
         log.error("[每日重置] 无法确定当前交易日，交易已阻止")
         return
+    use_journal_risk = bool(
+        startup_recovery and
+        not use_persisted_g and
+        journal_state is not None and
+        _state_has_complete_held_risk(context, journal_state)
+    )
     if g.execution_date != today:
         g.execution_date = today
         g.sold_today = {}
@@ -969,10 +1059,13 @@ def before_trading_start(context, data):
         if startup_recovery:
             if use_persisted_g:
                 _restore_persisted_g_risk_state(context, persisted_g_state)
+            elif use_journal_risk:
+                _restore_journal_risk_state(context, journal_state)
+                log.info("[状态台账] 已与当前券商持仓核验一致，直接恢复持仓风险状态")
             else:
                 _clear_live_risk_state_for_broker_recovery()
         _reconcile_open_orders(context)
-        if startup_recovery and use_persisted_g:
+        if startup_recovery and (use_persisted_g or use_journal_risk):
             recover_live_state(context)
         else:
             _recover_live_state_with_available_sources(context, allow_deliver=True)
@@ -2238,7 +2331,8 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
     if should_force_sell(score, False, p):
         return execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
     if score["sell_score"] >= p["risk_tighten_threshold"]:
-        log.info("[风险收紧] %s卖出评分=%.0f" % (code, score["sell_score"]))
+        log.info("[卖出风险观察] %s卖出评分=%.0f，仅记录、不收紧止损" % (
+            code, score["sell_score"]))
     return False
 
 
@@ -2554,7 +2648,7 @@ def halt_recover(context):
 
 
 # 七、实盘状态恢复与成交回报
-# 启动时先用当日成交、历史交割单和券商持仓重建；仅对无法覆盖的老持仓使用状态台账回退。
+# 启动时优先使用已与券商持仓绑定且字段完整的状态；否则再用成交、交割单和持仓重建。
 # 未验证持仓禁止自动卖出和新增买入，避免凭空构造买入日、ATR 或最高收盘价。
 
 def _has_incomplete_position_state(context):

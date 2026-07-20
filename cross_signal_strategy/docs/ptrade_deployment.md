@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260720.5 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260720.6 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -191,12 +191,15 @@ of the requested time. That result must not be compared with the JoinQuant
   It is accepted only when its state schema, business fingerprint, generation,
   complete per-position risk fields, and recorded code/quantity/cost snapshot
   match current broker holdings. Current broker positions remain the source of
-  truth. A valid `g` state avoids an unnecessary delivery-history query; any
-  mismatch falls back to current-strategy fills, delivery records, and broker
-  reconstruction. If a newer matching journal exists, the older `g` state is
-  rejected so a stale highest close or ATR cannot replace fresher state. The
-  journal may fill only holdings that broker history cannot prove. If no source
-  proves a holding, it remains unverified and exposure cannot increase.
+  truth. A valid `g` state avoids an unnecessary delivery-history query. If a
+  newer matching journal exists, the older `g` state is rejected so stale risk
+  fields cannot replace fresher state. A journal whose recorded broker snapshot
+  still matches and whose buy date, entry ATR, and highest close are complete
+  for every current holding may restore those fields directly. Missing,
+  incomplete, future-dated, or broker-mismatched state falls back to
+  current-strategy fills, delivery records, and broker reconstruction; a
+  matching journal may then fill only remaining gaps. If no source proves a
+  holding, it remains unverified and exposure cannot increase.
 - State journal writes run after the 09:35 and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   broker-validated before it can supply intraday continuity or old-position fallback.

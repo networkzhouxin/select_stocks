@@ -119,7 +119,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.5"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.6"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -759,7 +759,7 @@ def test_before_trading_prefers_valid_persisted_g_over_broker_history(
     assert pt.g.__position_recovery_source == {code: "ptrade-g"}
 
 
-def test_before_trading_rejects_persisted_g_when_matching_journal_is_newer(
+def test_before_trading_uses_newer_complete_matching_journal_without_broker_history(
     monkeypatch, tmp_path
 ):
     code = "513100.SS"
@@ -795,10 +795,119 @@ def test_before_trading_rejects_persisted_g_when_matching_journal_is_newer(
         pt.g.__state_restore_generation = 8
         return journal_state
 
+    monkeypatch.setattr(pt, "_load_live_state", load_journal)
+    monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: None)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("complete broker-bound journal must not query history")
+        ),
+    )
+    monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.before_trading_start(context, data=None)
+
+    assert calls == []
+    assert pt.g.highest_since_buy == {code: 1.4}
+    assert pt.g.entry_atr == {code: 0.06}
+    assert pt.g.__state_restore_source == "journal"
+    assert pt.g.__state_restore_generation == 8
+    assert pt.g.__persisted_g_status == "superseded"
+    assert pt.g.__persisted_g_reason == "newer-journal"
+    assert pt.g.__persisted_g_generation == 7
+    assert pt.g.__position_recovery_source == {code: "journal"}
+
+
+def test_before_trading_uses_complete_matching_journal_when_framework_g_missing(
+    monkeypatch, tmp_path
+):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    buy_date = date(2026, 7, 10)
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        execution_date=today,
+        __state_path=str(tmp_path / "state.journal"),
+    )
+    journal_state = {
+        field: getattr(pt.g, field) for field in pt.LIVE_STATE_FIELDS
+    }
+    journal_state["highest_since_buy"] = {code: 1.4}
+    journal_state["entry_atr"] = {code: 0.06}
+    journal_state["buy_date"] = {code: buy_date}
+
+    def load_journal(context):
+        pt.g.__state_restore_source = "journal"
+        pt.g.__state_restore_generation = 8
+        return journal_state
+
+    monkeypatch.setattr(pt, "_load_live_state", load_journal)
+    monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: None)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("complete broker-bound journal must not query history")
+        ),
+    )
+    monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.before_trading_start(context, data=None)
+
+    assert pt.g.buy_date == {code: buy_date}
+    assert pt.g.entry_atr == {code: 0.06}
+    assert pt.g.highest_since_buy == {code: 1.4}
+    assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source == {code: "journal"}
+
+
+def test_before_trading_keeps_broker_recovery_for_incomplete_matching_journal(
+    monkeypatch, tmp_path
+):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        execution_date=today,
+        __state_path=str(tmp_path / "state.journal"),
+    )
+    journal_state = {
+        field: getattr(pt.g, field) for field in pt.LIVE_STATE_FIELDS
+    }
+    journal_state["highest_since_buy"] = {code: 1.4}
+    journal_state["entry_atr"] = {code: 0.06}
+    journal_state["buy_date"] = {}
+    calls = []
+
+    def load_journal(context):
+        pt.g.__state_restore_source = "journal"
+        pt.g.__state_restore_generation = 8
+        return journal_state
+
     def broker_recovery(context, allow_deliver):
-        calls.append("broker")
-        pt.g.unverified_positions = {code}
-        pt.g.__position_recovery_source = {code: "unverified"}
+        calls.append(("broker", allow_deliver))
+        pt.g.buy_date = {code: date(2026, 7, 10)}
+        pt.g.entry_atr = {code: 0.05}
+        pt.g.highest_since_buy = {code: 1.3}
+        pt.g.unverified_positions = set()
+        pt.g.__position_recovery_source = {
+            code: "account-takeover:get-deliver"
+        }
 
     monkeypatch.setattr(pt, "_load_live_state", load_journal)
     monkeypatch.setattr(pt, "_lock_frozen_business_config", lambda: None)
@@ -810,14 +919,11 @@ def test_before_trading_rejects_persisted_g_when_matching_journal_is_newer(
 
     pt.before_trading_start(context, data=None)
 
-    assert calls == ["broker"]
-    assert pt.g.highest_since_buy == {code: 1.4}
-    assert pt.g.entry_atr == {code: 0.06}
-    assert pt.g.__state_restore_source == "journal"
-    assert pt.g.__state_restore_generation == 8
-    assert pt.g.__persisted_g_status == "superseded"
-    assert pt.g.__persisted_g_reason == "newer-journal"
-    assert pt.g.__persisted_g_generation == 7
+    assert calls == [("broker", True)]
+    assert pt.g.buy_date == {code: date(2026, 7, 10)}
+    assert pt.g.__position_recovery_source == {
+        code: "account-takeover:get-deliver"
+    }
 
 
 def test_before_trading_recovers_broker_before_journal_risk_fallback(
@@ -1076,6 +1182,22 @@ def test_live_state_envelope_rejects_business_fingerprint_mismatch():
 
     with pytest.raises(ValueError, match="business fingerprint"):
         pt._decode_live_state_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("state schema mismatch", "状态结构版本不匹配"),
+        ("business fingerprint mismatch", "业务配置指纹不匹配"),
+        ("state checksum mismatch", "状态校验和不匹配"),
+        ("missing state fields: buy_date", "缺少状态字段: buy_date"),
+        ("invalid broker position snapshot", "券商持仓快照结构无效"),
+        ("invalid broker position facts: 513100.SS", "券商持仓事实无效: 513100.SS"),
+        ("unprovable broker position: BAD", "券商持仓无法证明: BAD"),
+    ],
+)
+def test_state_journal_internal_errors_are_formatted_in_chinese(raw, expected):
+    assert pt._format_state_error_for_log(ValueError(raw)) == expected
 
 
 def test_live_state_schema_accepts_compatible_producer_strategy_version(tmp_path):
@@ -2449,6 +2571,56 @@ def test_unverified_holding_does_not_block_verified_holding_signal_exit(monkeypa
         ],
     ) is True
     assert sold == [("159915.SZ", "sell_score 35")]
+
+
+def test_observation_only_sell_risk_log_does_not_claim_stop_tightening(monkeypatch):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.0)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={code: position}))
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        entry_atr={code: 0.05},
+        highest_since_buy={code: 1.1},
+    )
+    score = make_sell_score(code)
+    score.update({
+        "sell_score": 18,
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+    })
+    messages = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(
+        pt.log, "info", lambda message: messages.append(str(message)))
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("observation-only score must not sell")
+        ),
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [
+            buy_date,
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 4),
+            date(2026, 6, 5),
+            today,
+        ],
+    ) is False
+
+    assert any("[卖出风险观察]" in message for message in messages)
+    assert all("[风险收紧]" not in message for message in messages)
 
 
 @pytest.mark.parametrize(
@@ -3891,7 +4063,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.5" in notes
+    assert "20260720.6" in notes
     assert "1506a0e834fe" in notes
 
 

@@ -35,9 +35,20 @@ def test_formal_joinquant_source_has_no_stale_release_labels():
 def test_joinquant_exposes_stable_release_fingerprint():
     fingerprint = strategy.business_config_fingerprint()
 
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260720.5"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260720.6"
     assert len(fingerprint) == 12
     assert all(ch in "0123456789abcdef" for ch in fingerprint)
+
+
+def test_observation_only_sell_risk_log_is_not_named_as_stop_tightening():
+    source = (
+        ROOT
+        / "cross_signal_strategy"
+        / "smart_trade_joinquant_cross_signal_etf.py"
+    ).read_text(encoding="utf-8")
+
+    assert "[sell-risk-observation]" in source
+    assert "[risk-tighten]" not in source
 
 
 def test_recent_cross_detection_uses_last_three_days():

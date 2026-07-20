@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.5"
+DEPLOYMENT_BUILD_ID = "20260720.6"
 
 
 try:
@@ -928,7 +928,8 @@ def do_trading(context):
         if should_force_sell(score, False, p):
             execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
         elif score["sell_score"] >= p["risk_tighten_threshold"]:
-            log.info("[risk-tighten] %s sell_score %.0f" % (code, score["sell_score"]))
+            log.info("[sell-risk-observation] %s sell_score %.0f log_only=True" % (
+                code, score["sell_score"]))
 
     held_after_sell = current_hold_codes(context)
     slots = p["max_hold"] - len(held_after_sell)
