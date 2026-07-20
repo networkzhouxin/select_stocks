@@ -12,16 +12,18 @@ import builtins as _builtins
 import hashlib
 import pickle
 from datetime import datetime
+from pathlib import Path
 
 
 # 一、冻结的业务配置与持久化边界
 # 参数和 ETF 池由代码固定，防止 PTrade 在重启恢复 g 时覆盖正式版业务配置。
-# 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
+# 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.7"
+DEPLOYMENT_BUILD_ID = "20260720.8"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
+LIVE_STATE_RETAIN_RECORDS = 2
 LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
@@ -491,7 +493,7 @@ def _journal_file_size(state_path):
 
 
 def _cache_journal_tail(
-    state_path, generation, state, broker_positions, file_size
+    state_path, generation, state, broker_positions, file_size, record_count
 ):
     g.__state_journal_cache = {
         "path": str(state_path),
@@ -502,6 +504,7 @@ def _cache_journal_tail(
             else None
         ),
         "file_size": int(file_size),
+        "record_count": int(record_count),
     }
 
 
@@ -513,6 +516,51 @@ def _cached_journal_tail(state_path):
     if current_size is None or current_size != cache.get("file_size"):
         return None
     return cache
+
+
+def _compact_live_state_journal(state_path):
+    records, _, tail_damaged = _scan_live_state_journal(state_path)
+    if tail_damaged or len(records) <= LIVE_STATE_RETAIN_RECORDS:
+        return not tail_damaged
+
+    retained = sorted(records, key=lambda item: item[0])[
+        -LIVE_STATE_RETAIN_RECORDS:
+    ]
+    temp_path = Path(str(state_path) + ".compact")
+    try:
+        with temp_path.open("wb") as handle:
+            for generation, state, broker_positions in retained:
+                pickle.dump(
+                    _encode_live_state_envelope(
+                        state,
+                        generation=generation,
+                        broker_positions=broker_positions,
+                    ),
+                    handle,
+                    protocol=LIVE_STATE_PICKLE_PROTOCOL,
+                )
+
+        compacted, _, compacted_tail_damaged = _scan_live_state_journal(temp_path)
+        if compacted_tail_damaged or [item[0] for item in compacted] != [
+            item[0] for item in retained
+        ]:
+            raise ValueError("compacted journal verification failed")
+
+        temp_path.replace(state_path)
+        generation, state, broker_positions = retained[-1]
+        _cache_journal_tail(
+            state_path,
+            generation,
+            state,
+            broker_positions,
+            _journal_file_size(state_path),
+            len(retained),
+        )
+        return True
+    except Exception as exc:
+        log.warning("[状态台账] 压缩失败，原台账仍保留: %s" % (
+            _format_state_error_for_log(exc)))
+        return False
 
 
 def _persist_live_state(context=None, path=None):
@@ -529,6 +577,7 @@ def _persist_live_state(context=None, path=None):
         latest_broker_positions = None
         latest_payload_digest = None
         last_complete_offset = 0
+        record_count = 0
         tail_damaged = False
         if state_path is not None:
             cache = _cached_journal_tail(state_path)
@@ -536,9 +585,11 @@ def _persist_live_state(context=None, path=None):
                 latest_generation = cache["generation"]
                 latest_payload_digest = cache["payload_digest"]
                 last_complete_offset = cache["file_size"]
+                record_count = cache["record_count"]
             else:
                 records, last_complete_offset, tail_damaged = (
                     _scan_live_state_journal(state_path))
+                record_count = len(records)
                 if records:
                     latest_generation, latest_state, latest_broker_positions = max(
                         records, key=lambda item: item[0])
@@ -551,6 +602,7 @@ def _persist_live_state(context=None, path=None):
                         latest_state,
                         latest_broker_positions,
                         last_complete_offset,
+                        record_count,
                     )
         persisted_generation = getattr(g, "live_state_generation", 0)
         if not isinstance(persisted_generation, int) or persisted_generation < 0:
@@ -588,7 +640,10 @@ def _persist_live_state(context=None, path=None):
             validated_state,
             broker_positions,
             last_complete_offset,
+            record_count + 1,
         )
+        if record_count + 1 > LIVE_STATE_RETAIN_RECORDS:
+            _compact_live_state_journal(state_path)
         return True
     except Exception as exc:
         log.error("[状态] 保存失败: %s" % _format_state_error_for_log(exc))
@@ -647,6 +702,7 @@ def _load_live_state(context=None, path=None):
             state,
             recorded_positions,
             last_complete_offset,
+            len(records),
         )
     current_positions = _broker_position_snapshot(context)
     if not _broker_position_snapshots_match(

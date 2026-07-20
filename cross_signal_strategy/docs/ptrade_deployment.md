@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260720.7 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260720.8 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -51,7 +51,7 @@ PTrade live mode registers two tasks, below the platform limit of five:
 - `after_trading_end` (normally around `15:30`): use PTrade's official
   lifecycle callback to reconcile state, update the highest closing price
   since entry, print the position risk summary, and write the closing
-  append-only state journal. This is not an additional `run_daily` thread task.
+  bounded state journal. This is not an additional `run_daily` thread task.
 
 Initialization must prove the runtime mode with `is_trade()` before applying
 mode-specific settings. Live mode receives only live platform parameters;
@@ -174,11 +174,13 @@ of the requested time. That result must not be compared with the JoinQuant
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
-- The explicit state store is a single append-only journal under PTrade's
+- The explicit state store is a single bounded journal under PTrade's
   research path. Every envelope contains a state-schema version, monotonically
   increasing generation, producer strategy version, business-configuration fingerprint,
   broker position snapshot, SHA256 checksum, and protocol-4
-  pickle payload. No `os` call or rename operation is required.
+  pickle payload. After a third complete generation is appended, a temporary
+  journal containing the latest two valid generations is fully decoded and
+  verified before an atomic same-directory replacement; no direct `os` call is used.
 - Restore validates every complete journal record and selects the highest valid
   generation. A truncated tail never invalidates earlier complete records. On
   the next save, only the incomplete tail bytes are removed before a new record
@@ -217,6 +219,11 @@ of the requested time. That result must not be compared with the JoinQuant
   generation. A changed state appends from the cached tail without rescanning
   the full file. Any externally changed length or incomplete tail invalidates
   the cache and reopens the full validation-and-repair path.
+- Successful compaction retains exactly the latest two complete generations,
+  so the journal cannot grow without bound. If temporary-file writing,
+  verification, or replacement fails, the original journal remains the recovery
+  source and may temporarily contain more than two complete generations. The
+  next changed-state save retries compaction.
 - 恢复日志分成三个独立维度：`[PTrade框架g]` 说明普通 `g` 是否未提供、
   已接受、已拒绝或因台账更新而未采用；`[连续状态恢复]` 说明日内连续状态
   来自 `状态台账`、`PTrade持久状态` 还是无可用来源，并单独显示代次；

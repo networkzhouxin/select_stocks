@@ -119,7 +119,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.7"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.8"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -1102,7 +1102,7 @@ def test_before_trading_uses_matching_journal_when_delivery_cannot_prove_old_buy
     assert pt.g.__startup_recovery_done is True
 
 
-def test_live_state_uses_one_append_only_journal(tmp_path):
+def test_live_state_uses_one_bounded_journal(tmp_path):
     state_path = tmp_path / "cross-signal-state.pkl"
     pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
 
@@ -1125,6 +1125,48 @@ def test_live_state_uses_one_append_only_journal(tmp_path):
     assert first["payload"][:2] == b"\x80\x04"
     assert second["generation"] == 2
     assert second["payload"][:2] == b"\x80\x04"
+
+
+def test_live_state_journal_keeps_only_two_latest_valid_records(tmp_path):
+    state_path = tmp_path / "cross-signal-state.journal"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+
+    assert pt._persist_live_state(path=state_path) is True
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
+    pt.g.highest_since_buy = {"513100.SS": 3.5}
+    assert pt._persist_live_state(path=state_path) is True
+
+    records = pt._read_live_state_journal(state_path)
+    assert [generation for generation, _, _ in records] == [2, 3]
+    assert records[0][1]["highest_since_buy"] == {"513100.SS": 3.0}
+    assert records[1][1]["highest_since_buy"] == {"513100.SS": 3.5}
+
+
+def test_live_state_compaction_failure_keeps_original_journal_recoverable(
+    monkeypatch, tmp_path
+):
+    state_path = tmp_path / "cross-signal-state.journal"
+    pt.g = make_g(highest_since_buy={"513100.SS": 2.5})
+
+    assert pt._persist_live_state(path=state_path) is True
+    pt.g.highest_since_buy = {"513100.SS": 3.0}
+    assert pt._persist_live_state(path=state_path) is True
+
+    def fail_replace(self, target):
+        raise OSError("simulated interruption before replace")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    pt.g.highest_since_buy = {"513100.SS": 3.5}
+    assert pt._persist_live_state(path=state_path) is True
+
+    records = pt._read_live_state_journal(state_path)
+    assert [generation for generation, _, _ in records] == [1, 2, 3]
+
+    pt.g.highest_since_buy = {"513100.SS": 9.9}
+    assert pt._restore_live_state(path=state_path) is True
+    assert pt.g.highest_since_buy == {"513100.SS": 3.5}
+    assert pt.g.__state_restore_generation == 3
 
 
 def test_live_state_does_not_append_an_identical_snapshot(tmp_path):
@@ -4217,7 +4259,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "JoinQuant" in notes
     assert "PTrade" in notes
     assert "configuration lock" in notes
-    assert "append-only state journal" in notes
+    assert "bounded state journal" in notes
     assert "two tasks" in notes
     assert "after_trading_end" in notes
     assert "path is resolved and cached at the start of" in notes
@@ -4225,7 +4267,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.7" in notes
+    assert "20260720.8" in notes
     assert "1506a0e834fe" in notes
 
 
@@ -4237,7 +4279,7 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
         ROOT / "cross_signal_strategy" / "docs" / "decisions.md"
     ).read_text(encoding="utf-8")
 
-    assert "single append-only journal" in deployment
+    assert "single bounded journal" in deployment
     assert "state-schema version" in deployment
     assert "broker position snapshot" in deployment
     assert "validated PTrade-persisted `g` state is attempted first" in deployment
