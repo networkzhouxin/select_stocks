@@ -51,6 +51,9 @@ spring-cloud-alibaba-docs/**/*.html
 walkforward/__pycache__/
 __pycache__/
 
+# Pytest runtime work directories
+pytest_tmp_*/
+
 # Local Git worktrees
 .worktrees/
 
