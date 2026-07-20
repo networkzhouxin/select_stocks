@@ -119,7 +119,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.4"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.5"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3290,6 +3290,19 @@ def test_live_recovery_adopts_account_position_from_broker_facts(monkeypatch):
         "_recovery_source": "get-deliver",
     }]
     score = make_buy_score()
+    info_messages = []
+    warning_messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: info_messages.append(
+                message % args if args else message),
+            warning=lambda message, *args: warning_messages.append(
+                message % args if args else message),
+            error=lambda *args: None,
+        ),
+    )
     monkeypatch.setattr(
         pt,
         "_previous_trade_date_before",
@@ -3324,6 +3337,8 @@ def test_live_recovery_adopts_account_position_from_broker_facts(monkeypatch):
     assert pt.g.__position_recovery_source == {
         "513100.SS": "account-takeover:get-deliver"
     }
+    assert any("已依据券商事实接管" in message for message in info_messages)
+    assert not any("已依据券商事实接管" in message for message in warning_messages)
 
 
 def test_live_recovery_adopts_existing_account_position_without_cross_signal_entry(
@@ -3876,7 +3891,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.4" in notes
+    assert "20260720.5" in notes
     assert "1506a0e834fe" in notes
 
 

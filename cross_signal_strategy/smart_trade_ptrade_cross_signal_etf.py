@@ -19,7 +19,7 @@ from datetime import datetime
 # 单一追加式状态台账保存风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.4"
+DEPLOYMENT_BUILD_ID = "20260720.5"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 IOPV_OBSERVE_CODES = frozenset((
@@ -3098,7 +3098,7 @@ def _recover_position_from_broker(code, pos, records, prev_date):
     if recovery_source == "get-deliver":
         recovery_source = "account-takeover:get-deliver"
     source_map[code] = recovery_source
-    log.warning(
+    log.info(
         "[状态恢复] %s已依据券商事实接管: 买入日期=%s "
         "信号日期=%s ATR=%.6f 持仓最高收盘价=%.6f 成本=%.6f" % (
             code, buy_date, signal_date, atr, highest, cost)

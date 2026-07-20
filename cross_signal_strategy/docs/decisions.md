@@ -1014,3 +1014,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Audit contract: The read-only PTrade runtime-log auditor now requires all three diagnostic dimensions and still fails closed on any `未验证` holding. A rejected ordinary `g` is not itself a trading failure when journal or broker evidence completes recovery.
 - Test-first evidence: Seven focused tests first failed for missing ordinary-`g` diagnostics and the old combined summary; a separate newer-journal test failed before recording the superseded state. The runtime-log auditor tests then failed against the new format before its parser was updated.
 - Business boundary: Recovery priority, broker reconstruction, delivery replay, journal fallback, signals, indicators, thresholds, ETF pool, orders, stops, and schedules are unchanged. Business fingerprint remains `1506a0e834fe`; the production multi-factor strategy is untouched.
+
+### Treat Successful Broker-Fact Takeover As Information
+
+- Date: 2026-07-20.
+- Decision: Release deployment build `20260720.5` without changing the frozen `cross-v0.3.2` business configuration. Log a fully verified delivery-record account takeover at `INFO` instead of `WARNING`.
+- Reason: The runtime-log auditor correctly treats every warning as requiring review. Build `20260720.4` restored and verified all three holdings, but its three successful takeover messages alone forced the daily audit to `需复核`, obscuring the absence of any real warning or error.
+- Severity contract: Only the final successful takeover message changes severity. Delivery-query failures, malformed records, incomplete calendars, invalid ATR/high/cost facts, unverified holdings, and blocked trading retain their existing warning or error levels.
+- Test-first evidence: The existing broker-fact takeover test was extended first to require the success message in `INFO` and prohibit it in `WARNING`; it failed against build `20260720.4` before the one-line implementation change.
+- Business boundary: Recovery calculations, source priority, journal behavior, signals, indicators, thresholds, ETF pool, orders, stops, and schedules are unchanged. Business fingerprint remains `1506a0e834fe`; the production multi-factor strategy is untouched.
