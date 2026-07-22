@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260720.8 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260722.1 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -268,6 +268,26 @@ PTrade client:
 The public web search result `ptradeapi.com` describes itself as a personally
 annotated copy of the original API documentation, so it is not treated as an
 official authority for this port.
+
+## PTrade 持久审计日志
+
+实盘模式会把策略自身通过 `log.info`、`log.warning`、`log.error`、
+`log.debug` 和 `log.critical` 输出的内容完整镜像到研究根目录下的单一文件：
+
+```text
+cross_signal_logs/cross_signal_v032_audit.log
+```
+
+平台日志仍按原方式输出，因此当天界面行为不变。审计文件采用 UTF-8，保留
+级别、时间戳和完整消息，不缩减候选排名、状态恢复、委托、成交、停牌补偿、
+IOPV 观察或收盘汇总明细。它只能镜像本策略主动调用日志接口产生的记录；
+PTrade 平台自身在策略代码之外生成的服务器配置、调度或网关日志不在该文件中。
+
+单文件硬上限为 `20 MB`。下一条日志会导致超限时，策略在同目录写入并校验
+临时文件，只淘汰最旧的完整日志行，将文件压缩到约 `16 MB` 后再原子替换。
+不会截断 UTF-8 字符或半条日志；替换失败时保留原文件，平台日志和交易流程
+继续运行。该文件与只保存最近两代持仓风险状态的状态台账相互独立，不能用
+审计日志替代状态恢复，也不能用状态台账替代完整运行审计。
 
 ## PTrade 运行日志审计
 

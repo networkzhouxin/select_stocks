@@ -20,11 +20,15 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260720.8"
+DEPLOYMENT_BUILD_ID = "20260722.1"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
 LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
+AUDIT_LOG_DIR = "cross_signal_logs"
+AUDIT_LOG_FILENAME = "cross_signal_v032_audit.log"
+AUDIT_LOG_MAX_BYTES = 20 * 1024 * 1024
+AUDIT_LOG_COMPACT_TARGET_BYTES = 16 * 1024 * 1024
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
     "513500.SS",
@@ -62,6 +66,127 @@ except NameError:
             pass
 
     log = _LocalLog()
+
+
+def _audit_now():
+    return datetime.now()
+
+
+def _render_log_message(message, args):
+    if not args:
+        return str(message)
+    try:
+        return str(message) % args
+    except Exception:
+        return " ".join([str(message)] + [str(value) for value in args])
+
+
+def _append_audit_log_text(
+        path, text, max_bytes=AUDIT_LOG_MAX_BYTES,
+        compact_target_bytes=AUDIT_LOG_COMPACT_TARGET_BYTES):
+    """追加审计日志；超限时仅保留最新的完整 UTF-8 日志行。"""
+    path = Path(path)
+    incoming = str(text).encode("utf-8")
+    if not incoming or len(incoming) > max_bytes:
+        return False
+    try:
+        with open(str(path), "ab+") as audit_file:
+            audit_file.seek(0, 2)
+            current_size = audit_file.tell()
+            if current_size + len(incoming) <= max_bytes:
+                audit_file.write(incoming)
+                return True
+            audit_file.seek(0)
+            existing = audit_file.read()
+
+        keep_budget = max(0, compact_target_bytes - len(incoming))
+        start = max(0, len(existing) - keep_budget)
+        if start > 0:
+            newline = existing.find(b"\n", start)
+            retained = existing[newline + 1:] if newline >= 0 else b""
+        else:
+            retained = existing
+        payload = retained + incoming
+        if len(payload) > max_bytes:
+            return False
+        payload.decode("utf-8")
+
+        temporary = Path(str(path) + ".compact")
+        with open(str(temporary), "wb") as audit_file:
+            audit_file.write(payload)
+        if temporary.read_bytes() != payload:
+            raise IOError("审计日志临时文件校验失败")
+        temporary.replace(path)
+        return True
+    except Exception:
+        try:
+            temporary = Path(str(path) + ".compact")
+            if temporary.exists():
+                temporary.unlink()
+        except Exception:
+            pass
+        return False
+
+
+class _AuditLogProxy(object):
+    """保持平台日志原样输出，并完整镜像到有界审计文件。"""
+
+    def __init__(self, platform_log, audit_path):
+        self.platform_log = platform_log
+        self.audit_path = str(audit_path)
+
+    def _emit(self, level, message, *args, **kwargs):
+        platform_method = getattr(self.platform_log, level, None)
+        if platform_method is not None:
+            platform_method(message, *args, **kwargs)
+        rendered = _render_log_message(message, args)
+        timestamp = _audit_now().strftime("%Y-%m-%d %H:%M:%S")
+        record = "%s - %s - %s\n" % (
+            timestamp, level.upper(), rendered.rstrip("\r\n"))
+        _append_audit_log_text(self.audit_path, record)
+
+    def info(self, message, *args, **kwargs):
+        self._emit("info", message, *args, **kwargs)
+
+    def warning(self, message, *args, **kwargs):
+        self._emit("warning", message, *args, **kwargs)
+
+    def error(self, message, *args, **kwargs):
+        self._emit("error", message, *args, **kwargs)
+
+    def debug(self, message, *args, **kwargs):
+        self._emit("debug", message, *args, **kwargs)
+
+    def critical(self, message, *args, **kwargs):
+        self._emit("critical", message, *args, **kwargs)
+
+
+def _install_live_audit_log(enabled):
+    """在PTrade研究根目录创建独立日志目录并安装完整日志镜像。"""
+    global log
+    if not enabled:
+        return False
+    if isinstance(log, _AuditLogProxy):
+        return True
+    platform_log = log
+    try:
+        root = get_research_path()
+        if not root:
+            raise ValueError("研究路径为空")
+        create_dir(AUDIT_LOG_DIR)
+        root_text = str(root).rstrip("/\\")
+        audit_path = "%s/%s/%s" % (
+            root_text, AUDIT_LOG_DIR, AUDIT_LOG_FILENAME)
+        with open(audit_path, "ab"):
+            pass
+        log = _AuditLogProxy(platform_log, audit_path)
+        return True
+    except Exception as exc:
+        try:
+            platform_log.warning("[审计日志] 初始化失败，仅保留平台当天日志: %s" % exc)
+        except Exception:
+            pass
+        return False
 
 
 def get_default_params():
@@ -1065,6 +1190,7 @@ def initialize(context):
         mode_verified = False
         log.error("[初始化] 交易模式检测失败，交易已停用: %s" % exc)
     if mode_verified and is_live:
+        _install_live_audit_log(enabled=True)
         try:
             set_parameters(
                 receive_cancel_response="1",

@@ -119,7 +119,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260720.8"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260722.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -134,6 +134,98 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
         "159985.SZ",
     ]
     assert pt.business_config_fingerprint() == jq.business_config_fingerprint()
+
+
+def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
+        tmp_path, monkeypatch):
+    platform_messages = []
+    raw_log = types.SimpleNamespace(
+        info=lambda message, *args: platform_messages.append(
+            ("info", message % args if args else str(message))),
+        warning=lambda message, *args: platform_messages.append(
+            ("warning", message % args if args else str(message))),
+        error=lambda message, *args: platform_messages.append(
+            ("error", message % args if args else str(message))),
+    )
+    created = []
+
+    def create_audit_dir(relative_path):
+        created.append(relative_path)
+        (tmp_path / relative_path).mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(pt, "log", raw_log)
+    monkeypatch.setattr(
+        pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "create_dir", create_audit_dir, raising=False)
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 7, 22, 9, 35, 1),
+        raising=False)
+
+    assert pt._install_live_audit_log(enabled=True) is True
+    detail = (
+        "[候选排名] 513500.SS 买入评分=40 卖出评分=55 "
+        "RSI[6/12/24]=50.7/50.9/52.4"
+    )
+    pt.log.info(detail)
+    pt.log.warning("[状态恢复] %s", "使用状态台账")
+    pt.log.error("[委托恢复] 测试错误")
+
+    audit_path = (
+        tmp_path / pt.AUDIT_LOG_DIR / pt.AUDIT_LOG_FILENAME)
+    text = audit_path.read_text(encoding="utf-8")
+    assert created == [pt.AUDIT_LOG_DIR]
+    assert text.splitlines() == [
+        "2026-07-22 09:35:01 - INFO - " + detail,
+        "2026-07-22 09:35:01 - WARNING - [状态恢复] 使用状态台账",
+        "2026-07-22 09:35:01 - ERROR - [委托恢复] 测试错误",
+    ]
+    assert platform_messages == [
+        ("info", detail),
+        ("warning", "[状态恢复] 使用状态台账"),
+        ("error", "[委托恢复] 测试错误"),
+    ]
+
+
+def test_audit_log_rolls_at_complete_utf8_lines_and_stays_bounded(tmp_path):
+    path = tmp_path / "cross_signal_v032_audit.log"
+    old_lines = [
+        ("旧明细%02d-" % index) + ("甲" * 20)
+        for index in range(12)
+    ]
+    path.write_text("\n".join(old_lines) + "\n", encoding="utf-8")
+    newest = "2026-07-22 09:35:00 - INFO - [候选排名] 最新完整明细\n"
+
+    assert pt._append_audit_log_text(
+        path, newest, max_bytes=420, compact_target_bytes=260) is True
+
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
+    assert len(raw) <= 420
+    assert text.endswith(newest)
+    assert "旧明细00" not in text
+    assert "最新完整明细" in text
+    assert all(line.startswith(("旧明细", "2026-07-22")) for line in text.splitlines())
+
+
+def test_audit_log_compaction_failure_preserves_original_file(
+        tmp_path, monkeypatch):
+    path = tmp_path / "cross_signal_v032_audit.log"
+    original = (("原始完整日志行\n" * 30).encode("utf-8"))
+    path.write_bytes(original)
+
+    def fail_replace(self, target):
+        raise OSError("simulated replacement interruption")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    assert pt._append_audit_log_text(
+        path,
+        "2026-07-22 09:35:00 - INFO - 新日志\n",
+        max_bytes=300,
+        compact_target_bytes=180,
+    ) is False
+    assert path.read_bytes() == original
 
 
 def test_formal_ptrade_source_has_no_stale_release_labels_and_logs_fingerprint():
@@ -4267,8 +4359,22 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260720.8" in notes
+    assert "20260722.1" in notes
     assert "1506a0e834fe" in notes
+
+
+def test_ptrade_deployment_notes_define_bounded_full_audit_log():
+    notes = (
+        ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
+    ).read_text(encoding="utf-8")
+
+    assert "cross_signal_logs" in notes
+    assert "cross_signal_v032_audit.log" in notes
+    assert "完整镜像" in notes
+    assert "20 MB" in notes
+    assert "16 MB" in notes
+    assert "最旧的完整日志行" in notes
+    assert "PTrade 平台自身" in notes
 
 
 def test_release_docs_describe_resilient_ptrade_state_recovery():
