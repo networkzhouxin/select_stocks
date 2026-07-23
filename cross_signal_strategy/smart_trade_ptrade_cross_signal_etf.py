@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260723.1"
+DEPLOYMENT_BUILD_ID = "20260724.1"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3851,10 +3851,63 @@ def on_order_response(context, order_list):
     _persist_live_state(context)
 
 
+def _trade_callback_log_value(value, max_length=200):
+    """Format one raw callback field without allowing logging to break trading."""
+    if value is None or value == "":
+        return "<空>"
+    try:
+        text = str(value).replace("\r", "\\r").replace("\n", "\\n")
+    except Exception:
+        return "<无法格式化>"
+    if len(text) > max_length:
+        return text[:max_length - 3] + "..."
+    return text
+
+
+def _log_trade_callback_entry(trades):
+    """Audit every raw PTrade trade push before any business-path filtering."""
+    try:
+        is_live = bool(getattr(g, "__is_live", False))
+        log.info("[成交主推入口] 实盘标志=%s 记录数=%d" % (
+            "是" if is_live else "否", len(trades)))
+        for index, trade in enumerate(trades, 1):
+            if not isinstance(trade, dict):
+                log.info("[成交主推明细] 序号=%d 类型=%s" % (
+                    index, type(trade).__name__))
+                continue
+            log.info(
+                "[成交主推明细] 序号=%d 类型=dict 代码=%s 方向=%s "
+                "成交数量=%s 成交价格=%s 成交额=%s order_id=%s 委托号=%s "
+                "成交编号=%s 委托状态=%s 成交类型=%s 成交状态=%s "
+                "撤单原委托号=%s 废单原因=%s 成交时间=%s" % (
+                    index,
+                    _trade_callback_log_value(trade.get("stock_code")),
+                    _trade_callback_log_value(trade.get("entrust_bs")),
+                    _trade_callback_log_value(trade.get("business_amount")),
+                    _trade_callback_log_value(trade.get("business_price")),
+                    _trade_callback_log_value(trade.get("business_balance")),
+                    _trade_callback_log_value(trade.get("order_id")),
+                    _trade_callback_log_value(trade.get("entrust_no")),
+                    _trade_callback_log_value(trade.get("business_id")),
+                    _trade_callback_log_value(trade.get("status")),
+                    _trade_callback_log_value(trade.get("real_type")),
+                    _trade_callback_log_value(trade.get("real_status")),
+                    _trade_callback_log_value(trade.get("withdraw_no")),
+                    _trade_callback_log_value(trade.get("cancel_info")),
+                    _trade_callback_log_value(trade.get("business_time")),
+                ))
+    except Exception as exc:
+        try:
+            log.warning("[成交主推审计异常] 原始回调日志记录失败: %s" % exc)
+        except Exception:
+            pass
+
+
 def on_trade_response(context, trade_list):
+    trades = trade_list if isinstance(trade_list, list) else [trade_list]
+    _log_trade_callback_entry(trades)
     if not getattr(g, "__is_live", False):
         return
-    trades = trade_list if isinstance(trade_list, list) else [trade_list]
     for trade in trades:
         if not isinstance(trade, dict):
             log.warning("[成交回报格式异常] 已忽略类型=%s" % type(trade).__name__)

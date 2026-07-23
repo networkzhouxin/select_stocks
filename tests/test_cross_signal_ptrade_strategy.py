@@ -120,7 +120,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260723.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260724.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2185,6 +2185,59 @@ def test_sell_submission_failure_does_not_create_guard(monkeypatch):
     assert not pt.execute_sell("513100.SS", context, "test")
     assert pt.g.__pending_sells == {}
     assert pt.g.sold_today == {}
+
+
+@pytest.mark.parametrize(
+    ("order_id", "expected_order_id"),
+    [
+        ("callback-order-1", "order_id=callback-order-1"),
+        ("", "order_id=<空>"),
+    ],
+)
+def test_trade_callback_logs_raw_order_id_before_live_guard(
+        monkeypatch, order_id, expected_order_id):
+    messages = []
+    pt.g = make_g(__is_live=False)
+    monkeypatch.setattr(
+        pt.log, "info", lambda message, *args: messages.append(
+            message % args if args else str(message)))
+
+    pt.on_trade_response(types.SimpleNamespace(), {
+        "stock_code": "513050.SS",
+        "entrust_bs": "2",
+        "business_amount": 2100,
+        "business_price": 0.974,
+        "business_balance": 2045.4,
+        "order_id": order_id,
+        "entrust_no": "700104",
+        "business_id": "fill-58",
+        "real_type": "0",
+        "status": "7",
+        "real_status": "0",
+        "withdraw_no": "0",
+        "cancel_info": "",
+        "business_time": "2026-07-23 09:35:03",
+    })
+
+    assert any(
+        message.startswith("[成交主推入口]")
+        and "实盘标志=否" in message
+        and "记录数=1" in message
+        for message in messages
+    )
+    detail = next(
+        message for message in messages
+        if message.startswith("[成交主推明细]")
+    )
+    assert expected_order_id in detail
+    assert "委托号=700104" in detail
+    assert "成交编号=fill-58" in detail
+    assert "成交类型=0" in detail
+    assert "委托状态=7" in detail
+    assert "成交状态=0" in detail
+    assert "成交额=2045.4" in detail
+    assert "撤单原委托号=0" in detail
+    assert "废单原因=<空>" in detail
 
 
 def test_partial_buy_callbacks_accumulate_before_pending_is_cleared():
@@ -4427,7 +4480,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260723.1" in notes
+    assert "20260724.1" in notes
     assert "1506a0e834fe" in notes
 
 

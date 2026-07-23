@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260723.1 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260724.1 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -95,6 +95,14 @@ of the requested time. That result must not be compared with the JoinQuant
 ## Order Safety
 
 - ETF codes from callbacks are normalized to `.SS` or `.SZ`.
+- Every `on_trade_response` invocation writes an entry record before the live
+  guard or any callback filter, followed by one bounded detail record per raw
+  item. The detail includes the raw `order_id` (explicitly printed as `<空>`
+  when absent), entrust number, business ID, direction, quantity, price,
+  balance, entrust status (`status`), callback type (`real_type`), trade status
+  (`real_status`), original entrust number for cancellation, rejection reason,
+  and business time. These records are diagnostic only and do not relax
+  pending-order matching.
 - Buy and sell partial fills are accumulated from `on_trade_response`.
 - A non-empty official `business_id` is recorded inside its matching pending
   order. A repeated push with the same成交编号 is ignored, so one broker fill
