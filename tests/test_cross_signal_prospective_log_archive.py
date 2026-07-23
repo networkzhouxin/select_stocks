@@ -17,7 +17,7 @@ from cross_signal_strategy.research.prospective_log_archive import (
 
 
 EXPECTED_VERSION = "cross-v0.3.2"
-EXPECTED_BUILD = "20260722.1"
+EXPECTED_BUILD = "20260723.1"
 EXPECTED_FINGERPRINT = "1506a0e834fe"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_DOC = (
@@ -285,10 +285,11 @@ def test_forward_log_protocol_freezes_collection_without_opening_research():
 
     required_terms = (
         "2026-07-18",
-        "20260722.1",
+        "20260723.1",
         "1506a0e834fe",
         "不改变交易逻辑",
-        "不新增定时任务",
+        "09:36",
+        "不重新计算信号",
         "不新增行情请求",
         "只增不改",
         "先登记假设",

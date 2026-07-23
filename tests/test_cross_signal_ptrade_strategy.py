@@ -62,6 +62,7 @@ def make_g(**overrides):
         "__last_snapshot": {},
         "__pending_orders": {},
         "__pending_sells": {},
+        "__deferred_buy_after_sell": False,
         "__order_state_unknown": False,
         "__is_live": True,
         "__mode_verified": True,
@@ -119,7 +120,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260722.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260723.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2360,6 +2361,69 @@ def test_full_sell_callback_clears_strategy_state():
     assert "513100.SS" not in pt.g.buy_date
 
 
+def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
+        monkeypatch):
+    today = date(2026, 7, 23)
+    score = make_buy_score("518880.SS")
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            cash=5000.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513050.SS": 1.145},
+        entry_atr={"513050.SS": 0.036429},
+        buy_date={"513050.SS": date(2026, 7, 14)},
+        last_scores={"513050.SS": make_sell_score("513050.SS")},
+        sold_today={"513050.SS": True},
+        execution_date=today,
+        deferred_signal_date=date(2026, 7, 22),
+        deferred_scores=[score],
+        __pending_sells={
+            "513050.SS": {
+                "requested_qty": 2100,
+                "filled_qty": 0.0,
+                "reason": "sell_score 34",
+                "order_id": "sell-order-1",
+            }
+        },
+        __deferred_buy_after_sell=True,
+    )
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: [{
+            "stock_code": "513050.XSHG",
+            "entrust_bs": "2",
+            "business_amount": 2100.0,
+            "business_price": 1.082,
+            "business_id": "sell-fill-1",
+            "order_id": "sell-order-1",
+            "_recovery_source": "get-trades",
+        }],
+    )
+    buy_calls = []
+    monkeypatch.setattr(
+        pt,
+        "execute_buy_candidates",
+        lambda received_context, scores, received_today: (
+            buy_calls.append((received_context, scores, received_today)) or 1
+        ),
+    )
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert pt.g.__pending_sells == {}
+    assert "513050.SS" not in pt.g.highest_since_buy
+    assert "513050.SS" not in pt.g.entry_atr
+    assert "513050.SS" not in pt.g.buy_date
+    assert pt.g.__deferred_buy_after_sell is False
+    assert buy_calls == [(context, [score], today)]
+
+
 def test_live_pause_check_fails_closed_when_status_is_unknown(monkeypatch):
     pt.g = make_g()
     monkeypatch.setattr(pt, "get_stock_status", lambda *args, **kwargs: {}, raising=False)
@@ -3952,6 +4016,7 @@ def test_live_recovery_rebuilds_same_day_buy_from_strategy_trades(monkeypatch):
 
     assert current_records[0]["stock_code"] == "513100.XSHG"
     assert current_records[0]["entrust_bs"] == "1"
+    assert current_records[0]["business_id"] == "trade-1"
     assert current_records[0]["_recovery_source"] == "get-trades"
     assert pt.g.buy_date["513100.SS"] == today
     assert pt.g.entry_atr["513100.SS"] == pytest.approx(0.05)
@@ -4225,6 +4290,7 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
 
     assert scheduled == [
         ("_do_trading_wrapper", "09:35"),
+        ("_recent_fill_reconcile_wrapper", "09:36"),
         ("_halt_recover_wrapper", "10:35"),
     ]
     assert pt.g.params == jq.get_default_params()
@@ -4346,20 +4412,22 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
 
     assert "cross-v0.3.2" in notes
     assert "09:35" in notes
+    assert "09:36" in notes
     assert "10:35" in notes
     assert "15:30" in notes
     assert "JoinQuant" in notes
     assert "PTrade" in notes
     assert "configuration lock" in notes
     assert "bounded state journal" in notes
-    assert "two tasks" in notes
+    assert "three tasks" in notes
+    assert "`get_trades()`" in notes
     assert "after_trading_end" in notes
     assert "path is resolved and cached at the start of" in notes
     assert "`before_trading_start`" in notes
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260722.1" in notes
+    assert "20260723.1" in notes
     assert "1506a0e834fe" in notes
 
 

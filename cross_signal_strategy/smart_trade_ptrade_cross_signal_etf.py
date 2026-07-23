@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260722.1"
+DEPLOYMENT_BUILD_ID = "20260723.1"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1177,7 +1177,7 @@ def _format_recovery_source_for_log(source):
 
 
 # 二、PTrade 生命周期与任务调度
-# 实盘只注册 09:35 主流程和 10:35 停复牌/废单补偿，共两个定时任务。
+# 实盘注册 09:35 主流程、09:36 成交兜底和 10:35 停复牌/废单补偿。
 # 回测由 handle_data 驱动且固定在收盘执行，因此只能用于冒烟检查，不能评价收益。
 
 def initialize(context):
@@ -1227,6 +1227,7 @@ def initialize(context):
     g.__last_snapshot = {}
     g.__pending_orders = {}
     g.__pending_sells = {}
+    g.__deferred_buy_after_sell = False
     g.__order_state_unknown = False
     g.__data = None
     g.__is_live = is_live
@@ -1249,6 +1250,7 @@ def initialize(context):
 
     if g.__is_live:
         run_daily(context, _do_trading_wrapper, time="09:35")
+        run_daily(context, _recent_fill_reconcile_wrapper, time="09:36")
         run_daily(context, _halt_recover_wrapper, time="10:35")
 
     log.info("[%s] 初始化完成: 最大持仓=%d 基础仓位比例=%.2f 普通信号最短持有=%d" % (
@@ -1352,6 +1354,7 @@ def before_trading_start(context, data):
     else:
         g.__pending_orders = {}
         g.__pending_sells = {}
+        g.__deferred_buy_after_sell = False
         g.__order_state_unknown = False
     if g.__is_live:
         _persist_live_state(context)
@@ -1370,6 +1373,11 @@ def after_trading_end(context, data):
 
 def _do_trading_wrapper(context):
     do_trading(context)
+    _persist_live_state(context)
+
+
+def _recent_fill_reconcile_wrapper(context):
+    reconcile_recent_fills_and_resume_buys(context)
     _persist_live_state(context)
 
 
@@ -2635,6 +2643,7 @@ def execute_buy_candidates(context, all_scores, today):
         log.error("[买入] 券商委托状态无法确认，延后买入已阻止")
         return 0
     if getattr(g, "__pending_sells", {}):
+        g.__deferred_buy_after_sell = True
         log.info("[买入延后] 正在等待%d笔卖出委托完成" % len(g.__pending_sells))
         return 0
 
@@ -3040,6 +3049,7 @@ def _fetch_current_strategy_trades():
                 "entrust_bs": entrust_bs,
                 "business_amount": fill[4],
                 "business_price": fill[5],
+                "business_id": str(fill[0] or ""),
                 "init_date": trade_time.strftime("%Y%m%d"),
                 "business_time": trade_time.strftime("%H%M%S"),
                 "order_id": str(order_id),
@@ -3047,6 +3057,52 @@ def _fetch_current_strategy_trades():
             })
     log.info("[状态恢复] 当前策略成交记录数=%d" % len(records))
     return records
+
+
+def reconcile_recent_fills_and_resume_buys(context):
+    """09:36 主动核对回调缺失的成交，并恢复被卖单阻塞的补买。"""
+    if not getattr(g, "__is_live", False):
+        return 0
+
+    pending_sells = dict(getattr(g, "__pending_sells", {}))
+    pending_order_ids = set(
+        str(item.get("order_id", "") or "")
+        for item in pending_sells.values()
+        if isinstance(item, dict)
+    )
+    pending_order_ids.discard("")
+    if pending_order_ids:
+        matched = 0
+        for record in _fetch_current_strategy_trades():
+            if (
+                isinstance(record, dict)
+                and str(record.get("entrust_bs", "")) == "2"
+                and str(record.get("order_id", "") or "") in pending_order_ids
+            ):
+                on_trade_response(context, record)
+                matched += 1
+        log.info("[成交兜底] 09:36主动核对待卖委托=%d 匹配成交=%d" % (
+            len(pending_order_ids), matched))
+
+    if not getattr(g, "__deferred_buy_after_sell", False):
+        return 0
+    if getattr(g, "__pending_sells", {}):
+        log.info("[成交兜底] 卖出尚未全部成交，补买继续延后至10:35复核")
+        return 0
+
+    today = _as_date(get_context_datetime(context))
+    if today is None or g.execution_date != today:
+        log.error("[成交兜底] 延后买入日期不匹配，本次不提交委托")
+        g.__deferred_buy_after_sell = False
+        return 0
+
+    g.__deferred_buy_after_sell = False
+    log.info("[成交兜底] 卖出已确认完成，立即恢复延后买入评估")
+    return execute_buy_candidates(
+        context,
+        list(getattr(g, "deferred_scores", [])),
+        today,
+    )
 
 
 def _delivery_trade_date(record):

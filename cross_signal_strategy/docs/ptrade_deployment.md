@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260722.1 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260723.1 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -36,9 +36,17 @@ server restart.
 
 ## Live Schedule
 
-PTrade live mode registers two tasks, below the platform limit of five:
+PTrade live mode registers three tasks, below the platform limit of five:
 
 - `09:35`: run the complete cross-signal strategy using T-1 daily bars.
+- `09:36`: reconcile fills for sell orders submitted at 09:35 through the
+  official `get_trades()` API when `on_trade_response` was absent or delayed.
+  Only fills whose order ID matches the current pending sell are accepted.
+  Once all such sells are confirmed, the adapter immediately resumes the buy
+  evaluation already frozen at 09:35. It does not recalculate indicators,
+  scores, ranking, or signals at 09:36. PTrade documents same-minute
+  `get_trades()` results as cached from the first query, so the next minute is
+  the earliest deterministic fallback rather than an arbitrary trading time.
 - `10:35`: recheck ETFs that were halted at 09:35. For newly resumed ETFs,
   resumed holdings repeat the 09:35 ATR-stop and signal-sell checks using the
   current execution price and the same T-1 score, minimum-hold, trend, and
@@ -101,7 +109,9 @@ of the requested time. That result must not be compared with the JoinQuant
   `highest_since_buy`. State is cleared only after the requested quantity is
   fully filled.
 - Submitted or partially filled sells do not release cash or holding slots for
-  replacement buys. The 10:35 task uses broker-confirmed cash and positions.
+  replacement buys. The 09:36 reconciliation may resume buys only after all
+  pending sells are confirmed; otherwise the 10:35 task uses broker-confirmed
+  cash and positions.
 - A partially filled then cancelled sell preserves risk state for the residual
   position and releases the retry guard.
 - Rejected orders release their guard without inventing a fill.
@@ -210,7 +220,7 @@ of the requested time. That result must not be compared with the JoinQuant
   current-strategy fills, delivery records, and broker reconstruction; a
   matching journal may then fill only remaining gaps. If no source proves a
   holding, it remains unverified and exposure cannot increase.
-- State journal writes run after the 09:35 and 10:35 tasks, from
+- State journal writes run after the 09:35, 09:36, and 10:35 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   broker-validated before it can supply intraday continuity or old-position fallback.
 - After one complete scan, the process caches only the verified journal tail:
