@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.6"
+DEPLOYMENT_BUILD_ID = "20260726.7"
 
 
 try:
@@ -223,6 +223,8 @@ def initialize(context):
     g.entry_atr = {}
     g.buy_date = {}
     g.last_scores = {}
+    g.sold_today = set()
+    g.sold_guard_date = None
 
     run_daily(do_trading, time="09:35")
     run_daily(after_close, time="15:30")
@@ -759,6 +761,9 @@ def has_position(context, code):
 def sync_sell_state_after_order(code, context):
     if has_position(context, code):
         return
+    if not hasattr(g, "sold_today"):
+        g.sold_today = set()
+    g.sold_today.add(code)
     g.highest_since_buy.pop(code, None)
     g.entry_atr.pop(code, None)
     g.buy_date.pop(code, None)
@@ -814,6 +819,9 @@ def check_atr_stops(context, current_data):
 def do_trading(context):
     p = g.params
     today = context.current_dt.date()
+    if getattr(g, "sold_guard_date", None) != today:
+        g.sold_today = set()
+        g.sold_guard_date = today
     prev_date = get_prev_trade_date(context)
     current_data = get_current_data()
     is_rebalance = today.weekday() in p["rebalance_weekdays"]
@@ -936,7 +944,8 @@ def do_trading(context):
     if slots <= 0:
         return
 
-    candidates = filter_buy_candidates(all_scores, held_after_sell, p)
+    buy_exclusions = set(held_after_sell) | set(getattr(g, "sold_today", set()))
+    candidates = filter_buy_candidates(all_scores, buy_exclusions, p)
     if not candidates:
         log.info("[%s] no buy candidates above threshold" % STRATEGY_VERSION)
         return

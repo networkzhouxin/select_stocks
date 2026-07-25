@@ -5,7 +5,7 @@ import importlib.util
 import pathlib
 import sys
 import types
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -35,7 +35,7 @@ def test_formal_joinquant_source_has_no_stale_release_labels():
 def test_joinquant_exposes_stable_release_fingerprint():
     fingerprint = strategy.business_config_fingerprint()
 
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260726.6"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260726.7"
     assert len(fingerprint) == 12
     assert all(ch in "0123456789abcdef" for ch in fingerprint)
 
@@ -386,6 +386,7 @@ def test_sell_state_is_kept_when_order_does_not_change_position():
         entry_atr={"513880.XSHG": 0.0071},
         buy_date={"513880.XSHG": date(2019, 10, 18)},
         last_scores={"513880.XSHG": {"sell_score": 45}},
+        sold_today=set(),
     )
     try:
         strategy.sync_sell_state_after_order("513880.XSHG", Context())
@@ -394,6 +395,7 @@ def test_sell_state_is_kept_when_order_does_not_change_position():
         assert strategy.g.entry_atr["513880.XSHG"] == 0.0071
         assert strategy.g.buy_date["513880.XSHG"] == date(2019, 10, 18)
         assert strategy.g.last_scores["513880.XSHG"] == {"sell_score": 45}
+        assert "513880.XSHG" not in strategy.g.sold_today
     finally:
         if old_g is None:
             del strategy.g
@@ -414,6 +416,7 @@ def test_sell_state_is_cleared_only_after_position_is_flat():
         entry_atr={"513880.XSHG": 0.0071},
         buy_date={"513880.XSHG": date(2019, 10, 18)},
         last_scores={"513880.XSHG": {"sell_score": 45}},
+        sold_today=set(),
     )
     try:
         strategy.sync_sell_state_after_order("513880.XSHG", Context())
@@ -422,11 +425,278 @@ def test_sell_state_is_cleared_only_after_position_is_flat():
         assert "513880.XSHG" not in strategy.g.entry_atr
         assert "513880.XSHG" not in strategy.g.buy_date
         assert "513880.XSHG" not in strategy.g.last_scores
+        assert strategy.g.sold_today == {"513880.XSHG"}
     finally:
         if old_g is None:
             del strategy.g
         else:
             strategy.g = old_g
+
+
+def test_atr_sell_cannot_rebuy_same_code_during_same_decision_cycle(monkeypatch):
+    code = "513880.XSHG"
+
+    class Position(object):
+        total_amount = 100
+        avg_cost = 100.0
+
+    class Portfolio(object):
+        positions = {code: Position()}
+        total_value = 10000.0
+        available_cash = 10000.0
+
+    class Context(object):
+        current_dt = datetime(2026, 7, 2, 9, 35)
+        portfolio = Portfolio()
+
+    class CurrentItem(object):
+        paused = False
+        last_price = 94.0
+
+    score = {
+        "code": code,
+        "buy_allowed": True,
+        "buy_score": 65,
+        "reversal_score": 35,
+        "location_score": 17,
+        "trend_score": 5,
+        "volume_score": 0,
+        "sell_score": 0,
+        "close": 94.0,
+        "atr": 2.0,
+        "close_between_boll_lower_mid": True,
+        "close_cross_boll_mid_up": False,
+        "close_near_ma20": False,
+        "close_far_above_ma20": False,
+    }
+    sell_calls = []
+    buy_calls = []
+
+    def fake_order_target(order_code, target):
+        sell_calls.append((order_code, target))
+        Context.portfolio.positions.pop(order_code, None)
+
+    monkeypatch.setattr(
+        strategy,
+        "g",
+        types.SimpleNamespace(
+            params=strategy.get_default_params(),
+            etf_pool=[code],
+            highest_since_buy={code: 100.0},
+            entry_atr={code: 2.0},
+            buy_date={code: date(2026, 6, 20)},
+            last_scores={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "log",
+        types.SimpleNamespace(info=lambda *args, **kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "get_prev_trade_date", lambda context: date(2026, 7, 1))
+    monkeypatch.setattr(
+        strategy,
+        "get_current_data",
+        lambda: {code: CurrentItem()},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "get_trade_days",
+        lambda **kwargs: [
+            date(2026, 6, 24),
+            date(2026, 6, 25),
+            date(2026, 6, 26),
+            date(2026, 6, 29),
+            date(2026, 6, 30),
+            date(2026, 7, 1),
+            date(2026, 7, 2),
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "calc_cross_signal_score",
+        lambda order_code, end_date, return_reason=False: (dict(score), None),
+    )
+    monkeypatch.setattr(strategy, "order_target", fake_order_target, raising=False)
+    monkeypatch.setattr(
+        strategy,
+        "order_target_value",
+        lambda order_code, target_value: buy_calls.append((order_code, target_value)),
+        raising=False,
+    )
+
+    strategy.do_trading(Context())
+
+    assert sell_calls == [(code, 0)]
+    assert buy_calls == []
+    assert strategy.g.sold_today == {code}
+
+
+def test_same_day_sell_exclusion_backfills_next_ranked_candidate(monkeypatch):
+    sold_code = "513880.XSHG"
+    backup_code = "159915.XSHE"
+
+    class Position(object):
+        def __init__(self, avg_cost):
+            self.total_amount = 100
+            self.avg_cost = avg_cost
+
+    class Portfolio(object):
+        positions = {sold_code: Position(100.0)}
+        total_value = 10000.0
+        available_cash = 10000.0
+
+    class Context(object):
+        current_dt = datetime(2026, 7, 2, 9, 35)
+        portfolio = Portfolio()
+
+    class CurrentItem(object):
+        paused = False
+
+        def __init__(self, price):
+            self.last_price = price
+
+    def make_score(code, buy_score, price):
+        return {
+            "code": code,
+            "buy_allowed": True,
+            "buy_score": buy_score,
+            "reversal_score": 35,
+            "location_score": 17,
+            "trend_score": 5,
+            "volume_score": 0,
+            "sell_score": 0,
+            "close": price,
+            "atr": 2.0,
+            "close_between_boll_lower_mid": True,
+            "close_cross_boll_mid_up": False,
+            "close_near_ma20": False,
+            "close_far_above_ma20": False,
+        }
+
+    scores = {
+        sold_code: make_score(sold_code, 80, 94.0),
+        backup_code: make_score(backup_code, 65, 50.0),
+    }
+    buy_calls = []
+
+    def fake_order_target(order_code, target):
+        assert (order_code, target) == (sold_code, 0)
+        Context.portfolio.positions.pop(order_code, None)
+
+    def fake_order_target_value(order_code, target_value):
+        buy_calls.append((order_code, target_value))
+        Context.portfolio.positions[order_code] = Position(scores[order_code]["close"])
+
+    monkeypatch.setattr(
+        strategy,
+        "g",
+        types.SimpleNamespace(
+            params=strategy.get_default_params(),
+            etf_pool=[sold_code, backup_code],
+            highest_since_buy={sold_code: 100.0},
+            entry_atr={sold_code: 2.0},
+            buy_date={sold_code: date(2026, 6, 20)},
+            last_scores={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "log",
+        types.SimpleNamespace(info=lambda *args, **kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "get_prev_trade_date", lambda context: date(2026, 7, 1))
+    monkeypatch.setattr(
+        strategy,
+        "get_current_data",
+        lambda: {
+            sold_code: CurrentItem(94.0),
+            backup_code: CurrentItem(50.0),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "get_trade_days",
+        lambda **kwargs: [
+            date(2026, 6, 24),
+            date(2026, 6, 25),
+            date(2026, 6, 26),
+            date(2026, 6, 29),
+            date(2026, 6, 30),
+            date(2026, 7, 1),
+            date(2026, 7, 2),
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "calc_cross_signal_score",
+        lambda order_code, end_date, return_reason=False: (
+            dict(scores[order_code]),
+            None,
+        ),
+    )
+    monkeypatch.setattr(strategy, "order_target", fake_order_target, raising=False)
+    monkeypatch.setattr(
+        strategy,
+        "order_target_value",
+        fake_order_target_value,
+        raising=False,
+    )
+
+    strategy.do_trading(Context())
+
+    assert [code for code, _target in buy_calls] == [backup_code]
+    assert strategy.g.sold_today == {sold_code}
+
+
+def test_same_day_sell_exclusion_resets_on_next_trade_date(monkeypatch):
+    params = strategy.get_default_params()
+    params["rebalance_weekdays"] = []
+    current_date = date(2026, 7, 3)
+
+    class Portfolio(object):
+        positions = {}
+
+    class Context(object):
+        current_dt = datetime(2026, 7, 3, 9, 35)
+        portfolio = Portfolio()
+
+    monkeypatch.setattr(
+        strategy,
+        "g",
+        types.SimpleNamespace(
+            params=params,
+            etf_pool=[],
+            highest_since_buy={},
+            entry_atr={},
+            buy_date={},
+            last_scores={},
+            sold_today={"513880.XSHG"},
+            sold_guard_date=date(2026, 7, 2),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "log",
+        types.SimpleNamespace(info=lambda *args, **kwargs: None),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "get_prev_trade_date", lambda context: date(2026, 7, 2))
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+
+    strategy.do_trading(Context())
+
+    assert strategy.g.sold_today == set()
+    assert strategy.g.sold_guard_date == current_date
 
 
 def test_has_position_does_not_probe_missing_position_with_get():
