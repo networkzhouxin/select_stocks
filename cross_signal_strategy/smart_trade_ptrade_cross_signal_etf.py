@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260725.1"
+DEPLOYMENT_BUILD_ID = "20260725.2"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1682,6 +1682,84 @@ def filter_buy_candidates(scores, held_codes, params=None):
     ]
 
 
+def _buy_candidate_rejection_items(score, held_codes, params):
+    """Return ordered audit reasons without changing the frozen filter."""
+    items = []
+    buy_score = _numeric_score(score.get("buy_score"))
+    sell_score = _numeric_score(score.get("sell_score"))
+    buy_threshold = _numeric_score(params.get("buy_threshold"))
+    sell_threshold = _numeric_score(params.get("sell_threshold"))
+    if not score.get("buy_allowed"):
+        items.append(("禁止买入", "禁止买入"))
+    if buy_score < buy_threshold:
+        items.append((
+            "评分不足",
+            "评分不足(%.0f<%.0f)" % (buy_score, buy_threshold),
+        ))
+    if sell_score >= sell_threshold:
+        items.append((
+            "卖出风险过高",
+            "卖出风险过高(%.0f>=%.0f)" % (sell_score, sell_threshold),
+        ))
+    if not has_new_buy_position(score, params):
+        items.append(("缺少新鲜低位", "缺少新鲜低位"))
+    if is_blocked_entry_combo(score):
+        items.append(("冲突组合", "冲突组合"))
+    if score.get("code") in held_codes:
+        items.append(("已有持仓或待买", "已有持仓或待买"))
+    return items
+
+
+def _log_buy_candidate_rejection_diagnostics(
+        scores, held_codes, params, source):
+    """Explain every rejected score while keeping decisions untouched."""
+    labels = (
+        "禁止买入",
+        "评分不足",
+        "卖出风险过高",
+        "缺少新鲜低位",
+        "冲突组合",
+        "已有持仓或待买",
+    )
+    counts = dict((label, 0) for label in labels)
+    details = []
+    passed = 0
+    held = set(held_codes)
+    for score in scores:
+        items = _buy_candidate_rejection_items(score, held, params)
+        if not items:
+            passed += 1
+            continue
+        for label, _detail in items:
+            counts[label] += 1
+        details.append((
+            score.get("code", "未知"),
+            _numeric_score(score.get("buy_score")),
+            _numeric_score(score.get("sell_score")),
+            ",".join(detail for _label, detail in items),
+        ))
+
+    log.info(
+        "[买入筛选汇总] 来源=%s 总数=%d 通过=%d "
+        "评分不足=%d 已有持仓或待买=%d 卖出风险过高=%d "
+        "缺少新鲜低位=%d 冲突组合=%d 禁止买入=%d" % (
+            source,
+            len(scores),
+            passed,
+            counts["评分不足"],
+            counts["已有持仓或待买"],
+            counts["卖出风险过高"],
+            counts["缺少新鲜低位"],
+            counts["冲突组合"],
+            counts["禁止买入"],
+        ))
+    for code, buy_score, sell_score, reasons in details:
+        log.info(
+            "[买入筛选明细] 来源=%s 代码=%s 买入评分=%.0f "
+            "卖出评分=%.0f 原因=%s" % (
+                source, code, buy_score, sell_score, reasons))
+
+
 def is_blocked_entry_combo(score):
     rsi_up = score.get("rsi6_cross_rsi12_up") or score.get("rsi6_cross_rsi24_up")
     kdj_up = score.get("kdj_k_cross_up") or score.get("kdj_j_cross_up")
@@ -2674,7 +2752,8 @@ def execute_buy_candidates(
         all_scores,
         today,
         held_exclusions=None,
-        available_cash_override=None):
+        available_cash_override=None,
+        diagnostic_source="买入评估"):
     """只依据券商已确认的持仓和可用资金提交买单。"""
     if getattr(g, "__order_state_unknown", False):
         log.error("[买入] 券商委托状态无法确认，延后买入已阻止")
@@ -2698,6 +2777,12 @@ def execute_buy_candidates(
     candidates = filter_buy_candidates(all_scores, held | pending_buys, g.params)
     if not candidates:
         log.info("[%s] 没有达到阈值的买入候选" % STRATEGY_VERSION)
+        _log_buy_candidate_rejection_diagnostics(
+            all_scores,
+            held | pending_buys,
+            g.params,
+            diagnostic_source,
+        )
         return 0
 
     if available_cash_override is None:
@@ -2875,7 +2960,12 @@ def do_trading(context):
             context, code, score_map[code], today, signal_hold_days)
 
     g.deferred_scores = list(all_scores)
-    execute_buy_candidates(context, all_scores, today)
+    execute_buy_candidates(
+        context,
+        all_scores,
+        today,
+        diagnostic_source="09:35主流程",
+    )
 
 
 def after_close(context):
@@ -2987,7 +3077,12 @@ def halt_recover(context):
     elif previous:
         log.info("[复牌补偿] 受跟踪的ETF均未复牌")
     if scores:
-        execute_buy_candidates(context, scores, today)
+        execute_buy_candidates(
+            context,
+            scores,
+            today,
+            diagnostic_source="10:35复牌/卖单补偿",
+        )
 
 
 # 七、实盘状态恢复与成交回报
@@ -3147,6 +3242,7 @@ def _resume_deferred_buys_after_sells(
         today,
         held_exclusions=sold_codes,
         available_cash_override=available_cash,
+        diagnostic_source=source,
     )
     if bought <= 0 and retry_if_no_order:
         g.__deferred_buy_after_sell = True

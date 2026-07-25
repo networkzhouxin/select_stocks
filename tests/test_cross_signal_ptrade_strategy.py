@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260725.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260725.2"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2669,6 +2669,7 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
         {
             "held_exclusions": {"513050.SS"},
             "available_cash_override": 5000.0,
+            "diagnostic_source": "成交兜底",
         },
     )]
 
@@ -3054,8 +3055,11 @@ def test_0935_defers_paused_pool_codes_but_processes_open_codes(monkeypatch):
     monkeypatch.setattr(
         pt,
         "execute_buy_candidates",
-        lambda context, scores, execution_date: (
-            buys.append([score["code"] for score in scores]) or 0),
+        lambda context, scores, execution_date, diagnostic_source=None: (
+            buys.append((
+                [score["code"] for score in scores],
+                diagnostic_source,
+            )) or 0),
     )
 
     pt.do_trading(context)
@@ -3063,7 +3067,94 @@ def test_0935_defers_paused_pool_codes_but_processes_open_codes(monkeypatch):
     assert stop_checks == [True]
     assert pt.g.paused_pool_codes == {paused}
     assert scored == [(open_code, prev_date)]
-    assert buys == [[open_code]]
+    assert buys == [([open_code], "09:35主流程")]
+
+
+def test_buy_rejection_diagnostics_explain_every_filter_without_order(monkeypatch):
+    held_code = "159985.SZ"
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                held_code: types.SimpleNamespace(
+                    amount=500, cost_basis=2.0, last_sale_price=2.1)
+            },
+            portfolio_value=20000,
+            cash=5000,
+        )
+    )
+    pt.g = make_g()
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(
+                message % args if args else str(message)),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("rejected candidates must not submit orders")),
+        raising=False,
+    )
+
+    held = make_buy_score(held_code)
+    low_score = make_buy_score("518880.SS")
+    low_score["buy_score"] = 45
+    sell_risk = make_buy_score("513050.SS")
+    sell_risk["sell_score"] = pt.g.params["sell_threshold"]
+    no_position = make_buy_score("513880.SS")
+    no_position.update({
+        "close_between_boll_lower_mid": False,
+        "close_cross_boll_mid_up": False,
+        "close_near_ma20": False,
+    })
+    conflict = make_buy_score("513500.SS")
+    conflict.update({
+        "rsi6_cross_rsi12_up": True,
+        "macd_cross_up": True,
+        "kdj_k_cross_up": False,
+        "kdj_j_cross_up": False,
+        "volume_score": 4,
+        "trend_score": 5,
+    })
+    forbidden = make_buy_score("159915.SZ")
+    forbidden["buy_allowed"] = False
+
+    assert pt.execute_buy_candidates(
+        context,
+        [held, low_score, sell_risk, no_position, conflict, forbidden],
+        date(2026, 7, 24),
+        diagnostic_source="09:35主流程",
+    ) == 0
+
+    summary = next(
+        message for message in messages
+        if message.startswith("[买入筛选汇总]"))
+    assert "来源=09:35主流程" in summary
+    assert "评分不足=1" in summary
+    assert "已有持仓或待买=1" in summary
+    assert "卖出风险过高=1" in summary
+    assert "缺少新鲜低位=1" in summary
+    assert "冲突组合=1" in summary
+    assert "禁止买入=1" in summary
+
+    details = "\n".join(
+        message for message in messages
+        if message.startswith("[买入筛选明细]"))
+    assert "代码=159985.SZ" in details and "已有持仓或待买" in details
+    assert "代码=518880.SS" in details and "评分不足(45<60)" in details
+    sell_threshold = pt.g.params["sell_threshold"]
+    assert "代码=513050.SS" in details
+    assert "卖出风险过高(%.0f>=%.0f)" % (
+        sell_threshold, sell_threshold) in details
+    assert "代码=513880.SS" in details and "缺少新鲜低位" in details
+    assert "代码=513500.SS" in details and "冲突组合" in details
+    assert "代码=159915.SZ" in details and "禁止买入" in details
 
 
 def test_buy_execution_waits_for_submitted_sells_to_finish(monkeypatch):
@@ -3334,6 +3425,23 @@ def test_release_docs_keep_iopv_observation_non_binding():
     assert "observation-only IOPV" in readme
 
 
+def test_release_docs_describe_buy_rejection_diagnostics():
+    deployment = (
+        ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
+    ).read_text(encoding="utf-8")
+    detailed = (
+        ROOT / "cross_signal_strategy" / "docs"
+        / "上穿下穿ETF策略详细说明.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (deployment, detailed):
+        assert "[买入筛选汇总]" in text
+        assert "[买入筛选明细]" in text
+        assert "10:35复牌/卖单补偿" in text
+    assert "do not change" in " ".join(deployment.split())
+    assert "不改变" in detailed
+
+
 def test_buy_submission_failure_does_not_create_guard(monkeypatch):
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={}, portfolio_value=20000, cash=20000)
@@ -3376,7 +3484,10 @@ def test_halt_recovery_merges_resumed_scores_without_second_portfolio_pass(monke
     monkeypatch.setattr(
         pt,
         "execute_buy_candidates",
-        lambda context, scores, today: executed.append([s["code"] for s in scores]) or 0,
+        lambda context, scores, today, diagnostic_source=None: executed.append((
+            [s["code"] for s in scores],
+            diagnostic_source,
+        )) or 0,
     )
     monkeypatch.setattr(
         pt,
@@ -3387,7 +3498,9 @@ def test_halt_recovery_merges_resumed_scores_without_second_portfolio_pass(monke
     pt.halt_recover(context)
 
     assert scored == [("513100.SS", date(2026, 7, 10))]
-    assert executed == [["159985.SZ", "513100.SS"]]
+    assert executed == [
+        (["159985.SZ", "513100.SS"], "10:35复牌/卖单补偿")
+    ]
     assert pt.g.paused_pool_codes == set()
 
 
@@ -3806,12 +3919,26 @@ def test_halt_recovery_reconciles_open_orders_before_deferred_buy(monkeypatch):
     monkeypatch.setattr(
         pt,
         "execute_buy_candidates",
-        lambda context, scores, today: calls.append("buy") or 0,
+        lambda context, scores, today, **kwargs: (
+            calls.append(("buy", kwargs)) or 0
+        ),
     )
 
     pt.halt_recover(context)
 
-    assert calls == ["reconcile", "recover", "buy"]
+    assert calls[-1] == (
+        "buy",
+        {"diagnostic_source": "10:35复牌/卖单补偿"},
+    )
+
+    assert calls == [
+        "reconcile",
+        "recover",
+        (
+            "buy",
+            {"diagnostic_source": "10:35复牌/卖单补偿"},
+        ),
+    ]
 
 
 def test_live_recovery_does_not_invent_missing_entry_risk_state(monkeypatch):
@@ -4676,7 +4803,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260725.1" in notes
+    assert "20260725.2" in notes
     assert "1506a0e834fe" in notes
 
 

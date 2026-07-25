@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260725.1 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260725.2 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -77,6 +77,23 @@ raises, neither branch is configured and all `handle_data` trading is blocked.
 Daily PTrade backtests execute scheduled work at the platform close regardless
 of the requested time. That result must not be compared with the JoinQuant
 09:35 performance result.
+
+## Buy Filter Diagnostics
+
+When no ETF survives the frozen buy filter, PTrade keeps the existing
+`[cross-v0.3.2] 没有达到阈值的买入候选` line and adds:
+
+- `[买入筛选汇总]`: the evaluation source, score count, pass count, and totals
+  for score below threshold, existing/pending holdings, sell risk, missing
+  fresh low-position evidence, blocked entry combinations, and buy
+  prohibition.
+- `[买入筛选明细]`: one complete line per rejected ETF with buy score, sell
+  score, and every applicable rejection reason.
+
+The source distinguishes `09:35主流程`, `成交主推`, `成交兜底`, and
+`10:35复牌/卖单补偿`. These records only explain the existing filter. They do
+not change candidate ordering, thresholds, signals, positions, cash, or order
+submission.
 
 ## Data Boundary
 
