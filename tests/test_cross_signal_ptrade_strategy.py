@@ -54,6 +54,8 @@ def make_g(**overrides):
         "execution_date": None,
         "deferred_scores": [],
         "deferred_signal_date": None,
+        "failed_buy_codes": set(),
+        "buy_backfill_pending": False,
         "live_state_schema_version": None,
         "live_state_business_fingerprint": None,
         "live_state_generation": None,
@@ -123,7 +125,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.7"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.8"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3442,6 +3444,137 @@ def test_rejected_sell_releases_retry_guard_without_clearing_position_state():
     }
 
 
+def test_zero_fill_buy_rejection_immediately_backfills_next_frozen_candidate(
+        monkeypatch):
+    today = date(2026, 7, 23)
+    failed_code = "513100.SS"
+    backup_code = "159915.SZ"
+    failed_score = make_buy_score(failed_code)
+    failed_score["buy_score"] = 80
+    backup_score = make_buy_score(backup_code)
+    backup_score["buy_score"] = 70
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 10),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        execution_date=today,
+        deferred_scores=[failed_score, backup_score],
+        __pending_orders={
+            failed_code: {
+                "requested_qty": 3000,
+                "filled_qty": 0.0,
+                "filled_value": 0.0,
+                "fill_value_complete": True,
+                "atr": failed_score["atr"],
+                "buy_date": today,
+                "order_id": "buy-order-failed",
+                "submitted_at": datetime(2026, 7, 23, 9, 35, 0),
+            }
+        },
+    )
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "buy-order-backup"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.on_order_response(context, {
+        "stock_code": failed_code,
+        "entrust_bs": "1",
+        "status": "9",
+        "business_amount": 0,
+        "error_info": "rejected",
+        "order_id": "buy-order-failed",
+    })
+
+    assert pt.g.failed_buy_codes == {failed_code}
+    assert pt.g.buy_backfill_pending is False
+    assert orders == [(backup_code, 1500, 2.0)]
+    assert set(pt.g.__pending_orders) == {backup_code}
+    assert pt.g.__pending_orders[backup_code]["order_id"] == "buy-order-backup"
+
+
+def test_zero_fill_buy_rejection_retries_backfill_at_0936_when_cash_sync_lags(
+        monkeypatch):
+    today = date(2026, 7, 23)
+    failed_code = "513100.SS"
+    backup_code = "159915.SZ"
+    failed_score = make_buy_score(failed_code)
+    failed_score["buy_score"] = 80
+    backup_score = make_buy_score(backup_code)
+    backup_score["buy_score"] = 70
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 10),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=0.0,
+        ),
+    )
+    pt.g = make_g(
+        execution_date=today,
+        deferred_scores=[failed_score, backup_score],
+        __pending_orders={
+            failed_code: {
+                "requested_qty": 3000,
+                "filled_qty": 0.0,
+                "filled_value": 0.0,
+                "fill_value_complete": True,
+                "atr": failed_score["atr"],
+                "buy_date": today,
+                "order_id": "buy-order-failed",
+                "submitted_at": datetime(2026, 7, 23, 9, 35, 0),
+            }
+        },
+    )
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "buy-order-backup"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.on_order_response(context, {
+        "stock_code": failed_code,
+        "entrust_bs": "1",
+        "status": "9",
+        "business_amount": 0,
+        "error_info": "rejected",
+        "order_id": "buy-order-failed",
+    })
+
+    assert orders == []
+    assert pt.g.buy_backfill_pending is True
+
+    context.current_dt = datetime(2026, 7, 23, 9, 36, 0)
+    context.portfolio.cash = 20000.0
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert orders == [(backup_code, 1500, 2.0)]
+    assert pt.g.buy_backfill_pending is False
+    assert set(pt.g.__pending_orders) == {backup_code}
+
+
 def test_partial_cancelled_sell_keeps_risk_state_for_remaining_position():
     pt.g = make_g(
         highest_since_buy={"513100.SS": 1.2},
@@ -3482,6 +3615,8 @@ def test_before_trading_clears_expired_day_order_guards(monkeypatch):
         __pending_sells={"159915.SZ": {"requested_qty": 100}},
         sold_today={"159915.SZ": True},
         sell_retry_reasons={"159915.SZ": "atr_stop 0.900<=0.950"},
+        failed_buy_codes={"513100.SS"},
+        buy_backfill_pending=True,
     )
     monkeypatch.setattr(pt, "recover_live_state", lambda context: None)
     monkeypatch.setattr(pt, "get_open_orders", lambda: [], raising=False)
@@ -3496,6 +3631,8 @@ def test_before_trading_clears_expired_day_order_guards(monkeypatch):
     assert pt.g.__pending_sells == {}
     assert pt.g.sold_today == {}
     assert pt.g.sell_retry_reasons == {}
+    assert pt.g.failed_buy_codes == set()
+    assert pt.g.buy_backfill_pending is False
 
 
 def test_before_trading_rebuilds_guards_from_broker_open_orders(monkeypatch):
@@ -4031,6 +4168,19 @@ def test_buy_execution_blocks_same_day_sold_code_without_consuming_slot(
     )
 
 
+def test_buy_rejection_diagnostics_distinguish_same_day_failed_buy():
+    code = "513100.SS"
+
+    items = pt._buy_candidate_rejection_items(
+        make_buy_score(code),
+        set(),
+        pt.get_default_params(),
+        failed_codes={code},
+    )
+
+    assert ("当日买入失败", "当日买入失败") in items
+
+
 def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     submitted_at = datetime(2026, 7, 13, 9, 35, 0)
     context = types.SimpleNamespace(
@@ -4066,6 +4216,50 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert "委托编号=buy-order-1" in lifecycle
     assert "请求数量=3100" in lifecycle
     assert "剩余数量=3100" in lifecycle
+
+
+def test_buy_submission_failure_is_excluded_for_rest_of_day_and_backfills(
+        monkeypatch):
+    failed_code = "513100.SS"
+    backup_code = "159915.SZ"
+    failed_score = make_buy_score(failed_code)
+    failed_score["buy_score"] = 80
+    backup_score = make_buy_score(backup_code)
+    backup_score["buy_score"] = 70
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    pt.g = make_g()
+    orders = []
+
+    def fake_order(code, amount, limit_price=None):
+        orders.append((code, amount, limit_price))
+        if code == failed_code:
+            raise RuntimeError("submit failed")
+        return "buy-order-backup"
+
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(pt, "order", fake_order, raising=False)
+
+    assert pt.execute_buy_candidates(
+        context,
+        [failed_score, backup_score],
+        date(2026, 7, 23),
+    ) == 1
+
+    assert [code for code, _amount, _price in orders] == [
+        failed_code,
+        backup_code,
+    ]
+    assert pt.g.failed_buy_codes == {failed_code}
+    assert set(pt.g.__pending_orders) == {backup_code}
 
 
 @pytest.mark.parametrize(
@@ -5735,13 +5929,24 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.7" in notes
+    assert "20260726.8" in notes
     assert "1506a0e834fe" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
     assert "`INFO`" in notes
     assert "`DEBUG`" in notes
     assert "完整指标明细" in notes
+
+
+def test_ptrade_deployment_notes_define_zero_fill_buy_backfill():
+    notes = (
+        ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
+    ).read_text(encoding="utf-8")
+
+    assert "零成交终态" in notes
+    assert "当日不再重试" in notes
+    assert "冻结候选队列" in notes
+    assert "不新增定时任务" in notes
 
 
 def test_ptrade_deployment_notes_define_bounded_full_audit_log():

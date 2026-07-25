@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.7"
+DEPLOYMENT_BUILD_ID = "20260726.8"
 
 
 try:
@@ -966,6 +966,11 @@ def do_trading(context):
             score["trend_score"], score["volume_score"], target_value))
         order_target_value(code, target_value)
         sync_buy_state_after_order(code, context, today, price, score["atr"])
+        if not has_position(context, code):
+            log.warning(
+                "[buy backfill] %s order did not create a position; "
+                "continue with the next candidate" % code)
+            continue
         bought += 1
 
 

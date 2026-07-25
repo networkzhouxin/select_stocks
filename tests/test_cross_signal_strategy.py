@@ -35,7 +35,7 @@ def test_formal_joinquant_source_has_no_stale_release_labels():
 def test_joinquant_exposes_stable_release_fingerprint():
     fingerprint = strategy.business_config_fingerprint()
 
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260726.7"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260726.8"
     assert len(fingerprint) == 12
     assert all(ch in "0123456789abcdef" for ch in fingerprint)
 
@@ -655,6 +655,134 @@ def test_same_day_sell_exclusion_backfills_next_ranked_candidate(monkeypatch):
 
     assert [code for code, _target in buy_calls] == [backup_code]
     assert strategy.g.sold_today == {sold_code}
+
+
+def test_failed_buy_order_does_not_consume_slot_and_backfills_next_candidate(
+        monkeypatch):
+    failed_code = "513100.XSHG"
+    backup_code = "159915.XSHE"
+    params = strategy.get_default_params()
+    params["max_hold"] = 1
+
+    class Position(object):
+        total_amount = 100
+        avg_cost = 2.0
+
+    class Portfolio(object):
+        positions = {}
+        total_value = 20000.0
+        available_cash = 20000.0
+
+    class Context(object):
+        current_dt = datetime(2026, 7, 2, 9, 35)
+        portfolio = Portfolio()
+
+    class CurrentItem(object):
+        paused = False
+        last_price = 2.0
+
+    def make_score(code, buy_score):
+        return {
+            "code": code,
+            "buy_allowed": True,
+            "buy_score": buy_score,
+            "reversal_score": 35,
+            "location_score": 17,
+            "trend_score": 5,
+            "volume_score": 0,
+            "sell_score": 0,
+            "close": 2.0,
+            "atr": 0.05,
+            "close_between_boll_lower_mid": True,
+            "close_cross_boll_mid_up": False,
+            "close_near_ma20": False,
+            "close_far_above_ma20": False,
+        }
+
+    scores = {
+        failed_code: make_score(failed_code, 80),
+        backup_code: make_score(backup_code, 70),
+    }
+    order_calls = []
+
+    def fake_order_target_value(code, target_value):
+        order_calls.append((code, target_value))
+        if code == backup_code:
+            Context.portfolio.positions[code] = Position()
+
+    monkeypatch.setattr(
+        strategy,
+        "g",
+        types.SimpleNamespace(
+            params=params,
+            etf_pool=[failed_code, backup_code],
+            highest_since_buy={},
+            entry_atr={},
+            buy_date={},
+            last_scores={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "log",
+        types.SimpleNamespace(
+            info=lambda *args, **kwargs: None,
+            warning=lambda *args, **kwargs: None,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "get_prev_trade_date",
+        lambda context: date(2026, 7, 1),
+    )
+    monkeypatch.setattr(
+        strategy,
+        "get_current_data",
+        lambda: {
+            failed_code: CurrentItem(),
+            backup_code: CurrentItem(),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "get_trade_days",
+        lambda **kwargs: [
+            date(2026, 6, 24),
+            date(2026, 6, 25),
+            date(2026, 6, 26),
+            date(2026, 6, 29),
+            date(2026, 6, 30),
+            date(2026, 7, 1),
+            date(2026, 7, 2),
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (
+            dict(scores[code]),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        strategy,
+        "order_target_value",
+        fake_order_target_value,
+        raising=False,
+    )
+
+    strategy.do_trading(Context())
+
+    assert [code for code, _target in order_calls] == [
+        failed_code,
+        backup_code,
+    ]
+    assert strategy.has_position(Context(), backup_code)
+    assert strategy.g.buy_date[backup_code] == date(2026, 7, 2)
 
 
 def test_same_day_sell_exclusion_resets_on_next_trade_date(monkeypatch):

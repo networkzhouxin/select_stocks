@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.7 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.8 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -82,6 +82,14 @@ PTrade live mode registers four tasks, below the platform limit of five:
   no pending order, it returns
   without calling `get_trades()`. It does not read daily bars, recalculate
   indicators or scores, change ranking, or create a new trading decision.
+- A buy submission exception, missing order ID, or terminal order response
+  (`5`/`6`/`9`) with zero cumulative fills marks that ETF as a
+  `零成交终态`. The code is `当日不再重试`; the adapter immediately continues
+  through the same `冻结候选队列` and attempts the next qualified ETF without
+  consuming the vacant slot. If broker cash has not synchronized yet, the
+  existing 09:36/10:36 reconciliation path retries only that bounded backfill;
+  this behavior `不新增定时任务`. Partial fills and normal fills keep their
+  original lifecycle behavior.
 - `after_trading_end` (normally around `15:30`): use PTrade's official
   lifecycle callback to reconcile state, update the highest closing price
   since entry, print the position risk summary, and write the closing
