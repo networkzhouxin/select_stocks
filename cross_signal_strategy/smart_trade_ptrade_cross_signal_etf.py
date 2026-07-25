@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.5"
+DEPLOYMENT_BUILD_ID = "20260726.6"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1759,9 +1759,11 @@ def filter_buy_candidates(scores, held_codes, params=None):
     ]
 
 
-def _buy_candidate_rejection_items(score, held_codes, params):
+def _buy_candidate_rejection_items(
+        score, held_codes, params, sold_codes=None):
     """Return ordered audit reasons without changing the frozen filter."""
     items = []
+    sold = set(sold_codes or set())
     buy_score = _numeric_score(score.get("buy_score"))
     sell_score = _numeric_score(score.get("sell_score"))
     buy_threshold = _numeric_score(params.get("buy_threshold"))
@@ -1784,11 +1786,13 @@ def _buy_candidate_rejection_items(score, held_codes, params):
         items.append(("冲突组合", "冲突组合"))
     if score.get("code") in held_codes:
         items.append(("已有持仓或待买", "已有持仓或待买"))
+    if score.get("code") in sold:
+        items.append(("当日已卖出", "当日已卖出"))
     return items
 
 
 def _log_buy_candidate_rejection_diagnostics(
-        scores, held_codes, params, source):
+        scores, held_codes, params, source, sold_codes=None):
     """Explain every rejected score while keeping decisions untouched."""
     labels = (
         "禁止买入",
@@ -1797,13 +1801,15 @@ def _log_buy_candidate_rejection_diagnostics(
         "缺少新鲜低位",
         "冲突组合",
         "已有持仓或待买",
+        "当日已卖出",
     )
     counts = dict((label, 0) for label in labels)
     details = []
     passed = 0
     held = set(held_codes)
     for score in scores:
-        items = _buy_candidate_rejection_items(score, held, params)
+        items = _buy_candidate_rejection_items(
+            score, held, params, sold_codes=sold_codes)
         if not items:
             passed += 1
             continue
@@ -1819,7 +1825,7 @@ def _log_buy_candidate_rejection_diagnostics(
     log.info(
         "[买入筛选汇总] 来源=%s 总数=%d 通过=%d "
         "评分不足=%d 已有持仓或待买=%d 卖出风险过高=%d "
-        "缺少新鲜低位=%d 冲突组合=%d 禁止买入=%d" % (
+        "缺少新鲜低位=%d 冲突组合=%d 禁止买入=%d 当日已卖出=%d" % (
             source,
             len(scores),
             passed,
@@ -1829,6 +1835,7 @@ def _log_buy_candidate_rejection_diagnostics(
             counts["缺少新鲜低位"],
             counts["冲突组合"],
             counts["禁止买入"],
+            counts["当日已卖出"],
         ))
     for code, buy_score, sell_score, reasons in details:
         _log_debug_detail(
@@ -2424,6 +2431,59 @@ def _preserved_seen_business_ids(prior, order_id):
     return set()
 
 
+def _retain_unconfirmed_prior_orders(
+        prior_orders,
+        pending_same_side,
+        pending_other_side,
+        direction,
+        sold_guards):
+    """Keep locally submitted IDs until a fill or terminal callback proves them done."""
+    for raw_code, prior in prior_orders.items():
+        code = normalize_code(raw_code)
+        if code in pending_same_side:
+            continue
+        if not code or not isinstance(prior, dict):
+            g.__order_state_unknown = True
+            log.error("[委托恢复] 本地待核对%s委托格式异常，交易已阻止" % direction)
+            return False
+        if code in pending_other_side:
+            g.__order_state_unknown = True
+            log.error("[委托恢复] %s同时存在买卖委托，交易已阻止" % code)
+            return False
+
+        order_id = str(prior.get("order_id", "") or "")
+        requested = _safe_float(prior.get("requested_qty", 0))
+        filled = _safe_float(prior.get("filled_qty", 0))
+        quantities_valid = (
+            bool(order_id) and
+            np.isfinite(requested) and
+            np.isfinite(filled) and
+            requested > 0 and
+            0 <= filled <= requested
+        )
+        if not quantities_valid:
+            g.__order_state_unknown = True
+            log.error("[委托恢复] %s本地待核对%s委托字段异常，交易已阻止" % (
+                code, direction))
+            return False
+
+        retained = dict(prior)
+        retained["requested_qty"] = requested
+        retained["filled_qty"] = filled
+        retained["order_id"] = order_id
+        retained["seen_business_ids"] = _preserved_seen_business_ids(
+            prior, order_id)
+        retained["open_status_unconfirmed"] = True
+        pending_same_side[code] = retained
+        if direction == "卖出":
+            sold_guards[code] = True
+        log.warning(
+            "[委托恢复] %s%s委托未出现在开放委托列表，"
+            "已保留委托编号等待成交或终态核对 委托编号=%s" % (
+                code, direction, order_id))
+    return True
+
+
 def _reconcile_open_orders(context):
     prior_buys = dict(getattr(g, "__pending_orders", {}))
     prior_sells = dict(getattr(g, "__pending_sells", {}))
@@ -2508,6 +2568,20 @@ def _reconcile_open_orders(context):
                     prior, order_id),
             }
             sold_guards[code] = True
+    if not _retain_unconfirmed_prior_orders(
+            prior_buys,
+            pending_buys,
+            pending_sells,
+            "买入",
+            sold_guards):
+        return False
+    if not _retain_unconfirmed_prior_orders(
+            prior_sells,
+            pending_sells,
+            pending_buys,
+            "卖出",
+            sold_guards):
+        return False
     g.__pending_orders = pending_buys
     g.__pending_sells = pending_sells
     g.sold_today.update(sold_guards)
@@ -2972,17 +3046,25 @@ def execute_buy_candidates(
             ",".join(sorted(unverified_held))))
         return 0
     pending_buys = set(getattr(g, "__pending_orders", {}).keys())
-    slots = g.params["max_hold"] - len(held | pending_buys)
+    occupied_codes = held | pending_buys
+    sold_codes = set(
+        normalize_code(code)
+        for code, sold in getattr(g, "sold_today", {}).items()
+        if sold
+    )
+    slots = g.params["max_hold"] - len(occupied_codes)
     if slots <= 0:
         return 0
-    candidates = filter_buy_candidates(all_scores, held | pending_buys, g.params)
+    candidates = filter_buy_candidates(
+        all_scores, occupied_codes | sold_codes, g.params)
     if not candidates:
         log.info("[%s] 没有达到阈值的买入候选" % STRATEGY_VERSION)
         _log_buy_candidate_rejection_diagnostics(
             all_scores,
-            held | pending_buys,
+            occupied_codes,
             g.params,
             diagnostic_source,
+            sold_codes=sold_codes,
         )
         return 0
 
@@ -3298,6 +3380,11 @@ def halt_recover(context):
     ):
         log.error("[复牌补偿] 延后评分日期不匹配，本次不提交委托")
         return
+    reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="10:35主动核对",
+        diagnostic_source="10:35成交兜底",
+    )
     if not _reconcile_open_orders(context):
         return
     _recover_live_state_with_available_sources(context, allow_deliver=False)

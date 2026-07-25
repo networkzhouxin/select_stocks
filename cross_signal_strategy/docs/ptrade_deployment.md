@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.5 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.6 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -64,6 +64,10 @@ PTrade live mode registers four tasks, below the platform limit of five:
   `get_trades()` results as cached from the first query, so the next minute is
   the earliest deterministic fallback rather than an arbitrary trading time.
 - `10:35`: recheck ETFs that were halted at 09:35. For newly resumed ETFs,
+  first reconcile fills for existing pending order IDs before refreshing
+  `get_open_orders()`. A locally submitted order that disappears from the open
+  list remains guarded until an exact fill or terminal callback proves its
+  outcome; disappearance alone never releases a replacement buy.
   resumed holdings repeat the 09:35 ATR-stop and signal-sell checks using the
   current execution price and the same T-1 score, minimum-hold, trend, and
   risk-state guards. Newly resumed non-holdings receive their missing T-1
@@ -105,7 +109,7 @@ The corresponding Chinese field labels are `请求数量`, `累计成交`, `剩�
 and `耗时`.
 
 The source distinguishes `策略下单`, `成交主推`, `委托回报`,
-`09:36主动核对`, `10:36主动核对`, and `get_open_orders`. Both active
+`09:36主动核对`, `10:35主动核对`, `10:36主动核对`, and `get_open_orders`. Both active
 reconciliation tasks emit `[订单核对汇总]` with `待核对买单`,
 pending-sell count, matched buy/sell fill counts, and unresolved buy/sell
 counts. `after_trading_end` emits

@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.5"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.6"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3296,6 +3296,37 @@ def test_open_order_rebuild_preserves_seen_fill_ids_for_same_order(monkeypatch):
     assert pending["seen_business_ids"] == {"sell-fill-1"}
 
 
+def test_open_order_rebuild_retains_vanished_sell_until_trade_confirmation(
+        monkeypatch):
+    submitted_at = datetime(2026, 7, 23, 9, 35)
+    pt.g = make_g(
+        __pending_sells={
+            "513100.SS": {
+                "requested_qty": 200,
+                "filled_qty": 0,
+                "reason": "sell_score 60",
+                "order_id": "sell-order-vanished",
+                "submitted_at": submitted_at,
+                "seen_business_ids": set(),
+            }
+        },
+    )
+    monkeypatch.setattr(pt, "get_open_orders", lambda: [], raising=False)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 10, 35),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+
+    assert pt._reconcile_open_orders(context) is True
+
+    pending = pt.g.__pending_sells["513100.SS"]
+    assert pending["order_id"] == "sell-order-vanished"
+    assert pending["requested_qty"] == 200
+    assert pending["submitted_at"] == submitted_at
+    assert pending["open_status_unconfirmed"] is True
+    assert pt.g.sold_today["513100.SS"] is True
+
+
 def test_current_trade_query_uses_trade_reconciliation_log_label(monkeypatch):
     messages = []
     monkeypatch.setattr(pt, "get_trades", lambda: {}, raising=False)
@@ -3949,6 +3980,55 @@ def test_buy_execution_waits_for_submitted_sells_to_finish(monkeypatch):
         context, [make_buy_score()], date(2026, 7, 13)
     ) == 0
     assert orders == []
+
+
+def test_buy_execution_blocks_same_day_sold_code_without_consuming_slot(
+        monkeypatch):
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000, cash=20000
+        )
+    )
+    pt.g = make_g(sold_today={"513100.SS": True})
+    orders = []
+    info_messages = []
+    debug_messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: info_messages.append(
+                message % args if args else str(message)),
+            debug=lambda message, *args: debug_messages.append(
+                message % args if args else str(message)),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: orders.append((args, kwargs)) or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context, [make_buy_score("513100.SS")], date(2026, 7, 23)
+    ) == 0
+    assert orders == []
+    assert any(
+        message.startswith("[买入筛选汇总]")
+        and "当日已卖出=1" in message
+        for message in info_messages
+    )
+    assert any(
+        message.startswith("[买入筛选明细]")
+        and "代码=513100.SS" in message
+        and "当日已卖出" in message
+        for message in debug_messages
+    )
 
 
 def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
@@ -4746,9 +4826,14 @@ def test_halt_recovery_reconciles_open_orders_before_deferred_buy(monkeypatch):
     )
     calls = []
     monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: date(2026, 7, 10))
+    monkeypatch.setattr(
+        pt,
+        "reconcile_recent_fills_and_resume_buys",
+        lambda context, **kwargs: calls.append(("fills", kwargs)) or 0,
+    )
 
     def reconcile(context):
-        calls.append("reconcile")
+        calls.append("orders")
         pt.g.__pending_sells = {}
         return True
 
@@ -4770,7 +4855,14 @@ def test_halt_recovery_reconciles_open_orders_before_deferred_buy(monkeypatch):
     )
 
     assert calls == [
-        "reconcile",
+        (
+            "fills",
+            {
+                "query_source": "10:35主动核对",
+                "diagnostic_source": "10:35成交兜底",
+            },
+        ),
+        "orders",
         "recover",
         (
             "buy",
@@ -5643,7 +5735,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.5" in notes
+    assert "20260726.6" in notes
     assert "1506a0e834fe" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
