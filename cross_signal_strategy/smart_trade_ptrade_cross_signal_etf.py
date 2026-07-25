@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260725.2"
+DEPLOYMENT_BUILD_ID = "20260726.1"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1373,6 +1373,7 @@ def after_trading_end(context, data):
     if g.__is_live:
         _recover_live_state_with_available_sources(context, allow_deliver=True)
         _audit_after_close_open_orders()
+        _log_order_lifecycle_summary("盘后")
     after_close(context)
     g.sold_today = {}
     if g.__is_live:
@@ -2260,7 +2261,84 @@ def _order_field(order_obj, name, default=None):
     return getattr(order_obj, name, default)
 
 
+def _order_lifecycle_now(context):
+    """Return the platform decision time used only for elapsed diagnostics."""
+    value = get_context_datetime(context)
+    if isinstance(value, datetime):
+        return value
+    try:
+        timestamp = pd.Timestamp(value)
+        if pd.isna(timestamp):
+            return None
+        return timestamp.to_pydatetime()
+    except Exception:
+        return None
+
+
+def _order_lifecycle_elapsed_seconds(context, pending):
+    submitted_at = pending.get("submitted_at")
+    if not isinstance(submitted_at, datetime):
+        return None
+    current = _order_lifecycle_now(context)
+    if current is None:
+        return None
+    try:
+        return max(0.0, (current - submitted_at).total_seconds())
+    except Exception:
+        return None
+
+
+def _log_order_lifecycle(
+        context,
+        event,
+        source,
+        direction,
+        code,
+        pending,
+        status="进行中",
+        reported_filled=None):
+    """Log one normalized order state without mutating execution state."""
+    requested = abs(_safe_float(pending.get("requested_qty", 0.0)))
+    filled = abs(_safe_float(pending.get("filled_qty", 0.0)))
+    if reported_filled is not None:
+        filled = max(filled, abs(_safe_float(reported_filled)))
+    remaining = max(0.0, requested - filled)
+    elapsed = _order_lifecycle_elapsed_seconds(context, pending)
+    elapsed_text = "未知" if elapsed is None else "%.3f秒" % elapsed
+    log.info(
+        "[订单生命周期] 事件=%s 来源=%s 方向=%s 代码=%s "
+        "委托编号=%s 请求数量=%.0f 累计成交=%.0f 剩余数量=%.0f "
+        "耗时=%s 状态=%s" % (
+            event,
+            source,
+            direction,
+            normalize_code(code) or "未知",
+            str(pending.get("order_id", "") or "未知"),
+            requested,
+            filled,
+            remaining,
+            elapsed_text,
+            str(status or "未知"),
+        ))
+
+
+def _log_order_lifecycle_summary(source):
+    pending_buys = getattr(g, "__pending_orders", {})
+    pending_sells = getattr(g, "__pending_sells", {})
+    log.info(
+        "[订单生命周期汇总] 来源=%s 待买委托=%d 待卖委托=%d "
+        "延后买入=%s 委托状态未知=%s" % (
+            source,
+            len(pending_buys) if isinstance(pending_buys, dict) else 0,
+            len(pending_sells) if isinstance(pending_sells, dict) else 0,
+            "是" if getattr(g, "__deferred_buy_after_sell", False) else "否",
+            "是" if getattr(g, "__order_state_unknown", False) else "否",
+        ))
+
+
 def _reconcile_open_orders(context):
+    prior_buys = dict(getattr(g, "__pending_orders", {}))
+    prior_sells = dict(getattr(g, "__pending_sells", {}))
     g.__pending_orders = {}
     g.__pending_sells = {}
     g.__order_state_unknown = False
@@ -2305,6 +2383,12 @@ def _reconcile_open_orders(context):
             pos = _get_position(context, code)
             filled_price = _pos_cost(pos) if pos is not None else 0.0
             fill_value_complete = filled == 0 or _is_positive_finite(filled_price)
+            prior = prior_buys.get(code, {})
+            submitted_at = (
+                prior.get("submitted_at")
+                if str(prior.get("order_id", "") or "") == order_id
+                else None
+            )
             pending_buys[code] = {
                 "requested_qty": requested,
                 "filled_qty": filled,
@@ -2313,14 +2397,22 @@ def _reconcile_open_orders(context):
                 "atr": g.entry_atr.get(code, score.get("atr")),
                 "buy_date": g.buy_date.get(code, today),
                 "order_id": order_id,
+                "submitted_at": submitted_at,
                 "recovered_guard": True,
             }
         else:
+            prior = prior_sells.get(code, {})
+            submitted_at = (
+                prior.get("submitted_at")
+                if str(prior.get("order_id", "") or "") == order_id
+                else None
+            )
             pending_sells[code] = {
                 "requested_qty": requested,
                 "filled_qty": filled,
                 "reason": "recovered_open_order",
                 "order_id": order_id,
+                "submitted_at": submitted_at,
                 "recovered_guard": True,
             }
             sold_guards[code] = True
@@ -2330,6 +2422,14 @@ def _reconcile_open_orders(context):
     if g.__pending_orders or g.__pending_sells:
         log.warning("[委托恢复] 未完成买单=%d 未完成卖单=%d" % (
             len(g.__pending_orders), len(g.__pending_sells)))
+        for code, pending in sorted(g.__pending_orders.items()):
+            _log_order_lifecycle(
+                context, "恢复未完成委托", "get_open_orders",
+                "买入", code, pending, status="未完成")
+        for code, pending in sorted(g.__pending_sells.items()):
+            _log_order_lifecycle(
+                context, "恢复未完成委托", "get_open_orders",
+                "卖出", code, pending, status="未完成")
     return True
 
 
@@ -2629,6 +2729,7 @@ def execute_sell(code, context, reason):
     limit_price = get_sell_limit_price(code, price)
     log.info("[卖出] %s 原因=%s 数量=%s 限价=%.3f" % (
         code, _format_reason_for_log(reason), amount, limit_price))
+    submitted_at = _order_lifecycle_now(context)
     try:
         order_id = order_target(code, 0, limit_price=limit_price)
     except Exception as exc:
@@ -2638,15 +2739,19 @@ def execute_sell(code, context, reason):
         log.error("[卖出] %s委托提交后未返回委托编号" % code)
         return False
     log.info("[卖出委托] %s 委托编号=%s" % (code, order_id))
+    pending = {
+        "requested_qty": amount,
+        "filled_qty": 0.0,
+        "reason": reason,
+        "order_id": str(order_id),
+        "submitted_at": submitted_at,
+    }
+    _log_order_lifecycle(
+        context, "已提交", "策略下单", "卖出", code, pending)
     if getattr(g, "__is_live", False):
         g.sell_retry_reasons.pop(code, None)
         g.sold_today[code] = True
-        g.__pending_sells[code] = {
-            "requested_qty": amount,
-            "filled_qty": 0.0,
-            "reason": reason,
-            "order_id": str(order_id),
-        }
+        g.__pending_sells[code] = pending
     else:
         _clear_position_state(code)
     return True
@@ -2814,6 +2919,7 @@ def execute_buy_candidates(
                 code, score["buy_score"], score["reversal_score"],
                 score["location_score"], score["trend_score"],
                 score["volume_score"], target_value, shares))
+        submitted_at = _order_lifecycle_now(context)
         try:
             order_id = order(code, shares, limit_price=round(price, 3))
         except Exception as exc:
@@ -2823,16 +2929,20 @@ def execute_buy_candidates(
             log.error("[买入] %s委托提交后未返回委托编号" % code)
             continue
         log.info("[买入委托] %s 委托编号=%s" % (code, order_id))
+        pending = {
+            "requested_qty": shares,
+            "filled_qty": 0.0,
+            "filled_value": 0.0,
+            "fill_value_complete": True,
+            "atr": score["atr"],
+            "buy_date": today,
+            "order_id": str(order_id),
+            "submitted_at": submitted_at,
+        }
+        _log_order_lifecycle(
+            context, "已提交", "策略下单", "买入", code, pending)
         if getattr(g, "__is_live", False):
-            g.__pending_orders[code] = {
-                "requested_qty": shares,
-                "filled_qty": 0.0,
-                "filled_value": 0.0,
-                "fill_value_complete": True,
-                "atr": score["atr"],
-                "buy_date": today,
-                "order_id": str(order_id),
-            }
+            g.__pending_orders[code] = pending
         else:
             g.buy_date[code] = today
             g.highest_since_buy[code] = price
@@ -3266,6 +3376,7 @@ def reconcile_recent_fills_and_resume_buys(context):
     pending_order_ids.discard("")
     if pending_order_ids:
         matched = 0
+        matched_order_ids = set()
         for record in _fetch_current_strategy_trades():
             if (
                 isinstance(record, dict)
@@ -3274,8 +3385,39 @@ def reconcile_recent_fills_and_resume_buys(context):
             ):
                 on_trade_response(context, record)
                 matched += 1
+                matched_order_ids.add(str(record.get("order_id", "") or ""))
+        remaining_sells = getattr(g, "__pending_sells", {})
+        remaining_order_ids = set(
+            str(item.get("order_id", "") or "")
+            for item in remaining_sells.values()
+            if isinstance(item, dict)
+        )
+        remaining_order_ids.discard("")
+        for code, pending in sorted(pending_sells.items()):
+            order_id = str(pending.get("order_id", "") or "")
+            if order_id in remaining_order_ids:
+                _log_order_lifecycle(
+                    context,
+                    "主动核对后仍待成交",
+                    "09:36主动核对",
+                    "卖出",
+                    code,
+                    remaining_sells.get(code, pending),
+                    status=(
+                        "已匹配部分成交"
+                        if order_id in matched_order_ids
+                        else "未匹配成交"
+                    ),
+                )
         log.info("[成交兜底] 09:36主动核对待卖委托=%d 匹配成交=%d" % (
             len(pending_order_ids), matched))
+        log.info(
+            "[订单核对汇总] 来源=09:36主动核对 待核对卖单=%d "
+            "匹配成交=%d 核对后未完成=%d" % (
+                len(pending_order_ids),
+                matched,
+                len(pending_order_ids & remaining_order_ids),
+            ))
 
     if getattr(g, "__pending_sells", {}):
         log.info("[成交兜底] 卖出尚未全部成交，补买继续延后至10:35复核")
@@ -4021,10 +4163,16 @@ def on_order_response(context, order_list):
                 buy_pending["terminal_qty"] = filled
                 if buy_pending.get("filled_qty", 0.0) >= filled:
                     _complete_buy(code, buy_pending)
+                _log_order_lifecycle(
+                    context, "部分成交或撤单", "委托回报", "买入",
+                    code, buy_pending, status=status, reported_filled=filled)
                 log.warning("[买入部分成交或撤单] %s 已成交=%.0f 原因=%s" % (
                     code, filled, error))
             else:
                 g.__pending_orders.pop(code, None)
+                _log_order_lifecycle(
+                    context, "拒绝或撤单", "委托回报", "买入",
+                    code, buy_pending, status=status, reported_filled=filled)
                 log.warning("[买入拒绝或撤单] %s 状态=%s 原因=%s" % (
                     code, status, error))
             continue
@@ -4036,12 +4184,18 @@ def on_order_response(context, order_list):
             if filled > 0 and status in ("5", "6"):
                 sell_pending["terminal_qty"] = filled
                 _finish_terminal_sell(code, sell_pending)
+                _log_order_lifecycle(
+                    context, "部分成交或撤单", "委托回报", "卖出",
+                    code, sell_pending, status=status, reported_filled=filled)
                 log.warning("[卖出部分成交或撤单] %s 已成交=%.0f 原因=%s" % (
                     code, filled, error))
             else:
                 g.__pending_sells.pop(code, None)
                 g.sold_today.pop(code, None)
                 g.sell_retry_reasons[code] = sell_pending.get("reason", "sell_retry")
+                _log_order_lifecycle(
+                    context, "拒绝或撤单", "委托回报", "卖出",
+                    code, sell_pending, status=status, reported_filled=filled)
                 log.error("[卖出拒绝或撤单] %s 状态=%s 原因=%s" % (
                     code, status, error))
     _persist_live_state(context)
@@ -4109,8 +4263,10 @@ def on_trade_response(context, trade_list):
         if not isinstance(trade, dict):
             log.warning("[成交回报格式异常] 已忽略类型=%s" % type(trade).__name__)
             continue
-        if trade.get("_recovery_source") == "get-trades":
+        recovered_record = trade.get("_recovery_source") == "get-trades"
+        if recovered_record:
             recovered_from_query = True
+        lifecycle_source = "09:36主动核对" if recovered_record else "成交主推"
         if str(trade.get("real_type", "")) == "2":
             log.info("[成交回报] 已忽略撤单推送")
             continue
@@ -4139,8 +4295,18 @@ def on_trade_response(context, trade_list):
             else:
                 pending["fill_value_complete"] = False
             _apply_buy_fill_state(code, pending)
-            if pending["filled_qty"] >= _pending_completion_qty(pending):
+            completed = pending["filled_qty"] >= _pending_completion_qty(pending)
+            if completed:
                 g.__pending_orders.pop(code, None)
+            _log_order_lifecycle(
+                context,
+                "成交完成" if completed else "部分成交",
+                lifecycle_source,
+                "买入",
+                code,
+                pending,
+                status="已完成" if completed else "进行中",
+            )
             log.info("[成交回报] 买入 %s 数量=%.0f 价格=%.3f 累计成交=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
 
@@ -4159,7 +4325,17 @@ def on_trade_response(context, trade_list):
             pending["filled_qty"] = pending.get("filled_qty", 0.0) + quantity
             _record_sell_fill_for_deferred_buy(
                 trade, pending, quantity, price)
+            completed = pending["filled_qty"] >= _pending_completion_qty(pending)
             _finish_terminal_sell(code, pending)
+            _log_order_lifecycle(
+                context,
+                "成交完成" if completed else "部分成交",
+                lifecycle_source,
+                "卖出",
+                code,
+                pending,
+                status="已完成" if completed else "进行中",
+            )
             log.info("[成交回报] 卖出 %s 数量=%.0f 价格=%.3f 累计成交=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
     if not recovered_from_query:

@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260725.2"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -1488,6 +1488,7 @@ def test_live_schedule_and_official_after_trading_callback_checkpoint_state(monk
 
 def test_after_trading_end_logs_unfinished_orders_without_mutating_guards(monkeypatch):
     warnings = []
+    infos = []
     pending_orders = {"513100.SS": {"order_id": "buy-1"}}
     pending_sells = {"513500.SS": {"order_id": "sell-1"}}
     pt.g = make_g(
@@ -1515,6 +1516,7 @@ def test_after_trading_end_logs_unfinished_orders_without_mutating_guards(monkey
     )
     monkeypatch.setattr(pt, "after_close", lambda context: None)
     monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+    monkeypatch.setattr(pt.log, "info", lambda message: infos.append(message))
     monkeypatch.setattr(pt.log, "warning", lambda message: warnings.append(message))
     context = types.SimpleNamespace(portfolio=types.SimpleNamespace(positions={}))
 
@@ -1526,6 +1528,13 @@ def test_after_trading_end_logs_unfinished_orders_without_mutating_guards(monkey
     )
     assert pt.g.__pending_orders == pending_orders
     assert pt.g.__pending_sells == pending_sells
+    summary = next(
+        message for message in infos
+        if message.startswith("[订单生命周期汇总]"))
+    assert "来源=盘后" in summary
+    assert "待买委托=1" in summary
+    assert "待卖委托=1" in summary
+    assert "延后买入=否" in summary
 
 
 def test_order_and_trade_callbacks_checkpoint_state(monkeypatch):
@@ -1565,6 +1574,52 @@ def test_callbacks_reject_non_dict_records_without_crashing(monkeypatch):
 
     assert persisted == [context, context]
     assert sum("回报格式异常" in message for message in warnings) == 2
+
+
+def test_order_response_logs_terminal_lifecycle_with_elapsed_time(monkeypatch):
+    messages = []
+    pt.g = make_g(
+        __pending_sells={
+            "513100.SS": {
+                "requested_qty": 500,
+                "filled_qty": 0.0,
+                "reason": "sell_score 35",
+                "order_id": "sell-order-1",
+                "submitted_at": datetime(2026, 7, 24, 9, 35, 0),
+            }
+        },
+        sold_today={"513100.SS": True},
+    )
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 24, 9, 35, 4))
+
+    pt.on_order_response(context, {
+        "stock_code": "513100.SS",
+        "status": "9",
+        "business_amount": 0,
+        "order_id": "sell-order-1",
+        "error_info": "废单",
+    })
+
+    lifecycle = next(
+        message for message in messages
+        if message.startswith("[订单生命周期]"))
+    assert "事件=拒绝或撤单" in lifecycle
+    assert "来源=委托回报" in lifecycle
+    assert "方向=卖出" in lifecycle
+    assert "委托编号=sell-order-1" in lifecycle
+    assert "请求数量=500" in lifecycle
+    assert "累计成交=0" in lifecycle
+    assert "剩余数量=500" in lifecycle
+    assert "耗时=4.000秒" in lifecycle
+    assert "状态=9" in lifecycle
 
 
 def test_ptrade_scoring_and_stop_math_match_joinquant_mainline():
@@ -2143,7 +2198,11 @@ def test_backtest_current_price_supports_python311_long_history_fallback(monkeyp
 
 def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
     position = types.SimpleNamespace(amount=500, cost_basis=1.0, last_sale_price=1.1)
-    context = types.SimpleNamespace(portfolio=types.SimpleNamespace(positions={"513100.SS": position}))
+    submitted_at = datetime(2026, 7, 24, 9, 35, 0)
+    context = types.SimpleNamespace(
+        current_dt=submitted_at,
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position}),
+    )
     pt.g = make_g(
         highest_since_buy={"513100.SS": 1.2},
         entry_atr={"513100.SS": 0.05},
@@ -2169,10 +2228,22 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
     assert "513100.SS" in pt.g.highest_since_buy
     assert pt.g.__pending_sells["513100.SS"]["requested_qty"] == 500
     assert pt.g.__pending_sells["513100.SS"]["order_id"] == "sell-order-1"
+    assert pt.g.__pending_sells["513100.SS"]["submitted_at"] == submitted_at
     assert any(
         message.startswith("[卖出委托]") and "sell-order-1" in message
         for message in messages
     )
+    lifecycle = next(
+        message for message in messages
+        if message.startswith("[订单生命周期]"))
+    assert "事件=已提交" in lifecycle
+    assert "来源=策略下单" in lifecycle
+    assert "方向=卖出" in lifecycle
+    assert "委托编号=sell-order-1" in lifecycle
+    assert "请求数量=500" in lifecycle
+    assert "累计成交=0" in lifecycle
+    assert "剩余数量=500" in lifecycle
+    assert "耗时=0.000秒" in lifecycle
 
 
 def test_sell_submission_failure_does_not_create_guard(monkeypatch):
@@ -2417,6 +2488,54 @@ def test_full_sell_callback_clears_strategy_state():
     assert "513100.SS" not in pt.g.buy_date
 
 
+def test_full_sell_callback_logs_completion_source_and_elapsed_time(monkeypatch):
+    messages = []
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 1.2},
+        entry_atr={"513100.SS": 0.05},
+        buy_date={"513100.SS": date(2026, 6, 1)},
+        sold_today={"513100.SS": True},
+        __pending_sells={
+            "513100.SS": {
+                "requested_qty": 500,
+                "filled_qty": 0,
+                "order_id": "sell-order-1",
+                "submitted_at": datetime(2026, 7, 24, 9, 35, 0),
+            }
+        },
+    )
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 24, 9, 35, 3))
+
+    pt.on_trade_response(context, {
+        "stock_code": "513100.SS",
+        "entrust_bs": "2",
+        "business_amount": 500,
+        "business_price": 1.15,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-1",
+    })
+
+    lifecycle = next(
+        message for message in messages
+        if message.startswith("[订单生命周期]"))
+    assert "事件=成交完成" in lifecycle
+    assert "来源=成交主推" in lifecycle
+    assert "方向=卖出" in lifecycle
+    assert "委托编号=sell-order-1" in lifecycle
+    assert "请求数量=500" in lifecycle
+    assert "累计成交=500" in lifecycle
+    assert "剩余数量=0" in lifecycle
+    assert "耗时=3.000秒" in lifecycle
+
+
 def test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio(
         monkeypatch):
     today = date(2026, 7, 23)
@@ -2628,9 +2747,17 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
                 "filled_qty": 0.0,
                 "reason": "sell_score 34",
                 "order_id": "sell-order-1",
+                "submitted_at": datetime(2026, 7, 23, 9, 35, 0),
             }
         },
         __deferred_buy_after_sell=True,
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
     )
     monkeypatch.setattr(
         pt,
@@ -2672,6 +2799,25 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
             "diagnostic_source": "成交兜底",
         },
     )]
+    fallback = next(
+        message for message in messages
+        if message.startswith("[订单生命周期]")
+        and "来源=09:36主动核对" in message
+    )
+    assert "事件=成交完成" in fallback
+    assert "方向=卖出" in fallback
+    assert "委托编号=sell-order-1" in fallback
+    assert "请求数量=2100" in fallback
+    assert "累计成交=2100" in fallback
+    assert "剩余数量=0" in fallback
+    assert "耗时=60.000秒" in fallback
+    summary = next(
+        message for message in messages
+        if message.startswith("[订单核对汇总]"))
+    assert "来源=09:36主动核对" in summary
+    assert "待核对卖单=1" in summary
+    assert "匹配成交=1" in summary
+    assert "核对后未完成=0" in summary
 
 
 def test_live_pause_check_fails_closed_when_status_is_unknown(monkeypatch):
@@ -3184,11 +3330,15 @@ def test_buy_execution_waits_for_submitted_sells_to_finish(monkeypatch):
 
 
 def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
+    submitted_at = datetime(2026, 7, 13, 9, 35, 0)
     context = types.SimpleNamespace(
+        current_dt=submitted_at,
         portfolio=types.SimpleNamespace(positions={}, portfolio_value=20000, cash=20000)
     )
     pt.g = make_g()
     orders = []
+    messages = []
+    monkeypatch.setattr(pt.log, "info", lambda message: messages.append(message))
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
     monkeypatch.setattr(
@@ -3204,6 +3354,16 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert orders == [(('513100.SS', 3100), {'limit_price': 2.0})]
     assert pt.g.__pending_orders["513100.SS"]["requested_qty"] == 3100
     assert pt.g.__pending_orders["513100.SS"]["order_id"] == "buy-order-1"
+    assert pt.g.__pending_orders["513100.SS"]["submitted_at"] == submitted_at
+    lifecycle = next(
+        message for message in messages
+        if message.startswith("[订单生命周期]"))
+    assert "事件=已提交" in lifecycle
+    assert "来源=策略下单" in lifecycle
+    assert "方向=买入" in lifecycle
+    assert "委托编号=buy-order-1" in lifecycle
+    assert "请求数量=3100" in lifecycle
+    assert "剩余数量=3100" in lifecycle
 
 
 def test_unverified_held_position_blocks_every_new_buy(monkeypatch):
@@ -3440,6 +3600,26 @@ def test_release_docs_describe_buy_rejection_diagnostics():
         assert "10:35复牌/卖单补偿" in text
     assert "do not change" in " ".join(deployment.split())
     assert "不改变" in detailed
+
+
+def test_release_docs_describe_order_lifecycle_timing_diagnostics():
+    deployment = (
+        ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
+    ).read_text(encoding="utf-8")
+    detailed = (
+        ROOT / "cross_signal_strategy" / "docs"
+        / "上穿下穿ETF策略详细说明.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (deployment, detailed):
+        assert "[订单生命周期]" in text
+        assert "[订单核对汇总]" in text
+        assert "[订单生命周期汇总]" in text
+        assert "09:36主动核对" in text
+        assert "请求数量" in text
+        assert "累计成交" in text
+        assert "剩余数量" in text
+        assert "耗时" in text
 
 
 def test_buy_submission_failure_does_not_create_guard(monkeypatch):
@@ -4803,7 +4983,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260725.2" in notes
+    assert "20260726.1" in notes
     assert "1506a0e834fe" in notes
 
 

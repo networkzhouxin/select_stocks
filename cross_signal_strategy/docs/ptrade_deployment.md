@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260725.2 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.1 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -77,6 +77,27 @@ raises, neither branch is configured and all `handle_data` trading is blocked.
 Daily PTrade backtests execute scheduled work at the platform close regardless
 of the requested time. That result must not be compared with the JoinQuant
 09:35 performance result.
+
+## Order Lifecycle Timing Diagnostics
+
+PTrade emits one normalized `[订单生命周期]` record when an order is submitted,
+partially filled, completed, rejected, cancelled, recovered from
+`get_open_orders()`, or still pending after the 09:36 query. Every record
+contains the source, side, ETF code, order ID, requested quantity, cumulative
+fill, remaining quantity, elapsed time from submission, and terminal/raw
+status. Elapsed time is reported as `未知` after a process restart when the
+original submission time cannot be proved.
+The corresponding Chinese field labels are `请求数量`, `累计成交`, `剩余数量`,
+and `耗时`.
+
+The source distinguishes `策略下单`, `成交主推`, `委托回报`,
+`09:36主动核对`, and `get_open_orders`. The 09:36 task also emits
+`[订单核对汇总]` with pending-sell count, matched-fill count, and unresolved
+count. `after_trading_end` emits `[订单生命周期汇总]` with in-memory pending
+buy/sell counts, deferred-buy state, and unknown-order-state guard.
+
+These diagnostics do not add a scheduled task and do not change callback
+matching, fill accumulation, retries, cash, positions, signals, or orders.
 
 ## Buy Filter Diagnostics
 
