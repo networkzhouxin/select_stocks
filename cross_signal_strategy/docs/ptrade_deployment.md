@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260724.1 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260725.1 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -39,6 +39,14 @@ server restart.
 PTrade live mode registers three tasks, below the platform limit of five:
 
 - `09:35`: run the complete cross-signal strategy using T-1 daily bars.
+- A complete matching sell fill received through `on_trade_response` is the
+  fast path. Once every pending sell is confirmed, the adapter immediately
+  resumes the candidate list frozen at 09:35 instead of waiting for 09:36.
+  Because PTrade portfolio cash and positions can lag a fill callback, the
+  adapter excludes only fully sold codes from the stale holding snapshot and
+  uses the greater of broker-reported cash and pre-sell cash plus confirmed
+  sell proceeds. This compensation affects order continuity only; target
+  sizing, ranking, and signal rules are unchanged.
 - `09:36`: reconcile fills for sell orders submitted at 09:35 through the
   official `get_trades()` API when `on_trade_response` was absent or delayed.
   Only fills whose order ID matches the current pending sell are accepted.
@@ -116,10 +124,14 @@ of the requested time. That result must not be compared with the JoinQuant
 - A sell submission does not erase `buy_date`, `entry_atr`, or
   `highest_since_buy`. State is cleared only after the requested quantity is
   fully filled.
-- Submitted or partially filled sells do not release cash or holding slots for
-  replacement buys. The 09:36 reconciliation may resume buys only after all
-  pending sells are confirmed; otherwise the 10:35 task uses broker-confirmed
-  cash and positions.
+- Submitted or partially filled sells do not release a holding slot for
+  replacement buys. Confirmed proceeds may be used only after every pending
+  sell has reached a terminal state, and a stale holding is excluded only when
+  its requested sell quantity was fully filled. A complete trade callback
+  resumes the frozen buy evaluation immediately; the 09:36 reconciliation is
+  retained for an absent/delayed callback or an immediate attempt that could
+  not submit an order. Otherwise the 10:35 task uses broker-confirmed cash and
+  positions.
 - A partially filled then cancelled sell preserves risk state for the residual
   position and releases the retry guard.
 - Rejected orders release their guard without inventing a fill.

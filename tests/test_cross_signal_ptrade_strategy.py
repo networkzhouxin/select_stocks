@@ -63,6 +63,9 @@ def make_g(**overrides):
         "__pending_orders": {},
         "__pending_sells": {},
         "__deferred_buy_after_sell": False,
+        "__deferred_buy_base_cash": None,
+        "__deferred_sell_proceeds": 0.0,
+        "__deferred_sold_codes": set(),
         "__order_state_unknown": False,
         "__is_live": True,
         "__mode_verified": True,
@@ -120,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260724.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260725.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2414,6 +2417,190 @@ def test_full_sell_callback_clears_strategy_state():
     assert "513100.SS" not in pt.g.buy_date
 
 
+def test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio(
+        monkeypatch):
+    today = date(2026, 7, 23)
+    score = make_buy_score("518880.SS")
+    positions = {
+        "513050.SS": types.SimpleNamespace(amount=2100, cost_basis=1.0712),
+        "513500.SS": types.SimpleNamespace(amount=4200, cost_basis=2.5611),
+        "159985.SZ": types.SimpleNamespace(amount=2000, cost_basis=2.1553),
+    }
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 3),
+        portfolio=types.SimpleNamespace(
+            positions=positions,
+            cash=100.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513050.SS": 1.145},
+        entry_atr={"513050.SS": 0.036429},
+        buy_date={"513050.SS": date(2026, 7, 14)},
+        sold_today={"513050.SS": True},
+        execution_date=today,
+        deferred_signal_date=date(2026, 7, 22),
+        deferred_scores=[score],
+        __pending_sells={
+            "513050.SS": {
+                "requested_qty": 2100,
+                "filled_qty": 0.0,
+                "reason": "sell_score 34",
+                "order_id": "sell-order-1",
+            }
+        },
+    )
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, shares, limit_price=None: (
+            orders.append((code, shares, limit_price)) or "buy-order-1"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    assert pt.execute_buy_candidates(context, [score], today) == 0
+    assert pt.g.__deferred_buy_after_sell is True
+
+    pt.on_trade_response(context, {
+        "stock_code": "513050.SS",
+        "entrust_bs": "2",
+        "business_amount": 2100,
+        "business_price": 1.082,
+        "business_balance": 2272.2,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-1",
+    })
+
+    assert orders == [("518880.SS", 2300, 1.0)]
+    assert pt.g.__deferred_buy_after_sell is False
+    assert pt.g.__pending_sells == {}
+
+
+def test_partial_sell_callback_keeps_deferred_buy_blocked(monkeypatch):
+    today = date(2026, 7, 23)
+    score = make_buy_score("518880.SS")
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 3),
+        portfolio=types.SimpleNamespace(
+            positions={
+                "513050.SS": types.SimpleNamespace(
+                    amount=2100, cost_basis=1.0712),
+            },
+            cash=100.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513050.SS": 1.145},
+        entry_atr={"513050.SS": 0.036429},
+        buy_date={"513050.SS": date(2026, 7, 14)},
+        sold_today={"513050.SS": True},
+        execution_date=today,
+        deferred_scores=[score],
+        __pending_sells={
+            "513050.SS": {
+                "requested_qty": 2100,
+                "filled_qty": 0.0,
+                "reason": "sell_score 34",
+                "order_id": "sell-order-1",
+            }
+        },
+    )
+    orders = []
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: orders.append((args, kwargs)) or "buy-order-1",
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    assert pt.execute_buy_candidates(context, [score], today) == 0
+    pt.on_trade_response(context, {
+        "stock_code": "513050.SS",
+        "entrust_bs": "2",
+        "business_amount": 1000,
+        "business_price": 1.082,
+        "business_balance": 1082.0,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-1",
+    })
+
+    assert orders == []
+    assert pt.g.__deferred_buy_after_sell is True
+    assert pt.g.__pending_sells["513050.SS"]["filled_qty"] == 1000
+
+
+def test_duplicate_full_sell_callback_does_not_submit_duplicate_replacement_buy(
+        monkeypatch):
+    today = date(2026, 7, 23)
+    score = make_buy_score("518880.SS")
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 3),
+        portfolio=types.SimpleNamespace(
+            positions={
+                "513050.SS": types.SimpleNamespace(
+                    amount=2100, cost_basis=1.0712),
+            },
+            cash=100.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513050.SS": 1.145},
+        entry_atr={"513050.SS": 0.036429},
+        buy_date={"513050.SS": date(2026, 7, 14)},
+        sold_today={"513050.SS": True},
+        execution_date=today,
+        deferred_scores=[score],
+        __pending_sells={
+            "513050.SS": {
+                "requested_qty": 2100,
+                "filled_qty": 0.0,
+                "reason": "sell_score 34",
+                "order_id": "sell-order-1",
+            }
+        },
+    )
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, shares, limit_price=None: (
+            orders.append((code, shares, limit_price)) or "buy-order-1"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    assert pt.execute_buy_candidates(context, [score], today) == 0
+    trade = {
+        "stock_code": "513050.SS",
+        "entrust_bs": "2",
+        "business_amount": 2100,
+        "business_price": 1.082,
+        "business_balance": 2272.2,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-1",
+    }
+
+    pt.on_trade_response(context, trade)
+    pt.on_trade_response(context, dict(trade))
+
+    assert len(orders) == 1
+    assert pt.g.__deferred_buy_after_sell is False
+
+
 def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
         monkeypatch):
     today = date(2026, 7, 23)
@@ -2462,8 +2649,9 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
     monkeypatch.setattr(
         pt,
         "execute_buy_candidates",
-        lambda received_context, scores, received_today: (
-            buy_calls.append((received_context, scores, received_today)) or 1
+        lambda received_context, scores, received_today, **kwargs: (
+            buy_calls.append(
+                (received_context, scores, received_today, kwargs)) or 1
         ),
     )
 
@@ -2474,7 +2662,15 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
     assert "513050.SS" not in pt.g.entry_atr
     assert "513050.SS" not in pt.g.buy_date
     assert pt.g.__deferred_buy_after_sell is False
-    assert buy_calls == [(context, [score], today)]
+    assert buy_calls == [(
+        context,
+        [score],
+        today,
+        {
+            "held_exclusions": {"513050.SS"},
+            "available_cash_override": 5000.0,
+        },
+    )]
 
 
 def test_live_pause_check_fails_closed_when_status_is_unknown(monkeypatch):
@@ -4480,7 +4676,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260724.1" in notes
+    assert "20260725.1" in notes
     assert "1506a0e834fe" in notes
 
 

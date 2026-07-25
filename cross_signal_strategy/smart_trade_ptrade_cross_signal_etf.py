@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260724.1"
+DEPLOYMENT_BUILD_ID = "20260725.1"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1228,6 +1228,11 @@ def initialize(context):
     g.__pending_orders = {}
     g.__pending_sells = {}
     g.__deferred_buy_after_sell = False
+    # 卖出成交回报可能早于券商账户快照约 6 秒到达。以下字段只服务于
+    # 当次“先卖后买”衔接，不持久化，也不参与任何信号或仓位规则。
+    g.__deferred_buy_base_cash = None
+    g.__deferred_sell_proceeds = 0.0
+    g.__deferred_sold_codes = set()
     g.__order_state_unknown = False
     g.__data = None
     g.__is_live = is_live
@@ -1355,6 +1360,9 @@ def before_trading_start(context, data):
         g.__pending_orders = {}
         g.__pending_sells = {}
         g.__deferred_buy_after_sell = False
+        g.__deferred_buy_base_cash = None
+        g.__deferred_sell_proceeds = 0.0
+        g.__deferred_sold_codes = set()
         g.__order_state_unknown = False
     if g.__is_live:
         _persist_live_state(context)
@@ -2637,17 +2645,47 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
     return False
 
 
-def execute_buy_candidates(context, all_scores, today):
+def _begin_deferred_buy_wait(context):
+    """冻结卖出前现金，供成交回报到达但账户快照尚未同步时使用。"""
+    if not getattr(g, "__deferred_buy_after_sell", False):
+        try:
+            base_cash = max(0.0, _available_cash(context))
+        except Exception:
+            base_cash = 0.0
+        g.__deferred_buy_base_cash = base_cash
+        g.__deferred_sell_proceeds = 0.0
+        g.__deferred_sold_codes = set()
+    elif getattr(g, "__deferred_buy_base_cash", None) is None:
+        try:
+            g.__deferred_buy_base_cash = max(0.0, _available_cash(context))
+        except Exception:
+            g.__deferred_buy_base_cash = 0.0
+    g.__deferred_buy_after_sell = True
+
+
+def _clear_deferred_buy_runtime():
+    g.__deferred_buy_base_cash = None
+    g.__deferred_sell_proceeds = 0.0
+    g.__deferred_sold_codes = set()
+
+
+def execute_buy_candidates(
+        context,
+        all_scores,
+        today,
+        held_exclusions=None,
+        available_cash_override=None):
     """只依据券商已确认的持仓和可用资金提交买单。"""
     if getattr(g, "__order_state_unknown", False):
         log.error("[买入] 券商委托状态无法确认，延后买入已阻止")
         return 0
     if getattr(g, "__pending_sells", {}):
-        g.__deferred_buy_after_sell = True
+        _begin_deferred_buy_wait(context)
         log.info("[买入延后] 正在等待%d笔卖出委托完成" % len(g.__pending_sells))
         return 0
 
     held = set(current_hold_codes(context))
+    held -= set(normalize_code(code) for code in (held_exclusions or set()))
     unverified_held = held & set(getattr(g, "unverified_positions", set()))
     if unverified_held:
         log.error("[买入] 存在未验证持仓=%s，全部新买入已阻止" % (
@@ -2662,7 +2700,10 @@ def execute_buy_candidates(context, all_scores, today):
         log.info("[%s] 没有达到阈值的买入候选" % STRATEGY_VERSION)
         return 0
 
-    available = _available_cash(context)
+    if available_cash_override is None:
+        available = _available_cash(context)
+    else:
+        available = max(0.0, float(available_cash_override))
     bought = 0
     for score in candidates:
         if bought >= slots:
@@ -3059,6 +3100,62 @@ def _fetch_current_strategy_trades():
     return records
 
 
+def _resume_deferred_buys_after_sells(
+        context,
+        source,
+        retry_if_no_order=False):
+    """所有卖单确认结束后，使用冻结信号恢复一次补买评估。"""
+    if not getattr(g, "__deferred_buy_after_sell", False):
+        return 0
+    if getattr(g, "__pending_sells", {}):
+        return 0
+
+    today = _as_date(get_context_datetime(context))
+    if today is None or g.execution_date != today:
+        log.error("[%s] 延后买入日期不匹配，本次不提交委托" % source)
+        g.__deferred_buy_after_sell = False
+        _clear_deferred_buy_runtime()
+        return 0
+
+    try:
+        current_cash = max(0.0, _available_cash(context))
+    except Exception:
+        current_cash = 0.0
+    base_cash = max(
+        0.0,
+        _safe_float(getattr(g, "__deferred_buy_base_cash", 0.0)),
+    )
+    confirmed_proceeds = max(
+        0.0,
+        _safe_float(getattr(g, "__deferred_sell_proceeds", 0.0)),
+    )
+    available_cash = max(current_cash, base_cash + confirmed_proceeds)
+    sold_codes = set(
+        normalize_code(code)
+        for code in getattr(g, "__deferred_sold_codes", set())
+    )
+
+    # 回调中下单可能再次触发平台回调；先释放延后标记以保证幂等。
+    g.__deferred_buy_after_sell = False
+    log.info(
+        "[%s] 卖出已确认完成，立即恢复延后买入评估 "
+        "当前现金=%.2f 确认卖出释放=%.2f 可用现金=%.2f" % (
+            source, current_cash, confirmed_proceeds, available_cash))
+    bought = execute_buy_candidates(
+        context,
+        list(getattr(g, "deferred_scores", [])),
+        today,
+        held_exclusions=sold_codes,
+        available_cash_override=available_cash,
+    )
+    if bought <= 0 and retry_if_no_order:
+        g.__deferred_buy_after_sell = True
+        log.info("[%s] 本次未提交补买委托，保留09:36主动核对" % source)
+    else:
+        _clear_deferred_buy_runtime()
+    return bought
+
+
 def reconcile_recent_fills_and_resume_buys(context):
     """09:36 主动核对回调缺失的成交，并恢复被卖单阻塞的补买。"""
     if not getattr(g, "__is_live", False):
@@ -3084,25 +3181,10 @@ def reconcile_recent_fills_and_resume_buys(context):
         log.info("[成交兜底] 09:36主动核对待卖委托=%d 匹配成交=%d" % (
             len(pending_order_ids), matched))
 
-    if not getattr(g, "__deferred_buy_after_sell", False):
-        return 0
     if getattr(g, "__pending_sells", {}):
         log.info("[成交兜底] 卖出尚未全部成交，补买继续延后至10:35复核")
         return 0
-
-    today = _as_date(get_context_datetime(context))
-    if today is None or g.execution_date != today:
-        log.error("[成交兜底] 延后买入日期不匹配，本次不提交委托")
-        g.__deferred_buy_after_sell = False
-        return 0
-
-    g.__deferred_buy_after_sell = False
-    log.info("[成交兜底] 卖出已确认完成，立即恢复延后买入评估")
-    return execute_buy_candidates(
-        context,
-        list(getattr(g, "deferred_scores", [])),
-        today,
-    )
+    return _resume_deferred_buys_after_sells(context, "成交兜底")
 
 
 def _delivery_trade_date(record):
@@ -3787,11 +3869,29 @@ def _is_duplicate_trade_callback(trade, pending):
     return False
 
 
+def _record_sell_fill_for_deferred_buy(trade, pending, quantity, price):
+    """记录已确认卖出金额，补偿成交回报与账户快照之间的同步延迟。"""
+    fill_value = _safe_float(trade.get("business_balance", 0))
+    if fill_value <= 0 and _is_positive_finite(price):
+        fill_value = quantity * price
+    fill_value = max(0.0, fill_value)
+    pending["filled_value"] = pending.get("filled_value", 0.0) + fill_value
+    if getattr(g, "__deferred_buy_after_sell", False):
+        g.__deferred_sell_proceeds = (
+            _safe_float(getattr(g, "__deferred_sell_proceeds", 0.0))
+            + fill_value
+        )
+
+
 def _finish_terminal_sell(code, pending):
     if pending.get("filled_qty", 0.0) < _pending_completion_qty(pending):
         return False
     g.__pending_sells.pop(code, None)
     if pending.get("filled_qty", 0.0) >= pending.get("requested_qty", 0.0):
+        if getattr(g, "__deferred_buy_after_sell", False):
+            sold_codes = set(getattr(g, "__deferred_sold_codes", set()))
+            sold_codes.add(normalize_code(code))
+            g.__deferred_sold_codes = sold_codes
         _clear_position_state(code)
     else:
         g.sold_today.pop(code, None)
@@ -3908,10 +4008,13 @@ def on_trade_response(context, trade_list):
     _log_trade_callback_entry(trades)
     if not getattr(g, "__is_live", False):
         return
+    recovered_from_query = False
     for trade in trades:
         if not isinstance(trade, dict):
             log.warning("[成交回报格式异常] 已忽略类型=%s" % type(trade).__name__)
             continue
+        if trade.get("_recovery_source") == "get-trades":
+            recovered_from_query = True
         if str(trade.get("real_type", "")) == "2":
             log.info("[成交回报] 已忽略撤单推送")
             continue
@@ -3958,7 +4061,15 @@ def on_trade_response(context, trade_list):
                     code, trade.get("business_id")))
                 continue
             pending["filled_qty"] = pending.get("filled_qty", 0.0) + quantity
+            _record_sell_fill_for_deferred_buy(
+                trade, pending, quantity, price)
             _finish_terminal_sell(code, pending)
             log.info("[成交回报] 卖出 %s 数量=%.0f 价格=%.3f 累计成交=%.0f" % (
                 code, quantity, price, pending["filled_qty"]))
+    if not recovered_from_query:
+        _resume_deferred_buys_after_sells(
+            context,
+            "成交主推",
+            retry_if_no_order=True,
+        )
     _persist_live_state(context)
