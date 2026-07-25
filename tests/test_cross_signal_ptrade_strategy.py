@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.4"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.5"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3104,6 +3104,214 @@ def test_0936_trade_query_rejects_buy_fill_with_wrong_order_id(monkeypatch):
     assert "买入未完成=1" in summary
 
 
+def test_recovered_partial_sell_trade_query_is_idempotent(monkeypatch):
+    today = date(2026, 7, 23)
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(amount=100, cost_basis=1.10),
+            },
+            cash=100.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 1.20},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+        sold_today={code: True},
+        execution_date=today,
+        deferred_scores=[make_buy_score("518880.SS")],
+        __deferred_buy_after_sell=True,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_open_orders",
+        lambda: [
+            types.SimpleNamespace(
+                id="sell-order-open",
+                symbol="513100.XSHG",
+                amount=-200,
+                filled=100,
+            )
+        ],
+        raising=False,
+    )
+    assert pt._reconcile_open_orders(context) is True
+
+    same_historical_fill = {
+        "stock_code": "513100.XSHG",
+        "entrust_bs": "2",
+        "business_amount": 100.0,
+        "business_price": 1.10,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-open",
+        "_recovery_source": "get-trades",
+    }
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: [dict(same_historical_fill)],
+    )
+    buy_calls = []
+    monkeypatch.setattr(
+        pt,
+        "execute_buy_candidates",
+        lambda *args, **kwargs: buy_calls.append((args, kwargs)) or 1,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="09:36主动核对",
+        diagnostic_source="成交兜底",
+    )
+    context.current_dt = datetime(2026, 7, 23, 10, 36)
+    pt.reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="10:36主动核对",
+        diagnostic_source="10:36成交兜底",
+    )
+
+    pending = pt.g.__pending_sells[code]
+    assert pending["filled_qty"] == 100
+    assert code in pt.g.highest_since_buy
+    assert code in pt.g.entry_atr
+    assert code in pt.g.buy_date
+    assert pt.g.__deferred_buy_after_sell is True
+    assert buy_calls == []
+
+
+def test_recovered_partial_buy_query_waits_for_new_unique_fill(monkeypatch):
+    today = date(2026, 7, 23)
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(amount=100, cost_basis=1.10),
+            },
+            cash=5000.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        last_scores={code: {"atr": 0.05}},
+        execution_date=today,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_open_orders",
+        lambda: [
+            types.SimpleNamespace(
+                id="buy-order-open",
+                symbol="513100.XSHG",
+                amount=200,
+                filled=100,
+            )
+        ],
+        raising=False,
+    )
+    assert pt._reconcile_open_orders(context) is True
+
+    records = [{
+        "stock_code": "513100.XSHG",
+        "entrust_bs": "1",
+        "business_amount": 100.0,
+        "business_price": 1.10,
+        "business_id": "buy-fill-1",
+        "order_id": "buy-order-open",
+        "_recovery_source": "get-trades",
+    }]
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: [dict(record) for record in records],
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert pt.g.__pending_orders[code]["filled_qty"] == 100
+
+    records.append({
+        "stock_code": "513100.XSHG",
+        "entrust_bs": "1",
+        "business_amount": 100.0,
+        "business_price": 1.20,
+        "business_id": "buy-fill-2",
+        "order_id": "buy-order-open",
+        "_recovery_source": "get-trades",
+    })
+    context.current_dt = datetime(2026, 7, 23, 10, 36)
+    pt.reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="10:36主动核对",
+        diagnostic_source="10:36成交兜底",
+    )
+
+    assert code not in pt.g.__pending_orders
+    assert pt.g.buy_date[code] == today
+    assert pt.g.entry_atr[code] == pytest.approx(0.05)
+    assert pt.g.highest_since_buy[code] == pytest.approx(1.15)
+
+
+def test_open_order_rebuild_preserves_seen_fill_ids_for_same_order(monkeypatch):
+    submitted_at = datetime(2026, 7, 23, 9, 35)
+    pt.g = make_g(
+        __pending_sells={
+            "513100.SS": {
+                "requested_qty": 200,
+                "filled_qty": 100,
+                "order_id": "sell-order-open",
+                "submitted_at": submitted_at,
+                "seen_business_ids": {"sell-fill-1"},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_open_orders",
+        lambda: [
+            types.SimpleNamespace(
+                id="sell-order-open",
+                symbol="513100.XSHG",
+                amount=-200,
+                filled=100,
+            )
+        ],
+        raising=False,
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 10, 35),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+
+    assert pt._reconcile_open_orders(context) is True
+
+    pending = pt.g.__pending_sells["513100.SS"]
+    assert pending["submitted_at"] == submitted_at
+    assert pending["seen_business_ids"] == {"sell-fill-1"}
+
+
+def test_current_trade_query_uses_trade_reconciliation_log_label(monkeypatch):
+    messages = []
+    monkeypatch.setattr(pt, "get_trades", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+
+    assert pt._fetch_current_strategy_trades() == []
+
+    assert "[成交查询] 当前策略成交记录数=0" in messages
+    assert not any(message.startswith("[状态恢复]") for message in messages)
+
+
 def test_live_pause_check_fails_closed_when_status_is_unknown(monkeypatch):
     pt.g = make_g()
     monkeypatch.setattr(pt, "get_stock_status", lambda *args, **kwargs: {}, raising=False)
@@ -5435,7 +5643,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.4" in notes
+    assert "20260726.5" in notes
     assert "1506a0e834fe" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes

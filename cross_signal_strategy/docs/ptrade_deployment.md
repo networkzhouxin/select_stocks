@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.4 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.5 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -51,6 +51,11 @@ PTrade live mode registers four tasks, below the platform limit of five:
   through the official `get_trades()` API when `on_trade_response` was absent,
   delayed, or arrived before PTrade could attach an order ID. Only fills whose
   side and order ID exactly match a current pending order are accepted.
+  Because `get_trades()` returns the current day's complete fill list, matched
+  rows are grouped by order and applied as one cumulative broker fact. They
+  are never added on top of the cumulative `Order.filled` value restored from
+  `get_open_orders()`. Repeating the same query is therefore idempotent, while
+  a later unique fill still advances the cumulative quantity.
   Confirmed buys restore their actual fill quantity, fill price, buy date, ATR,
   and highest-close baseline through the existing callback state machine.
   Once all pending sells are confirmed, the adapter immediately resumes the
@@ -68,8 +73,9 @@ PTrade live mode registers four tasks, below the platform limit of five:
   pickle-eligible `g` fields with both the execution date and T-1 signal date;
   a date mismatch blocks execution.
 - `10:36`: reconcile buy and sell fills for orders still pending after the
-  10:35 recovery pass. It reuses the same strict side-and-order-ID matching
-  and callback state machine as 09:36. If there is no pending order, it returns
+  10:35 pass with the same cumulative and idempotent order-level accounting;
+  it reuses the same strict side-and-order-ID matching as 09:36. If there is
+  no pending order, it returns
   without calling `get_trades()`. It does not read daily bars, recalculate
   indicators or scores, change ranking, or create a new trading decision.
 - `after_trading_end` (normally around `15:30`): use PTrade's official

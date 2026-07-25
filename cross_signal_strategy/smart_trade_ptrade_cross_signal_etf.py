@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.4"
+DEPLOYMENT_BUILD_ID = "20260726.5"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -2415,6 +2415,15 @@ def _log_order_lifecycle_summary(source):
         ))
 
 
+def _preserved_seen_business_ids(prior, order_id):
+    if str(prior.get("order_id", "") or "") != order_id:
+        return set()
+    seen = prior.get("seen_business_ids", set())
+    if isinstance(seen, (set, list, tuple)):
+        return set(str(item) for item in seen if str(item))
+    return set()
+
+
 def _reconcile_open_orders(context):
     prior_buys = dict(getattr(g, "__pending_orders", {}))
     prior_sells = dict(getattr(g, "__pending_sells", {}))
@@ -2478,6 +2487,8 @@ def _reconcile_open_orders(context):
                 "order_id": order_id,
                 "submitted_at": submitted_at,
                 "recovered_guard": True,
+                "seen_business_ids": _preserved_seen_business_ids(
+                    prior, order_id),
             }
         else:
             prior = prior_sells.get(code, {})
@@ -2493,6 +2504,8 @@ def _reconcile_open_orders(context):
                 "order_id": order_id,
                 "submitted_at": submitted_at,
                 "recovered_guard": True,
+                "seen_business_ids": _preserved_seen_business_ids(
+                    prior, order_id),
             }
             sold_guards[code] = True
     g.__pending_orders = pending_buys
@@ -3421,15 +3434,15 @@ def _fetch_current_strategy_trades():
     """把 PTrade 当前策略的当日成交统一转换成交割单式记录。"""
     getter = globals().get("get_trades")
     if getter is None:
-        log.error("[状态恢复] get_trades接口不可用")
+        log.error("[成交查询] get_trades接口不可用")
         return []
     try:
         payload = getter()
     except Exception as exc:
-        log.error("[状态恢复] get_trades调用失败: %s" % exc)
+        log.error("[成交查询] get_trades调用失败: %s" % exc)
         return []
     if not isinstance(payload, dict):
-        log.error("[状态恢复] get_trades返回值无效")
+        log.error("[成交查询] get_trades返回值无效")
         return []
 
     records = []
@@ -3461,8 +3474,113 @@ def _fetch_current_strategy_trades():
                 "order_id": str(order_id),
                 "_recovery_source": "get-trades",
             })
-    log.info("[状态恢复] 当前策略成交记录数=%d" % len(records))
+    log.info("[成交查询] 当前策略成交记录数=%d" % len(records))
     return records
+
+
+def _queried_fill_value(record, quantity):
+    value = _safe_float(record.get("business_balance", 0.0))
+    if value > 0:
+        return value, True
+    price = _safe_float(record.get("business_price", 0.0))
+    if _is_positive_finite(price):
+        return quantity * price, True
+    return 0.0, False
+
+
+def _apply_queried_fill_group(context, direction, records, query_source):
+    """把 get_trades 结果按委托累计快照处理，不能当成新增成交回调累加。"""
+    if not records:
+        return False
+    first = records[0]
+    code = normalize_code(first.get("stock_code"))
+    pending_map = (
+        getattr(g, "__pending_orders", {})
+        if direction == "1"
+        else getattr(g, "__pending_sells", {})
+    )
+    pending = pending_map.get(code)
+    if pending is None or not _response_matches_pending(first, pending):
+        return False
+
+    query_qty = 0.0
+    query_value = 0.0
+    query_value_complete = True
+    batch_business_ids = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if not _response_matches_pending(record, pending):
+            continue
+        business_id = str(record.get("business_id", "") or "").strip()
+        if business_id:
+            if business_id in batch_business_ids:
+                continue
+            batch_business_ids.add(business_id)
+        quantity = _safe_float(record.get("business_amount", 0.0), np.nan)
+        if not np.isfinite(quantity) or quantity <= 0:
+            continue
+        value, value_complete = _queried_fill_value(record, quantity)
+        query_qty += quantity
+        query_value += value
+        query_value_complete = query_value_complete and value_complete
+
+    if query_qty <= 0:
+        return False
+
+    seen = pending.get("seen_business_ids")
+    if not isinstance(seen, set):
+        seen = set()
+        pending["seen_business_ids"] = seen
+    seen.update(batch_business_ids)
+
+    previous_qty = _safe_float(pending.get("filled_qty", 0.0))
+    pending["filled_qty"] = max(previous_qty, query_qty)
+    completed = pending["filled_qty"] >= _pending_completion_qty(pending)
+
+    if direction == "1":
+        if query_qty >= previous_qty and query_value_complete:
+            pending["filled_value"] = query_value
+            pending["fill_value_complete"] = True
+        elif query_qty > previous_qty:
+            pending["fill_value_complete"] = False
+        _apply_buy_fill_state(code, pending)
+        if completed:
+            g.__pending_orders.pop(code, None)
+        direction_text = "买入"
+    else:
+        previous_value = max(
+            0.0, _safe_float(pending.get("filled_value", 0.0)))
+        if query_value_complete:
+            cumulative_value = max(previous_value, query_value)
+            value_delta = max(0.0, cumulative_value - previous_value)
+            pending["filled_value"] = cumulative_value
+            if getattr(g, "__deferred_buy_after_sell", False):
+                g.__deferred_sell_proceeds = (
+                    _safe_float(
+                        getattr(g, "__deferred_sell_proceeds", 0.0))
+                    + value_delta
+                )
+        _finish_terminal_sell(code, pending)
+        direction_text = "卖出"
+
+    _log_order_lifecycle(
+        context,
+        "成交完成" if completed else "部分成交",
+        query_source,
+        direction_text,
+        code,
+        pending,
+        status="已完成" if completed else "进行中",
+    )
+    log.info(
+        "[成交核对] %s %s 查询累计=%.0f 生效累计=%.0f" % (
+            direction_text,
+            code,
+            query_qty,
+            pending["filled_qty"],
+        ))
+    return True
 
 
 def _resume_deferred_buys_after_sells(
@@ -3550,7 +3668,7 @@ def reconcile_recent_fills_and_resume_buys(
         matched_sells = 0
         matched_buy_ids = set()
         matched_sell_ids = set()
-        matched_records = []
+        matched_groups = {}
         for record in _fetch_current_strategy_trades():
             if not isinstance(record, dict):
                 continue
@@ -3559,17 +3677,22 @@ def reconcile_recent_fills_and_resume_buys(
             if direction == "1" and order_id in pending_buy_ids:
                 matched_record = dict(record)
                 matched_record["_recovery_label"] = query_source
-                matched_records.append(matched_record)
+                matched_groups.setdefault(
+                    (direction, order_id), []).append(matched_record)
                 matched_buys += 1
                 matched_buy_ids.add(order_id)
             elif direction == "2" and order_id in pending_sell_ids:
                 matched_record = dict(record)
                 matched_record["_recovery_label"] = query_source
-                matched_records.append(matched_record)
+                matched_groups.setdefault(
+                    (direction, order_id), []).append(matched_record)
                 matched_sells += 1
                 matched_sell_ids.add(order_id)
-        if matched_records:
-            on_trade_response(context, matched_records)
+        for (direction, _order_id), records in matched_groups.items():
+            _apply_queried_fill_group(
+                context, direction, records, query_source)
+        if matched_groups:
+            _persist_live_state(context)
 
         remaining_buys = getattr(g, "__pending_orders", {})
         remaining_sells = getattr(g, "__pending_sells", {})
