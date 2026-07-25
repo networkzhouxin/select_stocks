@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.2"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -230,6 +230,59 @@ def test_audit_log_compaction_failure_preserves_original_file(
         compact_target_bytes=180,
     ) is False
     assert path.read_bytes() == original
+
+
+def test_audit_log_proxy_isolates_platform_log_failure(monkeypatch):
+    audit_records = []
+
+    def fail_platform_log(*args, **kwargs):
+        raise RuntimeError("platform log unavailable")
+
+    raw_log = types.SimpleNamespace(
+        info=fail_platform_log,
+        warning=fail_platform_log,
+        error=fail_platform_log,
+    )
+    monkeypatch.setattr(
+        pt,
+        "_append_audit_log_text",
+        lambda path, text: audit_records.append((path, text)) or True,
+    )
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 7, 26, 9, 35, 1))
+    proxy = pt._AuditLogProxy(raw_log, "audit.log")
+
+    proxy.info("[订单生命周期] 委托编号=order-1")
+
+    assert len(audit_records) == 1
+    assert audit_records[0][0] == "audit.log"
+    assert "[订单生命周期] 委托编号=order-1" in audit_records[0][1]
+
+
+def test_audit_log_proxy_reports_file_failure_once_without_interrupting_platform(
+        monkeypatch):
+    platform_messages = []
+    raw_log = types.SimpleNamespace(
+        info=lambda message, *args, **kwargs: platform_messages.append(
+            ("info", message % args if args else str(message))),
+        warning=lambda message, *args, **kwargs: platform_messages.append(
+            ("warning", message % args if args else str(message))),
+        error=lambda message, *args, **kwargs: platform_messages.append(
+            ("error", message % args if args else str(message))),
+    )
+    monkeypatch.setattr(pt, "_append_audit_log_text", lambda *args: False)
+    proxy = pt._AuditLogProxy(raw_log, "audit.log")
+
+    proxy.info("first")
+    proxy.info("second")
+
+    assert ("info", "first") in platform_messages
+    assert ("info", "second") in platform_messages
+    warnings = [
+        message for level, message in platform_messages
+        if level == "warning" and message.startswith("[审计日志]")
+    ]
+    assert warnings == ["[审计日志] 文件写入失败，平台日志仍继续输出"]
 
 
 def test_formal_ptrade_source_has_no_stale_release_labels_and_logs_fingerprint():
@@ -2246,6 +2299,43 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
     assert "耗时=0.000秒" in lifecycle
 
 
+@pytest.mark.parametrize(
+    "failing_prefix",
+    ["[卖出委托]", "[订单生命周期]"],
+)
+def test_sell_submission_guard_survives_diagnostic_log_failure(
+        monkeypatch, failing_prefix):
+    position = types.SimpleNamespace(amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 24, 9, 35, 0),
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 1.2},
+        entry_atr={"513100.SS": 0.05},
+        buy_date={"513100.SS": date(2026, 6, 1)},
+    )
+
+    def fail_selected_diagnostic(message, *args):
+        rendered = message % args if args else str(message)
+        if rendered.startswith(failing_prefix):
+            raise RuntimeError("diagnostic log unavailable")
+
+    monkeypatch.setattr(pt.log, "info", fail_selected_diagnostic)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.1)
+    monkeypatch.setattr(pt, "get_sell_limit_price", lambda code, price: 1.0)
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda code, amount, limit_price=None: "sell-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_sell("513100.SS", context, "test") is True
+    assert pt.g.sold_today == {"513100.SS": True}
+    assert pt.g.__pending_sells["513100.SS"]["order_id"] == "sell-order-1"
+
+
 def test_sell_submission_failure_does_not_create_guard(monkeypatch):
     position = types.SimpleNamespace(amount=500, cost_basis=1.0, last_sale_price=1.1)
     context = types.SimpleNamespace(
@@ -2820,6 +2910,131 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
     assert "核对后未完成=0" in summary
 
 
+def test_0936_trade_query_recovers_missing_buy_callback(monkeypatch):
+    today = date(2026, 7, 23)
+    submitted_at = datetime(2026, 7, 23, 9, 35, 0)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            cash=5000.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        execution_date=today,
+        __pending_orders={
+            "518880.SS": {
+                "requested_qty": 500,
+                "filled_qty": 0.0,
+                "filled_value": 0.0,
+                "fill_value_complete": True,
+                "atr": 0.05,
+                "buy_date": today,
+                "order_id": "buy-order-1",
+                "submitted_at": submitted_at,
+            }
+        },
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: [{
+            "stock_code": "518880.XSHG",
+            "entrust_bs": "1",
+            "business_amount": 500.0,
+            "business_price": 6.25,
+            "business_id": "buy-fill-1",
+            "order_id": "buy-order-1",
+            "_recovery_source": "get-trades",
+        }],
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert pt.g.__pending_orders == {}
+    assert pt.g.buy_date["518880.SS"] == today
+    assert pt.g.entry_atr["518880.SS"] == pytest.approx(0.05)
+    assert pt.g.highest_since_buy["518880.SS"] == pytest.approx(6.25)
+    assert pt.g.__position_recovery_source["518880.SS"] == "get-trades"
+    lifecycle = next(
+        message for message in messages
+        if message.startswith("[订单生命周期]")
+        and "方向=买入" in message
+    )
+    assert "事件=成交完成" in lifecycle
+    assert "来源=09:36主动核对" in lifecycle
+    assert "委托编号=buy-order-1" in lifecycle
+    assert "耗时=60.000秒" in lifecycle
+    summary = next(
+        message for message in messages
+        if message.startswith("[订单核对汇总]"))
+    assert "待核对买单=1" in summary
+    assert "买入匹配=1" in summary
+    assert "买入未完成=0" in summary
+
+
+def test_0936_trade_query_rejects_buy_fill_with_wrong_order_id(monkeypatch):
+    today = date(2026, 7, 23)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36, 0))
+    pt.g = make_g(
+        execution_date=today,
+        __pending_orders={
+            "518880.SS": {
+                "requested_qty": 500,
+                "filled_qty": 0.0,
+                "filled_value": 0.0,
+                "fill_value_complete": True,
+                "atr": 0.05,
+                "buy_date": today,
+                "order_id": "buy-order-current",
+                "submitted_at": datetime(2026, 7, 23, 9, 35, 0),
+            }
+        },
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: [{
+            "stock_code": "518880.SS",
+            "entrust_bs": "1",
+            "business_amount": 500.0,
+            "business_price": 6.25,
+            "business_id": "buy-fill-old",
+            "order_id": "buy-order-old",
+            "_recovery_source": "get-trades",
+        }],
+    )
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    pending = pt.g.__pending_orders["518880.SS"]
+    assert pending["filled_qty"] == 0.0
+    assert "518880.SS" not in pt.g.buy_date
+    summary = next(
+        message for message in messages
+        if message.startswith("[订单核对汇总]"))
+    assert "待核对买单=1" in summary
+    assert "买入匹配=0" in summary
+    assert "买入未完成=1" in summary
+
+
 def test_live_pause_check_fails_closed_when_status_is_unknown(monkeypatch):
     pt.g = make_g()
     monkeypatch.setattr(pt, "get_stock_status", lambda *args, **kwargs: {}, raising=False)
@@ -3366,6 +3581,40 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert "剩余数量=3100" in lifecycle
 
 
+@pytest.mark.parametrize(
+    "failing_prefix",
+    ["[买入委托]", "[订单生命周期]"],
+)
+def test_buy_submission_guard_survives_diagnostic_log_failure(
+        monkeypatch, failing_prefix):
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 13, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g()
+
+    def fail_selected_diagnostic(message, *args):
+        rendered = message % args if args else str(message)
+        if rendered.startswith(failing_prefix):
+            raise RuntimeError("diagnostic log unavailable")
+
+    monkeypatch.setattr(pt.log, "info", fail_selected_diagnostic)
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context, [make_buy_score()], date(2026, 7, 13)
+    ) == 1
+    assert pt.g.__pending_orders["513100.SS"]["order_id"] == "buy-order-1"
+
+
 def test_unverified_held_position_blocks_every_new_buy(monkeypatch):
     position = types.SimpleNamespace(amount=500, cost_basis=1.0, last_sale_price=1.1)
     context = types.SimpleNamespace(
@@ -3620,6 +3869,8 @@ def test_release_docs_describe_order_lifecycle_timing_diagnostics():
         assert "累计成交" in text
         assert "剩余数量" in text
         assert "耗时" in text
+        assert "待核对买单" in text
+        assert "日志故障" in text
 
 
 def test_buy_submission_failure_does_not_create_guard(monkeypatch):
@@ -4983,7 +5234,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.1" in notes
+    assert "20260726.2" in notes
     assert "1506a0e834fe" in notes
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.1"
+DEPLOYMENT_BUILD_ID = "20260726.2"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -134,16 +134,35 @@ class _AuditLogProxy(object):
     def __init__(self, platform_log, audit_path):
         self.platform_log = platform_log
         self.audit_path = str(audit_path)
+        self.audit_failure_reported = False
 
     def _emit(self, level, message, *args, **kwargs):
         platform_method = getattr(self.platform_log, level, None)
         if platform_method is not None:
-            platform_method(message, *args, **kwargs)
-        rendered = _render_log_message(message, args)
-        timestamp = _audit_now().strftime("%Y-%m-%d %H:%M:%S")
-        record = "%s - %s - %s\n" % (
-            timestamp, level.upper(), rendered.rstrip("\r\n"))
-        _append_audit_log_text(self.audit_path, record)
+            try:
+                platform_method(message, *args, **kwargs)
+            except Exception:
+                pass
+
+        audit_written = False
+        try:
+            rendered = _render_log_message(message, args)
+            timestamp = _audit_now().strftime("%Y-%m-%d %H:%M:%S")
+            record = "%s - %s - %s\n" % (
+                timestamp, level.upper(), rendered.rstrip("\r\n"))
+            audit_written = _append_audit_log_text(self.audit_path, record)
+        except Exception:
+            audit_written = False
+
+        if audit_written or self.audit_failure_reported:
+            return
+        self.audit_failure_reported = True
+        warning_method = getattr(self.platform_log, "warning", None)
+        if warning_method is not None:
+            try:
+                warning_method("[审计日志] 文件写入失败，平台日志仍继续输出")
+            except Exception:
+                pass
 
     def info(self, message, *args, **kwargs):
         self._emit("info", message, *args, **kwargs)
@@ -2305,21 +2324,24 @@ def _log_order_lifecycle(
     remaining = max(0.0, requested - filled)
     elapsed = _order_lifecycle_elapsed_seconds(context, pending)
     elapsed_text = "未知" if elapsed is None else "%.3f秒" % elapsed
-    log.info(
-        "[订单生命周期] 事件=%s 来源=%s 方向=%s 代码=%s "
-        "委托编号=%s 请求数量=%.0f 累计成交=%.0f 剩余数量=%.0f "
-        "耗时=%s 状态=%s" % (
-            event,
-            source,
-            direction,
-            normalize_code(code) or "未知",
-            str(pending.get("order_id", "") or "未知"),
-            requested,
-            filled,
-            remaining,
-            elapsed_text,
-            str(status or "未知"),
-        ))
+    try:
+        log.info(
+            "[订单生命周期] 事件=%s 来源=%s 方向=%s 代码=%s "
+            "委托编号=%s 请求数量=%.0f 累计成交=%.0f 剩余数量=%.0f "
+            "耗时=%s 状态=%s" % (
+                event,
+                source,
+                direction,
+                normalize_code(code) or "未知",
+                str(pending.get("order_id", "") or "未知"),
+                requested,
+                filled,
+                remaining,
+                elapsed_text,
+                str(status or "未知"),
+            ))
+    except Exception:
+        pass
 
 
 def _log_order_lifecycle_summary(source):
@@ -2738,7 +2760,6 @@ def execute_sell(code, context, reason):
     if order_id is None:
         log.error("[卖出] %s委托提交后未返回委托编号" % code)
         return False
-    log.info("[卖出委托] %s 委托编号=%s" % (code, order_id))
     pending = {
         "requested_qty": amount,
         "filled_qty": 0.0,
@@ -2746,14 +2767,19 @@ def execute_sell(code, context, reason):
         "order_id": str(order_id),
         "submitted_at": submitted_at,
     }
-    _log_order_lifecycle(
-        context, "已提交", "策略下单", "卖出", code, pending)
     if getattr(g, "__is_live", False):
+        # 券商已经接单，防重守卫必须先于任何诊断输出建立。
         g.sell_retry_reasons.pop(code, None)
         g.sold_today[code] = True
         g.__pending_sells[code] = pending
     else:
         _clear_position_state(code)
+    try:
+        log.info("[卖出委托] %s 委托编号=%s" % (code, order_id))
+    except Exception:
+        pass
+    _log_order_lifecycle(
+        context, "已提交", "策略下单", "卖出", code, pending)
     return True
 
 
@@ -2928,7 +2954,6 @@ def execute_buy_candidates(
         if order_id is None:
             log.error("[买入] %s委托提交后未返回委托编号" % code)
             continue
-        log.info("[买入委托] %s 委托编号=%s" % (code, order_id))
         pending = {
             "requested_qty": shares,
             "filled_qty": 0.0,
@@ -2939,14 +2964,19 @@ def execute_buy_candidates(
             "order_id": str(order_id),
             "submitted_at": submitted_at,
         }
-        _log_order_lifecycle(
-            context, "已提交", "策略下单", "买入", code, pending)
         if getattr(g, "__is_live", False):
+            # 券商已经接单，成交回报缺失时仍需保留可主动核对的订单号。
             g.__pending_orders[code] = pending
         else:
             g.buy_date[code] = today
             g.highest_since_buy[code] = price
             g.entry_atr[code] = score["atr"]
+        try:
+            log.info("[买入委托] %s 委托编号=%s" % (code, order_id))
+        except Exception:
+            pass
+        _log_order_lifecycle(
+            context, "已提交", "策略下单", "买入", code, pending)
         available -= shares * price
         bought += 1
     return bought
@@ -3367,35 +3397,76 @@ def reconcile_recent_fills_and_resume_buys(context):
     if not getattr(g, "__is_live", False):
         return 0
 
+    pending_buys = dict(getattr(g, "__pending_orders", {}))
     pending_sells = dict(getattr(g, "__pending_sells", {}))
-    pending_order_ids = set(
+    pending_buy_ids = set(
+        str(item.get("order_id", "") or "")
+        for item in pending_buys.values()
+        if isinstance(item, dict)
+    )
+    pending_sell_ids = set(
         str(item.get("order_id", "") or "")
         for item in pending_sells.values()
         if isinstance(item, dict)
     )
-    pending_order_ids.discard("")
+    pending_buy_ids.discard("")
+    pending_sell_ids.discard("")
+    pending_order_ids = pending_buy_ids | pending_sell_ids
     if pending_order_ids:
-        matched = 0
-        matched_order_ids = set()
+        matched_buys = 0
+        matched_sells = 0
+        matched_buy_ids = set()
+        matched_sell_ids = set()
+        matched_records = []
         for record in _fetch_current_strategy_trades():
-            if (
-                isinstance(record, dict)
-                and str(record.get("entrust_bs", "")) == "2"
-                and str(record.get("order_id", "") or "") in pending_order_ids
-            ):
-                on_trade_response(context, record)
-                matched += 1
-                matched_order_ids.add(str(record.get("order_id", "") or ""))
+            if not isinstance(record, dict):
+                continue
+            direction = str(record.get("entrust_bs", ""))
+            order_id = str(record.get("order_id", "") or "")
+            if direction == "1" and order_id in pending_buy_ids:
+                matched_records.append(record)
+                matched_buys += 1
+                matched_buy_ids.add(order_id)
+            elif direction == "2" and order_id in pending_sell_ids:
+                matched_records.append(record)
+                matched_sells += 1
+                matched_sell_ids.add(order_id)
+        if matched_records:
+            on_trade_response(context, matched_records)
+
+        remaining_buys = getattr(g, "__pending_orders", {})
         remaining_sells = getattr(g, "__pending_sells", {})
-        remaining_order_ids = set(
+        remaining_buy_ids = set(
+            str(item.get("order_id", "") or "")
+            for item in remaining_buys.values()
+            if isinstance(item, dict)
+        )
+        remaining_sell_ids = set(
             str(item.get("order_id", "") or "")
             for item in remaining_sells.values()
             if isinstance(item, dict)
         )
-        remaining_order_ids.discard("")
+        remaining_buy_ids.discard("")
+        remaining_sell_ids.discard("")
+        for code, pending in sorted(pending_buys.items()):
+            order_id = str(pending.get("order_id", "") or "")
+            if order_id in remaining_buy_ids:
+                _log_order_lifecycle(
+                    context,
+                    "主动核对后仍待成交",
+                    "09:36主动核对",
+                    "买入",
+                    code,
+                    remaining_buys.get(code, pending),
+                    status=(
+                        "已匹配部分成交"
+                        if order_id in matched_buy_ids
+                        else "未匹配成交"
+                    ),
+                )
         for code, pending in sorted(pending_sells.items()):
             order_id = str(pending.get("order_id", "") or "")
-            if order_id in remaining_order_ids:
+            if order_id in remaining_sell_ids:
                 _log_order_lifecycle(
                     context,
                     "主动核对后仍待成交",
@@ -3405,18 +3476,29 @@ def reconcile_recent_fills_and_resume_buys(context):
                     remaining_sells.get(code, pending),
                     status=(
                         "已匹配部分成交"
-                        if order_id in matched_order_ids
+                        if order_id in matched_sell_ids
                         else "未匹配成交"
                     ),
                 )
-        log.info("[成交兜底] 09:36主动核对待卖委托=%d 匹配成交=%d" % (
-            len(pending_order_ids), matched))
+        matched = matched_buys + matched_sells
+        unresolved_buys = len(pending_buy_ids & remaining_buy_ids)
+        unresolved_sells = len(pending_sell_ids & remaining_sell_ids)
         log.info(
-            "[订单核对汇总] 来源=09:36主动核对 待核对卖单=%d "
-            "匹配成交=%d 核对后未完成=%d" % (
-                len(pending_order_ids),
+            "[成交兜底] 09:36主动核对待买委托=%d 待卖委托=%d "
+            "匹配成交=%d" % (
+                len(pending_buy_ids), len(pending_sell_ids), matched))
+        log.info(
+            "[订单核对汇总] 来源=09:36主动核对 待核对买单=%d "
+            "待核对卖单=%d 匹配成交=%d 买入匹配=%d 卖出匹配=%d "
+            "核对后未完成=%d 买入未完成=%d 卖出未完成=%d" % (
+                len(pending_buy_ids),
+                len(pending_sell_ids),
                 matched,
-                len(pending_order_ids & remaining_order_ids),
+                matched_buys,
+                matched_sells,
+                unresolved_buys + unresolved_sells,
+                unresolved_buys,
+                unresolved_sells,
             ))
 
     if getattr(g, "__pending_sells", {}):

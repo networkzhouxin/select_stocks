@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.1 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.2 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -47,11 +47,14 @@ PTrade live mode registers three tasks, below the platform limit of five:
   uses the greater of broker-reported cash and pre-sell cash plus confirmed
   sell proceeds. This compensation affects order continuity only; target
   sizing, ranking, and signal rules are unchanged.
-- `09:36`: reconcile fills for sell orders submitted at 09:35 through the
-  official `get_trades()` API when `on_trade_response` was absent or delayed.
-  Only fills whose order ID matches the current pending sell are accepted.
-  Once all such sells are confirmed, the adapter immediately resumes the buy
-  evaluation already frozen at 09:35. It does not recalculate indicators,
+- `09:36`: reconcile fills for both buy and sell orders submitted at 09:35
+  through the official `get_trades()` API when `on_trade_response` was absent,
+  delayed, or arrived before PTrade could attach an order ID. Only fills whose
+  side and order ID exactly match a current pending order are accepted.
+  Confirmed buys restore their actual fill quantity, fill price, buy date, ATR,
+  and highest-close baseline through the existing callback state machine.
+  Once all pending sells are confirmed, the adapter immediately resumes the
+  buy evaluation already frozen at 09:35. It does not recalculate indicators,
   scores, ranking, or signals at 09:36. PTrade documents same-minute
   `get_trades()` results as cached from the first query, so the next minute is
   the earliest deterministic fallback rather than an arbitrary trading time.
@@ -92,12 +95,15 @@ and `耗时`.
 
 The source distinguishes `策略下单`, `成交主推`, `委托回报`,
 `09:36主动核对`, and `get_open_orders`. The 09:36 task also emits
-`[订单核对汇总]` with pending-sell count, matched-fill count, and unresolved
-count. `after_trading_end` emits `[订单生命周期汇总]` with in-memory pending
-buy/sell counts, deferred-buy state, and unknown-order-state guard.
+`[订单核对汇总]` with `待核对买单`, pending-sell count, matched buy/sell
+fill counts, and unresolved buy/sell counts. `after_trading_end` emits
+`[订单生命周期汇总]` with in-memory pending buy/sell counts, deferred-buy
+state, and unknown-order-state guard.
 
 These diagnostics do not add a scheduled task and do not change callback
 matching, fill accumulation, retries, cash, positions, signals, or orders.
+日志故障也与交易流程隔离：平台日志输出异常时仍尝试写入持久审计文件；
+审计文件写入失败时平台日志继续输出，并且只提示一次，避免递归刷屏。
 
 ## Buy Filter Diagnostics
 
@@ -354,8 +360,10 @@ PTrade 平台自身在策略代码之外生成的服务器配置、调度或网�
 单文件硬上限为 `20 MB`。下一条日志会导致超限时，策略在同目录写入并校验
 临时文件，只淘汰最旧的完整日志行，将文件压缩到约 `16 MB` 后再原子替换。
 不会截断 UTF-8 字符或半条日志；替换失败时保留原文件，平台日志和交易流程
-继续运行。该文件与只保存最近两代持仓风险状态的状态台账相互独立，不能用
-审计日志替代状态恢复，也不能用状态台账替代完整运行审计。
+继续运行，并通过底层平台日志只提示一次审计文件写入失败。反过来，平台日志
+接口异常也不会阻止审计文件写入或中断交易流程。该文件与只保存最近两代持仓
+风险状态的状态台账相互独立，不能用审计日志替代状态恢复，也不能用状态台账
+替代完整运行审计。
 
 ## PTrade 运行日志审计
 
