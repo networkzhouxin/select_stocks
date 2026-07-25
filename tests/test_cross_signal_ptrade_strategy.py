@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.3"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.4"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -146,6 +146,8 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
     raw_log = types.SimpleNamespace(
         info=lambda message, *args: platform_messages.append(
             ("info", message % args if args else str(message))),
+        debug=lambda message, *args: platform_messages.append(
+            ("debug", message % args if args else str(message))),
         warning=lambda message, *args: platform_messages.append(
             ("warning", message % args if args else str(message))),
         error=lambda message, *args: platform_messages.append(
@@ -172,6 +174,8 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
         "RSI[6/12/24]=50.7/50.9/52.4"
     )
     pt.log.info(detail)
+    debug_detail = "[指标明细][候选#1][513500.SS] RSI[6/12/24]=50.7/50.9/52.4"
+    pt.log.debug(debug_detail)
     pt.log.warning("[状态恢复] %s", "使用状态台账")
     pt.log.error("[委托恢复] 测试错误")
 
@@ -181,11 +185,13 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
     assert created == [pt.AUDIT_LOG_DIR]
     assert text.splitlines() == [
         "2026-07-22 09:35:01 - INFO - " + detail,
+        "2026-07-22 09:35:01 - DEBUG - " + debug_detail,
         "2026-07-22 09:35:01 - WARNING - [状态恢复] 使用状态台账",
         "2026-07-22 09:35:01 - ERROR - [委托恢复] 测试错误",
     ]
     assert platform_messages == [
         ("info", detail),
+        ("debug", debug_detail),
         ("warning", "[状态恢复] 使用状态台账"),
         ("error", "[委托恢复] 测试错误"),
     ]
@@ -3494,6 +3500,133 @@ def test_0935_defers_paused_pool_codes_but_processes_open_codes(monkeypatch):
     assert buys == [([open_code], "09:35主流程")]
 
 
+def test_0935_logs_day_boundaries_stages_and_debug_indicator_details(
+        monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 24)
+    prev_date = date(2026, 7, 23)
+    score = make_buy_score(code)
+    score.update({
+        "close": 2.0,
+        "rsi6_prev": 45.0,
+        "dif": 0.10,
+        "dif_prev": 0.05,
+        "k": 30.0,
+        "k_prev": 25.0,
+        "j": 40.0,
+        "j_prev": 35.0,
+        "rsi6_cross_rsi12_up": True,
+        "rsi6_cross_rsi24_up": False,
+        "macd_cross_up": True,
+        "kdj_k_cross_up": True,
+        "kdj_j_cross_up": False,
+    })
+    pt.g = make_g(etf_pool=[code])
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 24, 9, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000.0, cash=20000.0),
+    )
+    info_messages = []
+    debug_messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: info_messages.append(
+                message % args if args else str(message)),
+            debug=lambda message, *args: debug_messages.append(
+                message % args if args else str(message)),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "check_atr_stops", lambda context: [])
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (dict(score), None),
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda *args, **kwargs: [prev_date, today],
+        raising=False,
+    )
+    buy_calls = []
+    monkeypatch.setattr(
+        pt,
+        "execute_buy_candidates",
+        lambda context, scores, execution_date, diagnostic_source=None: (
+            buy_calls.append((
+                [item["code"] for item in scores],
+                execution_date,
+                diagnostic_source,
+            )) or 1
+        ),
+    )
+
+    pt.do_trading(context)
+
+    assert any(
+        message.startswith("[交易日开始]")
+        and "执行日期=2026-07-24" in message
+        and "信号日期=2026-07-23" in message
+        for message in info_messages
+    )
+    stage_messages = [
+        message for message in info_messages if message.startswith("[阶段")
+    ]
+    assert [message.split("]", 1)[0] + "]" for message in stage_messages] == [
+        "[阶段1/5]",
+        "[阶段2/5]",
+        "[阶段3/5]",
+        "[阶段4/5]",
+        "[阶段5/5]",
+    ]
+    candidate_summary = next(
+        message for message in info_messages
+        if message.startswith("[候选#1]"))
+    assert "代码=513100.SS" in candidate_summary
+    assert "RSI[6/12/24]" not in candidate_summary
+    cross_summary = next(
+        message for message in info_messages
+        if message.startswith("[上穿#1]"))
+    assert "上穿=RSI12,MACD,KDJ_K" in cross_summary
+    assert "BOLL[U/M/L]" not in cross_summary
+    assert any(
+        message.startswith("[指标明细][候选#1][513100.SS]")
+        and "RSI[6/12/24]" in message
+        and "MACD[DIF/DEA/HIST]" in message
+        for message in debug_messages
+    )
+    assert any(
+        message.startswith("[指标明细][上穿#1][513100.SS]")
+        and "RSI12上穿=是" in message
+        for message in debug_messages
+    )
+    assert any(
+        message.startswith("[指标明细][宽松反转#1][513100.SS]")
+        and "RSI变化=5.00" in message
+        for message in debug_messages
+    )
+    day_summary = next(
+        message for message in info_messages
+        if message.startswith("[交易日汇总]"))
+    assert "有效评分=1" in day_summary
+    assert "上穿标的=1" in day_summary
+    assert "宽松反转标的=1" in day_summary
+    assert "新提交买单=1" in day_summary
+    assert any(
+        message.startswith("[交易日结束]")
+        and "执行日期=2026-07-24" in message
+        for message in info_messages
+    )
+    assert buy_calls == [([code], today, "09:35主流程")]
+
+
 def test_buy_rejection_diagnostics_explain_every_filter_without_order(monkeypatch):
     held_code = "159985.SZ"
     context = types.SimpleNamespace(
@@ -3507,12 +3640,15 @@ def test_buy_rejection_diagnostics_explain_every_filter_without_order(monkeypatc
         )
     )
     pt.g = make_g()
-    messages = []
+    info_messages = []
+    debug_messages = []
     monkeypatch.setattr(
         pt,
         "log",
         types.SimpleNamespace(
-            info=lambda message, *args: messages.append(
+            info=lambda message, *args: info_messages.append(
+                message % args if args else str(message)),
+            debug=lambda message, *args: debug_messages.append(
                 message % args if args else str(message)),
             warning=lambda *args: None,
             error=lambda *args: None,
@@ -3557,7 +3693,7 @@ def test_buy_rejection_diagnostics_explain_every_filter_without_order(monkeypatc
     ) == 0
 
     summary = next(
-        message for message in messages
+        message for message in info_messages
         if message.startswith("[买入筛选汇总]"))
     assert "来源=09:35主流程" in summary
     assert "评分不足=1" in summary
@@ -3568,7 +3704,7 @@ def test_buy_rejection_diagnostics_explain_every_filter_without_order(monkeypatc
     assert "禁止买入=1" in summary
 
     details = "\n".join(
-        message for message in messages
+        message for message in debug_messages
         if message.startswith("[买入筛选明细]"))
     assert "代码=159985.SZ" in details and "已有持仓或待买" in details
     assert "代码=518880.SS" in details and "评分不足(45<60)" in details
@@ -5299,8 +5435,13 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.3" in notes
+    assert "20260726.4" in notes
     assert "1506a0e834fe" in notes
+    assert "[交易日开始]" in notes
+    assert "[交易日结束]" in notes
+    assert "`INFO`" in notes
+    assert "`DEBUG`" in notes
+    assert "完整指标明细" in notes
 
 
 def test_ptrade_deployment_notes_define_bounded_full_audit_log():

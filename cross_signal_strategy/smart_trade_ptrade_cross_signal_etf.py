@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.3"
+DEPLOYMENT_BUILD_ID = "20260726.4"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -57,6 +57,9 @@ try:
 except NameError:
     class _LocalLog(object):
         def info(self, *args, **kwargs):
+            pass
+
+        def debug(self, *args, **kwargs):
             pass
 
         def warning(self, *args, **kwargs):
@@ -1129,6 +1132,19 @@ def _format_indicator_values_for_log(item):
     return format_indicator_values(item).replace("(prev ", "(前值 ")
 
 
+def _log_debug_detail(message, *args):
+    """完整诊断优先使用 DEBUG；不支持 DEBUG 的环境回退到 INFO。"""
+    method = getattr(log, "debug", None)
+    if method is None:
+        method = getattr(log, "info", None)
+    if method is None:
+        return
+    try:
+        method(message, *args)
+    except Exception:
+        pass
+
+
 def _format_cross_flags_for_log(item):
     text = format_cross_flags(item)
     replacements = (
@@ -1149,6 +1165,36 @@ def _format_cross_flags_for_log(item):
     for source, target in replacements:
         text = text.replace(source, target)
     return text
+
+
+def _format_active_crosses_for_log(item):
+    """压缩交叉摘要，完整真假标志仍写入 DEBUG 明细。"""
+    definitions = (
+        ("RSI12", "rsi6_cross_rsi12_up", "rsi6_cross_rsi12_down"),
+        ("RSI24", "rsi6_cross_rsi24_up", "rsi6_cross_rsi24_down"),
+        ("MACD", "macd_cross_up", "macd_cross_down"),
+        ("KDJ_K", "kdj_k_cross_up", "kdj_k_cross_down"),
+        ("KDJ_J", "kdj_j_cross_up", "kdj_j_cross_down"),
+    )
+    up = [name for name, up_key, _down_key in definitions if item.get(up_key)]
+    down = [
+        name for name, _up_key, down_key in definitions if item.get(down_key)
+    ]
+    return "上穿=%s 下穿=%s" % (
+        ",".join(up) if up else "无",
+        ",".join(down) if down else "无",
+    )
+
+
+def _format_turn_strengths_for_log(item):
+    labels = []
+    if item.get("rsi_turn_up"):
+        labels.append("RSI")
+    if item.get("macd_turn_up"):
+        labels.append("MACD")
+    if item.get("kdj_turn_up"):
+        labels.append("KDJ")
+    return "转强=%s" % (",".join(labels) if labels else "无")
 
 
 def _format_reason_for_log(reason):
@@ -1785,7 +1831,7 @@ def _log_buy_candidate_rejection_diagnostics(
             counts["禁止买入"],
         ))
     for code, buy_score, sell_score, reasons in details:
-        log.info(
+        _log_debug_detail(
             "[买入筛选明细] 来源=%s 代码=%s 买入评分=%.0f "
             "卖出评分=%.0f 原因=%s" % (
                 source, code, buy_score, sell_score, reasons))
@@ -3013,18 +3059,34 @@ def do_trading(context):
     is_rebalance = today.weekday() in p["rebalance_weekdays"]
     g.paused_pool_codes = _find_paused_pool_codes(g.etf_pool, is_paused)
 
-    log.info("[%s] 执行日期=%s 信号日期=%s 是否调仓=%s" % (
-        STRATEGY_VERSION, today, prev_date, "是" if is_rebalance else "否"))
+    log.info(
+        "[交易日开始] 执行日期=%s 信号日期=%s 策略=%s 是否调仓=%s" % (
+            today,
+            prev_date,
+            STRATEGY_VERSION,
+            "是" if is_rebalance else "否",
+        ))
+    log.info("[阶段1/5][风险检查] 检查当前持仓ATR止损")
 
     stop_hits = check_atr_stops(context)
+    submitted_sells = 0
     for code, stop_price, price in stop_hits:
-        execute_sell(code, context, "atr_stop %.3f<=%.3f" % (price, stop_price))
+        if execute_sell(
+                code, context, "atr_stop %.3f<=%.3f" % (price, stop_price)):
+            submitted_sells += 1
 
     if not is_rebalance:
         if not stop_hits:
             log.info("[%s] 非调仓日，止损检查完成且未触发" % STRATEGY_VERSION)
+        log.info(
+            "[交易日汇总] 模式=仅风险检查 ATR止损触发=%d "
+            "新提交卖单=%d" % (len(stop_hits), submitted_sells))
+        log.info("[交易日结束] 执行日期=%s" % today)
         return
 
+    log.info(
+        "[阶段2/5][全池评分] ETF总数=%d 停牌跳过=%d" % (
+            len(g.etf_pool), len(g.paused_pool_codes)))
     all_scores = []
     skip_reasons = {}
     for code in g.etf_pool:
@@ -3050,6 +3112,10 @@ def do_trading(context):
         log.info("[%s] 没有有效评分" % STRATEGY_VERSION)
         log.info("[评分跳过汇总] %s" % summary)
         log.info("[评分跳过样例] %s" % samples)
+        log.info(
+            "[交易日汇总] 有效评分=0 ATR止损触发=%d "
+            "新提交卖单=%d" % (len(stop_hits), submitted_sells))
+        log.info("[交易日结束] 执行日期=%s" % today)
         return
 
     if skip_reasons:
@@ -3064,59 +3130,112 @@ def do_trading(context):
     score_map = {s["code"]: s for s in all_scores}
     g.last_scores = score_map
 
-    log.info("[候选排名]")
-    for item in all_scores[:5]:
+    log.info("[阶段3/5][信号摘要] 有效评分=%d" % len(all_scores))
+    for rank, item in enumerate(all_scores[:5], 1):
         log.info(
-            "  %s 买入评分=%.0f 反转评分=%.0f 位置评分=%.0f 趋势评分=%.0f "
-            "量能评分=%.0f 卖出评分=%.0f 收盘价=%.3f %s" % (
-                item["code"], item["buy_score"], item["reversal_score"],
+            "[候选#%d] 代码=%s 买入评分=%.0f 反转评分=%.0f "
+            "位置评分=%.0f 趋势评分=%.0f 量能评分=%.0f "
+            "卖出评分=%.0f 收盘价=%.3f" % (
+                rank, item["code"], item["buy_score"], item["reversal_score"],
                 item["location_score"], item["trend_score"], item["volume_score"],
-                item["sell_score"], item["close"], _format_indicator_values_for_log(item)))
+                item["sell_score"], item["close"]))
+        _log_debug_detail(
+            "[指标明细][候选#%d][%s] %s",
+            rank,
+            item["code"],
+            _format_indicator_values_for_log(item),
+        )
 
     cross_summary = summarize_cross_signal_candidates(all_scores)
     if cross_summary["count"] == 0:
         log.info("[上穿信号] 全部标的均未出现")
     else:
         log.info("[上穿信号] 数量=%d" % cross_summary["count"])
-        for item in cross_summary["items"]:
+        for rank, item in enumerate(cross_summary["items"], 1):
             log.info(
-                "  %s 反转评分=%.0f 买入评分=%.0f 卖出评分=%.0f %s %s" % (
-                    item["code"], item["reversal_score"], item["buy_score"], item["sell_score"],
-                    _format_cross_flags_for_log(item),
-                    _format_indicator_values_for_log(item)))
+                "[上穿#%d] 代码=%s 反转评分=%.0f 买入评分=%.0f "
+                "卖出评分=%.0f %s" % (
+                    rank,
+                    item["code"],
+                    item["reversal_score"],
+                    item["buy_score"],
+                    item["sell_score"],
+                    _format_active_crosses_for_log(item),
+                ))
+            _log_debug_detail(
+                "[指标明细][上穿#%d][%s] %s %s",
+                rank,
+                item["code"],
+                _format_cross_flags_for_log(item),
+                _format_indicator_values_for_log(item),
+            )
 
     loose_summary = summarize_loose_reversal_candidates(all_scores)
     if loose_summary["count"] == 0:
         log.info("[宽松反转] 全部标的均未出现")
     else:
         log.info("[宽松反转] 数量=%d" % loose_summary["count"])
-        for item in loose_summary["items"]:
+        for rank, item in enumerate(loose_summary["items"], 1):
             log.info(
-                "  %s 宽松反转数=%d 买入评分=%.0f 反转评分=%.0f "
-                "RSI转强=%s RSI变化=%.2f MACD转强=%s DIF变化=%.4f "
-                "KDJ转强=%s K值变化=%.2f J值变化=%.2f %s" % (
-                    item["code"], item["loose_reversal_count"],
+                "[宽松反转#%d] 代码=%s 转强数=%d 买入评分=%.0f "
+                "反转评分=%.0f %s" % (
+                    rank,
+                    item["code"],
+                    item["loose_reversal_count"],
                     item["buy_score"], item["reversal_score"],
-                    item["rsi_turn_up"], item["rsi6_delta"],
-                    item["macd_turn_up"], item["dif_delta"],
-                    item["kdj_turn_up"], item["k_delta"], item["j_delta"],
-                    _format_indicator_values_for_log(item)))
+                    _format_turn_strengths_for_log(item),
+                ))
+            _log_debug_detail(
+                "[指标明细][宽松反转#%d][%s] "
+                "RSI转强=%s RSI变化=%.2f MACD转强=%s DIF变化=%.4f "
+                "KDJ转强=%s K值变化=%.2f J值变化=%.2f %s",
+                rank,
+                item["code"],
+                item["rsi_turn_up"],
+                item["rsi6_delta"],
+                item["macd_turn_up"],
+                item["dif_delta"],
+                item["kdj_turn_up"],
+                item["k_delta"],
+                item["j_delta"],
+                _format_indicator_values_for_log(item),
+            )
 
     held = current_hold_codes(context)
+    log.info("[阶段4/5][卖出评估] 当前持仓=%d" % len(held))
     signal_hold_days = _get_signal_hold_days(today, p)
     for code in list(held):
         if code not in score_map:
             continue
-        _evaluate_signal_sell(
-            context, code, score_map[code], today, signal_hold_days)
+        if _evaluate_signal_sell(
+                context, code, score_map[code], today, signal_hold_days):
+            submitted_sells += 1
 
     g.deferred_scores = list(all_scores)
-    execute_buy_candidates(
+    log.info("[阶段5/5][买入评估] 使用冻结候选执行买入筛选")
+    submitted_buys = execute_buy_candidates(
         context,
         all_scores,
         today,
         diagnostic_source="09:35主流程",
     )
+    pending_buys = getattr(g, "__pending_orders", {})
+    pending_sells = getattr(g, "__pending_sells", {})
+    log.info(
+        "[交易日汇总] 有效评分=%d 上穿标的=%d 宽松反转标的=%d "
+        "ATR止损触发=%d 新提交卖单=%d 新提交买单=%d "
+        "待卖委托=%d 待买委托=%d 延后买入=%s" % (
+            len(all_scores),
+            cross_summary["count"],
+            loose_summary["count"],
+            len(stop_hits),
+            submitted_sells,
+            submitted_buys,
+            len(pending_sells) if isinstance(pending_sells, dict) else 0,
+            len(pending_buys) if isinstance(pending_buys, dict) else 0,
+            "是" if getattr(g, "__deferred_buy_after_sell", False) else "否",
+        ))
+    log.info("[交易日结束] 执行日期=%s" % today)
 
 
 def after_close(context):

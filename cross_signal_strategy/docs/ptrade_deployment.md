@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.3 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.4 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -358,9 +358,16 @@ official authority for this port.
 cross_signal_logs/cross_signal_v032_audit.log
 ```
 
-平台日志仍按原方式输出，因此当天界面行为不变。审计文件采用 UTF-8，保留
-级别、时间戳和完整消息，不缩减候选排名、状态恢复、委托、成交、停牌补偿、
-IOPV 观察或收盘汇总明细。它只能镜像本策略主动调用日志接口产生的记录；
+平台控制台按用途分层：`INFO` 保留 `[交易日开始]`、五个处理阶段、候选与
+交叉短摘要、实际买卖、订单生命周期、风险事件、`[交易日汇总]` 和
+`[交易日结束]`；完整指标明细和逐只买入筛选明细使用带稳定标记的 `DEBUG`。
+在 PTrade 界面取消勾选 `DEBUG` 可得到适合日常查看的简洁交易日志，需要排查
+时重新勾选即可。
+
+审计文件采用 UTF-8，仍镜像 `INFO`、`DEBUG`、`WARNING`、`ERROR` 和
+`CRITICAL` 的时间戳、级别与完整消息，不缩减候选排名、完整指标明细、
+状态恢复、委托、成交、停牌补偿、IOPV 观察或收盘汇总。它只能镜像本策略
+主动调用日志接口产生的记录；
 PTrade 平台自身在策略代码之外生成的服务器配置、调度或网关日志不在该文件中。
 
 单文件硬上限为 `20 MB`。下一条日志会导致超限时，策略在同目录写入并校验
