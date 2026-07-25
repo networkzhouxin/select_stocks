@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.2 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.3 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -36,7 +36,7 @@ server restart.
 
 ## Live Schedule
 
-PTrade live mode registers three tasks, below the platform limit of five:
+PTrade live mode registers four tasks, below the platform limit of five:
 
 - `09:35`: run the complete cross-signal strategy using T-1 daily bars.
 - A complete matching sell fill received through `on_trade_response` is the
@@ -67,6 +67,11 @@ PTrade live mode registers three tasks, below the platform limit of five:
   It does not rerun already processed ETFs. Deferred scores are stored in
   pickle-eligible `g` fields with both the execution date and T-1 signal date;
   a date mismatch blocks execution.
+- `10:36`: reconcile buy and sell fills for orders still pending after the
+  10:35 recovery pass. It reuses the same strict side-and-order-ID matching
+  and callback state machine as 09:36. If there is no pending order, it returns
+  without calling `get_trades()`. It does not read daily bars, recalculate
+  indicators or scores, change ranking, or create a new trading decision.
 - `after_trading_end` (normally around `15:30`): use PTrade's official
   lifecycle callback to reconcile state, update the highest closing price
   since entry, print the position risk summary, and write the closing
@@ -85,7 +90,7 @@ of the requested time. That result must not be compared with the JoinQuant
 
 PTrade emits one normalized `[订单生命周期]` record when an order is submitted,
 partially filled, completed, rejected, cancelled, recovered from
-`get_open_orders()`, or still pending after the 09:36 query. Every record
+`get_open_orders()`, or still pending after a 09:36/10:36 query. Every record
 contains the source, side, ETF code, order ID, requested quantity, cumulative
 fill, remaining quantity, elapsed time from submission, and terminal/raw
 status. Elapsed time is reported as `未知` after a process restart when the
@@ -94,9 +99,10 @@ The corresponding Chinese field labels are `请求数量`, `累计成交`, `剩�
 and `耗时`.
 
 The source distinguishes `策略下单`, `成交主推`, `委托回报`,
-`09:36主动核对`, and `get_open_orders`. The 09:36 task also emits
-`[订单核对汇总]` with `待核对买单`, pending-sell count, matched buy/sell
-fill counts, and unresolved buy/sell counts. `after_trading_end` emits
+`09:36主动核对`, `10:36主动核对`, and `get_open_orders`. Both active
+reconciliation tasks emit `[订单核对汇总]` with `待核对买单`,
+pending-sell count, matched buy/sell fill counts, and unresolved buy/sell
+counts. `after_trading_end` emits
 `[订单生命周期汇总]` with in-memory pending buy/sell counts, deferred-buy
 state, and unknown-order-state guard.
 
@@ -284,7 +290,7 @@ submission.
   current-strategy fills, delivery records, and broker reconstruction; a
   matching journal may then fill only remaining gaps. If no source proves a
   holding, it remains unverified and exposure cannot increase.
-- State journal writes run after the 09:35, 09:36, and 10:35 tasks, from
+- State journal writes run after the 09:35, 09:36, 10:35, and 10:36 tasks, from
   `after_trading_end`, and after order/trade callbacks. On restart, state is
   broker-validated before it can supply intraday continuity or old-position fallback.
 - After one complete scan, the process caches only the verified journal tail:

@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.2"
+DEPLOYMENT_BUILD_ID = "20260726.3"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1196,7 +1196,8 @@ def _format_recovery_source_for_log(source):
 
 
 # 二、PTrade 生命周期与任务调度
-# 实盘注册 09:35 主流程、09:36 成交兜底和 10:35 停复牌/废单补偿。
+# 实盘注册 09:35 主流程、09:36 成交兜底、10:35 停复牌/废单补偿和
+# 10:36 补偿委托成交兜底。
 # 回测由 handle_data 驱动且固定在收盘执行，因此只能用于冒烟检查，不能评价收益。
 
 def initialize(context):
@@ -1276,6 +1277,7 @@ def initialize(context):
         run_daily(context, _do_trading_wrapper, time="09:35")
         run_daily(context, _recent_fill_reconcile_wrapper, time="09:36")
         run_daily(context, _halt_recover_wrapper, time="10:35")
+        run_daily(context, _late_fill_reconcile_wrapper, time="10:36")
 
     log.info("[%s] 初始化完成: 最大持仓=%d 基础仓位比例=%.2f 普通信号最短持有=%d" % (
         STRATEGY_VERSION,
@@ -1411,6 +1413,15 @@ def _recent_fill_reconcile_wrapper(context):
 
 def _halt_recover_wrapper(context):
     halt_recover(context)
+    _persist_live_state(context)
+
+
+def _late_fill_reconcile_wrapper(context):
+    reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="10:36主动核对",
+        diagnostic_source="10:36成交兜底",
+    )
     _persist_live_state(context)
 
 
@@ -3392,8 +3403,11 @@ def _resume_deferred_buys_after_sells(
     return bought
 
 
-def reconcile_recent_fills_and_resume_buys(context):
-    """09:36 主动核对回调缺失的成交，并恢复被卖单阻塞的补买。"""
+def reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="09:36主动核对",
+        diagnostic_source="成交兜底"):
+    """主动核对回调缺失的成交，并恢复被卖单阻塞的补买。"""
     if not getattr(g, "__is_live", False):
         return 0
 
@@ -3424,11 +3438,15 @@ def reconcile_recent_fills_and_resume_buys(context):
             direction = str(record.get("entrust_bs", ""))
             order_id = str(record.get("order_id", "") or "")
             if direction == "1" and order_id in pending_buy_ids:
-                matched_records.append(record)
+                matched_record = dict(record)
+                matched_record["_recovery_label"] = query_source
+                matched_records.append(matched_record)
                 matched_buys += 1
                 matched_buy_ids.add(order_id)
             elif direction == "2" and order_id in pending_sell_ids:
-                matched_records.append(record)
+                matched_record = dict(record)
+                matched_record["_recovery_label"] = query_source
+                matched_records.append(matched_record)
                 matched_sells += 1
                 matched_sell_ids.add(order_id)
         if matched_records:
@@ -3454,7 +3472,7 @@ def reconcile_recent_fills_and_resume_buys(context):
                 _log_order_lifecycle(
                     context,
                     "主动核对后仍待成交",
-                    "09:36主动核对",
+                    query_source,
                     "买入",
                     code,
                     remaining_buys.get(code, pending),
@@ -3470,7 +3488,7 @@ def reconcile_recent_fills_and_resume_buys(context):
                 _log_order_lifecycle(
                     context,
                     "主动核对后仍待成交",
-                    "09:36主动核对",
+                    query_source,
                     "卖出",
                     code,
                     remaining_sells.get(code, pending),
@@ -3484,13 +3502,18 @@ def reconcile_recent_fills_and_resume_buys(context):
         unresolved_buys = len(pending_buy_ids & remaining_buy_ids)
         unresolved_sells = len(pending_sell_ids & remaining_sell_ids)
         log.info(
-            "[成交兜底] 09:36主动核对待买委托=%d 待卖委托=%d "
+            "[成交兜底] %s待买委托=%d 待卖委托=%d "
             "匹配成交=%d" % (
-                len(pending_buy_ids), len(pending_sell_ids), matched))
+                query_source,
+                len(pending_buy_ids),
+                len(pending_sell_ids),
+                matched,
+            ))
         log.info(
-            "[订单核对汇总] 来源=09:36主动核对 待核对买单=%d "
+            "[订单核对汇总] 来源=%s 待核对买单=%d "
             "待核对卖单=%d 匹配成交=%d 买入匹配=%d 卖出匹配=%d "
             "核对后未完成=%d 买入未完成=%d 卖出未完成=%d" % (
+                query_source,
                 len(pending_buy_ids),
                 len(pending_sell_ids),
                 matched,
@@ -3502,9 +3525,12 @@ def reconcile_recent_fills_and_resume_buys(context):
             ))
 
     if getattr(g, "__pending_sells", {}):
-        log.info("[成交兜底] 卖出尚未全部成交，补买继续延后至10:35复核")
+        if query_source == "09:36主动核对":
+            log.info("[成交兜底] 卖出尚未全部成交，补买继续延后至10:35复核")
+        else:
+            log.info("[成交兜底] 卖出尚未全部成交，保留待确认状态至盘后核对")
         return 0
-    return _resume_deferred_buys_after_sells(context, "成交兜底")
+    return _resume_deferred_buys_after_sells(context, diagnostic_source)
 
 
 def _delivery_trade_date(record):
@@ -4348,7 +4374,11 @@ def on_trade_response(context, trade_list):
         recovered_record = trade.get("_recovery_source") == "get-trades"
         if recovered_record:
             recovered_from_query = True
-        lifecycle_source = "09:36主动核对" if recovered_record else "成交主推"
+        lifecycle_source = (
+            str(trade.get("_recovery_label", "") or "主动成交核对")
+            if recovered_record
+            else "成交主推"
+        )
         if str(trade.get("real_type", "")) == "2":
             log.info("[成交回报] 已忽略撤单推送")
             continue

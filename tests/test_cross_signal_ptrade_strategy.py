@@ -123,7 +123,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.2"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.3"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2910,11 +2910,19 @@ def test_0936_trade_query_recovers_missing_sell_callback_and_resumes_buy(
     assert "核对后未完成=0" in summary
 
 
-def test_0936_trade_query_recovers_missing_buy_callback(monkeypatch):
+@pytest.mark.parametrize(
+    ("query_time", "query_source", "diagnostic_source"),
+    [
+        (datetime(2026, 7, 23, 9, 36, 0), "09:36主动核对", "成交兜底"),
+        (datetime(2026, 7, 23, 10, 36, 0), "10:36主动核对", "10:36成交兜底"),
+    ],
+)
+def test_trade_query_recovers_missing_buy_callback(
+        monkeypatch, query_time, query_source, diagnostic_source):
     today = date(2026, 7, 23)
-    submitted_at = datetime(2026, 7, 23, 9, 35, 0)
+    submitted_at = query_time.replace(minute=query_time.minute - 1)
     context = types.SimpleNamespace(
-        current_dt=datetime(2026, 7, 23, 9, 36, 0),
+        current_dt=query_time,
         portfolio=types.SimpleNamespace(
             positions={},
             cash=5000.0,
@@ -2958,7 +2966,11 @@ def test_0936_trade_query_recovers_missing_buy_callback(monkeypatch):
     )
     monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
 
-    pt.reconcile_recent_fills_and_resume_buys(context)
+    pt.reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source=query_source,
+        diagnostic_source=diagnostic_source,
+    )
 
     assert pt.g.__pending_orders == {}
     assert pt.g.buy_date["518880.SS"] == today
@@ -2971,15 +2983,66 @@ def test_0936_trade_query_recovers_missing_buy_callback(monkeypatch):
         and "方向=买入" in message
     )
     assert "事件=成交完成" in lifecycle
-    assert "来源=09:36主动核对" in lifecycle
+    assert "来源=%s" % query_source in lifecycle
     assert "委托编号=buy-order-1" in lifecycle
     assert "耗时=60.000秒" in lifecycle
     summary = next(
         message for message in messages
         if message.startswith("[订单核对汇总]"))
+    assert "来源=%s" % query_source in summary
     assert "待核对买单=1" in summary
     assert "买入匹配=1" in summary
     assert "买入未完成=0" in summary
+
+
+def test_1036_wrapper_reuses_reconciliation_and_persists(monkeypatch):
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 10, 36, 0))
+    calls = []
+    persists = []
+    monkeypatch.setattr(
+        pt,
+        "reconcile_recent_fills_and_resume_buys",
+        lambda received_context, **kwargs: calls.append(
+            (received_context, kwargs)),
+    )
+    monkeypatch.setattr(
+        pt,
+        "_persist_live_state",
+        lambda received_context: persists.append(received_context),
+    )
+
+    pt._late_fill_reconcile_wrapper(context)
+
+    assert calls == [(
+        context,
+        {
+            "query_source": "10:36主动核对",
+            "diagnostic_source": "10:36成交兜底",
+        },
+    )]
+    assert persists == [context]
+
+
+def test_1036_reconciliation_skips_trade_query_without_pending_orders(
+        monkeypatch):
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 10, 36, 0))
+    pt.g = make_g(__pending_orders={}, __pending_sells={})
+    query_calls = []
+    monkeypatch.setattr(
+        pt,
+        "_fetch_current_strategy_trades",
+        lambda: query_calls.append(True) or [],
+    )
+
+    pt.reconcile_recent_fills_and_resume_buys(
+        context,
+        query_source="10:36主动核对",
+        diagnostic_source="10:36成交兜底",
+    )
+
+    assert query_calls == []
 
 
 def test_0936_trade_query_rejects_buy_fill_with_wrong_order_id(monkeypatch):
@@ -5099,6 +5162,7 @@ def test_initialize_live_schedules_only_cross_signal_tasks(monkeypatch):
         ("_do_trading_wrapper", "09:35"),
         ("_recent_fill_reconcile_wrapper", "09:36"),
         ("_halt_recover_wrapper", "10:35"),
+        ("_late_fill_reconcile_wrapper", "10:36"),
     ]
     assert pt.g.params == jq.get_default_params()
     assert pt.g.sell_retry_reasons == {}
@@ -5221,12 +5285,13 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "09:35" in notes
     assert "09:36" in notes
     assert "10:35" in notes
+    assert "10:36" in notes
     assert "15:30" in notes
     assert "JoinQuant" in notes
     assert "PTrade" in notes
     assert "configuration lock" in notes
     assert "bounded state journal" in notes
-    assert "three tasks" in notes
+    assert "four tasks" in notes
     assert "`get_trades()`" in notes
     assert "after_trading_end" in notes
     assert "path is resolved and cached at the start of" in notes
@@ -5234,7 +5299,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.2" in notes
+    assert "20260726.3" in notes
     assert "1506a0e834fe" in notes
 
 
