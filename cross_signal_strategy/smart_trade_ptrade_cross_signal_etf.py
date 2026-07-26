@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.2"
+DEPLOYMENT_BUILD_ID = "20260727.3"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3262,6 +3262,29 @@ def get_current_price(code):
         return None
 
 
+def _fresh_snapshot_trade_status(snapshot, observed_at=None):
+    """Classify a same-session fresh snapshot without guessing tradability."""
+    if not isinstance(snapshot, dict):
+        return "unknown"
+    observed_at = observed_at or datetime.now()
+    raw_timestamp = snapshot.get("hsTimeStamp")
+    if _snapshot_session_date(raw_timestamp) != observed_at.date():
+        return "unknown"
+    snapshot_age = _snapshot_age_seconds(raw_timestamp, observed_at)
+    if (
+        snapshot_age is None
+        or snapshot_age < 0
+        or snapshot_age > LIVE_SNAPSHOT_MAX_AGE_SECONDS
+    ):
+        return "unknown"
+    status = str(snapshot.get("trade_status", "")).upper()
+    if status in ("HALT", "SUSP", "STOPT"):
+        return "paused"
+    if status == "TRADE":
+        return "tradable"
+    return "unknown"
+
+
 def get_trade_status_state(code):
     """返回 paused/tradable/unknown，避免把无法确认误当成停牌事实。"""
     code = normalize_code(code)
@@ -3278,13 +3301,7 @@ def get_trade_status_state(code):
         except Exception as exc:
             log.warning("[交易状态] %s停牌查询失败: %s" % (code, exc))
         snapshot = getattr(g, "__last_snapshot", {}).get(code)
-        if snapshot:
-            status = str(snapshot.get("trade_status", "")).upper()
-            if status in ("HALT", "SUSP", "STOPT", "DELISTED"):
-                return "paused"
-            if status in ("TRADE", "OCALL", "BREAK", "ENDTR", "POSTR"):
-                return "tradable"
-        return "unknown"
+        return _fresh_snapshot_trade_status(snapshot)
 
     data = getattr(g, "__data", None)
     if data is not None:
@@ -3345,6 +3362,10 @@ def get_buy_limit_price(code, current):
 
     snapshot = getattr(g, "__last_snapshot", {}).get(code)
     if not isinstance(snapshot, dict):
+        return None
+    if _fresh_snapshot_trade_status(snapshot) != "tradable":
+        log.warning(
+            "[买入报价] %s快照不是新鲜的连续竞价状态，已拒绝提交委托" % code)
         return None
     offer_group = snapshot.get("offer_grp")
     if not isinstance(offer_group, dict):

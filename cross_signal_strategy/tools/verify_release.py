@@ -60,6 +60,18 @@ PURE_BUSINESS_FUNCTIONS = {
     "summarize_loose_reversal_candidates",
 }
 
+EXECUTION_CONTRACT_TESTS = {
+    "test_cross_signal_strategy.py": {
+        "test_same_day_sell_exclusion_backfills_next_ranked_candidate",
+        "test_failed_buy_order_consumes_intended_slot_and_does_not_backfill",
+        "test_only_confirmed_pause_releases_top_candidate_slot",
+    },
+    "test_cross_signal_ptrade_strategy.py": {
+        "test_buy_execution_waits_for_submitted_sells_to_finish",
+        "test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio",
+    },
+}
+
 
 def _check(key, label, passed, detail):
     return {
@@ -262,6 +274,36 @@ def verify_release(repo_root, run_tests=False):
         "聚宽与PTrade核心纯函数一致",
         parity_ok,
         parity_detail,
+    ))
+
+    missing_contracts = []
+    contract_count = 0
+    for test_file, required_names in EXECUTION_CONTRACT_TESTS.items():
+        test_path = root / "tests" / test_file
+        if not test_path.is_file():
+            missing_contracts.append("%s:<missing-file>" % test_file)
+            continue
+        try:
+            test_tree = ast.parse(
+                test_path.read_text(encoding="utf-8"),
+                filename=str(test_path),
+            )
+            available_names = set(_functions(test_tree))
+        except (OSError, SyntaxError) as exc:
+            missing_contracts.append("%s:<unreadable:%s>" % (test_file, exc))
+            continue
+        contract_count += len(required_names)
+        for name in sorted(required_names - available_names):
+            missing_contracts.append("%s:%s" % (test_file, name))
+    checks.append(_check(
+        "execution_contract_tests",
+        "跨平台高风险执行合同",
+        not missing_contracts,
+        (
+            "已登记%d条必需合同" % contract_count
+            if not missing_contracts
+            else "缺少=" + ",".join(missing_contracts)
+        ),
     ))
 
     stale = []

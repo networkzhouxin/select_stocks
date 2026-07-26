@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.2"
+DEPLOYMENT_BUILD_ID = "20260727.3"
 
 
 try:
@@ -778,11 +778,23 @@ def sync_buy_state_after_order(code, context, today, price, atr):
     g.entry_atr[code] = atr
 
 
-def is_paused(current_data, code):
+def get_trade_status_state(current_data, code):
+    """Return paused/tradable/unknown without treating lookup failure as open."""
     try:
-        return current_data[code].paused
+        paused = current_data[code].paused
+        if isinstance(paused, (bool, np.bool_)):
+            return "paused" if bool(paused) else "tradable"
     except Exception:
-        return False
+        pass
+    return "unknown"
+
+
+def is_confirmed_paused(current_data, code):
+    return get_trade_status_state(current_data, code) == "paused"
+
+
+def is_paused(current_data, code):
+    return get_trade_status_state(current_data, code) != "tradable"
 
 
 def current_price(current_data, code):
@@ -841,7 +853,7 @@ def do_trading(context):
     all_scores = []
     skip_reasons = {}
     for code in g.etf_pool:
-        if is_paused(current_data, code):
+        if is_confirmed_paused(current_data, code):
             skip_reasons[code] = "paused"
             continue
         score, reason = calc_cross_signal_score(code, prev_date, return_reason=True)
@@ -955,7 +967,8 @@ def do_trading(context):
         if attempted_slots >= slots:
             break
         code = score["code"]
-        if is_paused(current_data, code):
+        trade_status = get_trade_status_state(current_data, code)
+        if trade_status == "paused":
             log.info(
                 "[buy pause backfill] %s paused; "
                 "continue with the next qualified candidate" % code)
@@ -963,6 +976,11 @@ def do_trading(context):
         # Only a confirmed suspension may release this intended slot.
         # Every other quote/order outcome consumes the slot for the day.
         attempted_slots += 1
+        if trade_status != "tradable":
+            log.warning(
+                "[buy blocked] %s trade status is unknown; "
+                "lower-ranked candidates will not be promoted" % code)
+            continue
         price = current_price(current_data, code)
         if price is None or price <= 0:
             continue

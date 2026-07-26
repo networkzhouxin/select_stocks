@@ -35,7 +35,7 @@ def test_formal_joinquant_source_has_no_stale_release_labels():
 def test_joinquant_exposes_stable_release_fingerprint():
     fingerprint = strategy.business_config_fingerprint()
 
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260727.2"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260727.3"
     assert len(fingerprint) == 12
     assert all(ch in "0123456789abcdef" for ch in fingerprint)
 
@@ -782,8 +782,15 @@ def test_failed_buy_order_consumes_intended_slot_and_does_not_backfill(
     assert backup_code not in strategy.g.buy_date
 
 
-def test_paused_top_buy_candidate_backfills_next_qualified_candidate(
-        monkeypatch):
+@pytest.mark.parametrize(
+    ("top_status", "expected_order_code"),
+    [
+        ("paused", "159915.XSHE"),
+        ("unknown", None),
+    ],
+)
+def test_only_confirmed_pause_releases_top_candidate_slot(
+        monkeypatch, top_status, expected_order_code):
     paused_code = "513100.XSHG"
     backup_code = "159915.XSHE"
     params = strategy.get_default_params()
@@ -828,12 +835,14 @@ def test_paused_top_buy_candidate_backfills_next_qualified_candidate(
         paused_code: make_score(paused_code, 80),
         backup_code: make_score(backup_code, 70),
     }
-    pause_checks = {paused_code: 0, backup_code: 0}
+    status_checks = {paused_code: 0, backup_code: 0}
     order_calls = []
 
-    def fake_is_paused(_current_data, code):
-        pause_checks[code] += 1
-        return code == paused_code and pause_checks[code] >= 2
+    def fake_trade_status(_current_data, code):
+        status_checks[code] += 1
+        if code == paused_code and status_checks[code] >= 2:
+            return top_status
+        return "tradable"
 
     def fake_order_target_value(code, target_value):
         order_calls.append((code, target_value))
@@ -897,7 +906,12 @@ def test_paused_top_buy_candidate_backfills_next_qualified_candidate(
             None,
         ),
     )
-    monkeypatch.setattr(strategy, "is_paused", fake_is_paused)
+    monkeypatch.setattr(
+        strategy,
+        "get_trade_status_state",
+        fake_trade_status,
+        raising=False,
+    )
     monkeypatch.setattr(
         strategy,
         "order_target_value",
@@ -907,9 +921,33 @@ def test_paused_top_buy_candidate_backfills_next_qualified_candidate(
 
     strategy.do_trading(Context())
 
-    assert [code for code, _target in order_calls] == [backup_code]
-    assert strategy.has_position(Context(), backup_code)
+    expected_orders = [] if expected_order_code is None else [expected_order_code]
+    assert [code for code, _target in order_calls] == expected_orders
+    assert strategy.has_position(Context(), backup_code) is (
+        expected_order_code == backup_code
+    )
     assert paused_code not in strategy.g.buy_date
+
+
+def test_joinquant_pause_lookup_is_tristate_and_unknown_fails_closed():
+    code = "513100.XSHG"
+
+    class CurrentItem(object):
+        def __init__(self, paused):
+            self.paused = paused
+
+    class BrokenCurrentData(dict):
+        def __getitem__(self, key):
+            raise RuntimeError("current data unavailable")
+
+    assert strategy.get_trade_status_state(
+        {code: CurrentItem(True)}, code) == "paused"
+    assert strategy.get_trade_status_state(
+        {code: CurrentItem(False)}, code) == "tradable"
+    assert strategy.get_trade_status_state(
+        BrokenCurrentData(), code) == "unknown"
+    assert strategy.is_confirmed_paused(BrokenCurrentData(), code) is False
+    assert strategy.is_paused(BrokenCurrentData(), code) is True
 
 
 def test_same_day_sell_exclusion_resets_on_next_trade_date(monkeypatch):

@@ -127,7 +127,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.2"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.3"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2216,11 +2216,14 @@ def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
 
 @pytest.mark.parametrize("level_key", [5, "5"])
 def test_live_buy_limit_uses_sell_five_from_fresh_snapshot(level_key):
+    current_time = datetime.now()
     pt.g = make_g(
         __last_snapshot={
             "513100.SS": {
                 "last_px": 2.000,
                 "up_px": 2.200,
+                "trade_status": "TRADE",
+                "hsTimeStamp": current_time.strftime("%Y%m%d%H%M%S"),
                 "offer_grp": {level_key: [2.015, 12000, 8]},
             }
         }
@@ -2238,7 +2241,30 @@ def test_live_buy_limit_uses_sell_five_from_fresh_snapshot(level_key):
     ],
 )
 def test_live_buy_limit_fails_closed_when_sell_five_is_unusable(snapshot):
+    snapshot = dict(snapshot)
+    snapshot["trade_status"] = "TRADE"
+    snapshot["hsTimeStamp"] = datetime.now().strftime("%Y%m%d%H%M%S")
     pt.g = make_g(__last_snapshot={"513100.SS": snapshot})
+
+    assert pt.get_buy_limit_price("513100.SS", 2.000) is None
+
+
+@pytest.mark.parametrize(
+    "trade_status",
+    ["HALT", "SUSP", "STOPT", "OCALL", "BREAK", "ENDTR", "POSTR", "DELISTED"],
+)
+def test_live_buy_limit_requires_fresh_continuous_trading_snapshot(trade_status):
+    pt.g = make_g(
+        __last_snapshot={
+            "513100.SS": {
+                "last_px": 2.000,
+                "up_px": 2.200,
+                "trade_status": trade_status,
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+                "offer_grp": {5: [2.015, 12000, 8]},
+            }
+        }
+    )
 
     assert pt.get_buy_limit_price("513100.SS", 2.000) is None
 
@@ -4289,6 +4315,71 @@ def test_live_pause_check_refreshes_status_instead_of_trusting_stale_snapshot(mo
     assert pt.is_paused("513100.SS") is False
 
 
+def test_live_pause_check_does_not_trust_stale_cached_halt(monkeypatch):
+    stale_time = datetime.now() - timedelta(minutes=10)
+    pt.g = make_g(
+        __last_snapshot={
+            "513100.SS": {
+                "trade_status": "HALT",
+                "hsTimeStamp": stale_time.strftime("%Y%m%d%H%M%S"),
+            }
+        }
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_stock_status",
+        lambda *args, **kwargs: {},
+        raising=False,
+    )
+
+    assert pt.get_trade_status_state("513100.SS") == "unknown"
+    assert pt.is_confirmed_paused("513100.SS") is False
+    assert pt.is_paused("513100.SS") is True
+
+
+def test_live_pause_check_accepts_fresh_cached_continuous_trading(monkeypatch):
+    pt.g = make_g(
+        __last_snapshot={
+            "513100.SS": {
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        }
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_stock_status",
+        lambda *args, **kwargs: {},
+        raising=False,
+    )
+
+    assert pt.get_trade_status_state("513100.SS") == "tradable"
+
+
+@pytest.mark.parametrize(
+    "trade_status",
+    ["OCALL", "BREAK", "ENDTR", "POSTR", "DELISTED"],
+)
+def test_live_pause_check_treats_noncontinuous_snapshot_status_as_unknown(
+        monkeypatch, trade_status):
+    pt.g = make_g(
+        __last_snapshot={
+            "513100.SS": {
+                "trade_status": trade_status,
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        }
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_stock_status",
+        lambda *args, **kwargs: {},
+        raising=False,
+    )
+
+    assert pt.get_trade_status_state("513100.SS") == "unknown"
+
+
 def test_partial_sell_callbacks_keep_state_until_cumulative_full_fill():
     pt.g = make_g(
         highest_since_buy={"513100.SS": 1.2},
@@ -6037,7 +6128,8 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
                 "up_px": 2.2,
                 "offer_grp": {5: [2.01, 10000, 3]},
                 "iopv": iopv,
-                "hsTimeStamp": "20260713093500123",
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
             }
         }
     )
@@ -7565,7 +7657,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260727.2" in notes
+    assert "20260727.3" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes
