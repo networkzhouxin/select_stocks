@@ -20,8 +20,8 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.13"
-LIVE_STATE_SCHEMA_VERSION = 5
+DEPLOYMENT_BUILD_ID = "20260726.14"
+LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
 LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
@@ -35,7 +35,7 @@ IOPV_OBSERVE_CODES = frozenset((
     "513880.SS",
     "513050.SS",
 ))
-LIVE_STATE_FILENAME = "cross_signal_v032_live_state_v5_%s.journal"
+LIVE_STATE_FILENAME = "cross_signal_v032_live_state_v6_%s.journal"
 DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
     "highest_since_buy",
@@ -845,19 +845,30 @@ def _validated_pending_close_confirmations(pending):
         session_date = _as_date(raw_record.get("session_date"))
         prior_high = _safe_float(
             raw_record.get("prior_confirmed_high"), np.nan)
-        observed_close = _safe_float(
-            raw_record.get("observed_close"), np.nan)
+        raw_observed_close = raw_record.get("observed_close")
+        observed_close = (
+            None
+            if raw_observed_close is None
+            else _safe_float(raw_observed_close, np.nan)
+        )
         if (
             session_date is None or
             not _is_positive_finite(prior_high) or
-            not _is_positive_finite(observed_close)
+            (
+                observed_close is not None and
+                not _is_positive_finite(observed_close)
+            )
         ):
             raise ValueError(
                 "invalid pending close confirmation facts: %s" % code)
         validated[code] = {
             "session_date": session_date,
             "prior_confirmed_high": float(prior_high),
-            "observed_close": float(observed_close),
+            "observed_close": (
+                None
+                if observed_close is None
+                else float(observed_close)
+            ),
         }
     return validated
 
@@ -2979,8 +2990,87 @@ def get_confirmed_session_bar(code, session_date):
     return None
 
 
+def _confirmed_trade_sessions_between(start_date, end_date):
+    """用官方交易日历证明需要补确认的完整交易日区间。"""
+    start_date = _as_date(start_date)
+    end_date = _as_date(end_date)
+    if (
+        start_date is None or
+        end_date is None or
+        start_date > end_date
+    ):
+        return None
+    if start_date == end_date:
+        return [start_date]
+    try:
+        raw_days = get_trade_days(
+            start_date=_api_date_text(start_date),
+            end_date=_api_date_text(end_date),
+        )
+    except Exception as exc:
+        log.error(
+            "[盘前收盘确认] 交易日区间查询失败 范围=%s~%s 原因=%s" % (
+                start_date.isoformat(), end_date.isoformat(), exc))
+        return None
+    if not isinstance(
+            raw_days, (list, tuple, np.ndarray, pd.Index, pd.Series)):
+        log.error(
+            "[盘前收盘确认] 交易日区间返回结构不可识别 范围=%s~%s %s" % (
+                start_date.isoformat(),
+                end_date.isoformat(),
+                _calendar_payload_summary(raw_days),
+            ))
+        return None
+    sessions = [_as_date(value) for value in list(raw_days)]
+    if (
+        not sessions or
+        any(value is None for value in sessions)
+    ):
+        log.error(
+            "[盘前收盘确认] 交易日区间包含无效日期 范围=%s~%s %s" % (
+                start_date.isoformat(),
+                end_date.isoformat(),
+                _calendar_payload_summary(raw_days),
+            ))
+        return None
+    sessions = sorted(set(sessions))
+    if (
+        sessions[0] != start_date or
+        sessions[-1] != end_date or
+        any(value < start_date or value > end_date for value in sessions)
+    ):
+        log.error(
+            "[盘前收盘确认] 交易日区间无法证明首尾 范围=%s~%s 返回=%s" % (
+                start_date.isoformat(),
+                end_date.isoformat(),
+                ",".join(value.isoformat() for value in sessions),
+            ))
+        return None
+    return sessions
+
+
+def _record_missing_close_confirmation(
+        code, session_date, prior_confirmed_high):
+    """没有盘后观察价时也保留最早未确认交易日，供后续逐日追补。"""
+    code = normalize_code(code)
+    if code in g.pending_close_confirmations:
+        return
+    g.pending_close_confirmations[code] = {
+        "session_date": _as_date(session_date),
+        "prior_confirmed_high": float(prior_confirmed_high),
+        "observed_close": None,
+    }
+
+
+def _repair_verified_position_source(code, source_map):
+    if source_map.get(code) not in (None, "unverified"):
+        return
+    source_map[code] = (
+        getattr(g, "__state_restore_source", None) or "ptrade-g")
+
+
 def _confirm_previous_session_highs(context, session_date):
-    """用已结束的 T-1 日线更新持仓最高收盘价；失败时关闭自动交易。"""
+    """逐日确认截至 T-1 的收盘价；整段成功后才提交最高价。"""
     session_date = _as_date(session_date)
     held = current_hold_codes(context)
     if session_date is None:
@@ -3000,13 +3090,11 @@ def _confirm_previous_session_highs(context, session_date):
         previous_high = g.highest_since_buy.get(code)
         pending = g.pending_close_confirmations.get(code)
         if (
-            code in g.unverified_positions or
             buy_date is None or
             not _is_positive_finite(previous_high)
         ):
             failures.append(code)
             g.unverified_positions.add(code)
-            source_map[code] = "unverified"
             log.error(
                 "[盘前收盘确认] %s原持仓风险状态不完整，自动交易已阻止" % code)
             continue
@@ -3017,17 +3105,15 @@ def _confirm_previous_session_highs(context, session_date):
             except Exception as exc:
                 failures.append(code)
                 g.unverified_positions.add(code)
-                source_map[code] = "unverified"
                 log.error(
                     "[盘前收盘确认] %s待确认收盘状态无效，自动交易已阻止: %s" % (
                         code, exc))
                 continue
-            if pending["session_date"] != session_date:
+            if pending["session_date"] > session_date:
                 failures.append(code)
                 g.unverified_positions.add(code)
-                source_map[code] = "unverified"
                 log.error(
-                    "[盘前收盘确认] %s待确认日期=%s与T-1=%s不一致，"
+                    "[盘前收盘确认] %s待确认日期=%s晚于T-1=%s，"
                     "自动交易已阻止" % (
                         code,
                         pending["session_date"].isoformat(),
@@ -3039,25 +3125,24 @@ def _confirm_previous_session_highs(context, session_date):
                 "[盘前收盘确认] %s买入日期=%s晚于T-1=%s，保留成交基线" % (
                     code, buy_date.isoformat(), session_date.isoformat()))
             continue
-
-        bar = get_confirmed_session_bar(code, session_date)
-        if bar is None:
+        first_unconfirmed = (
+            pending["session_date"] if pending is not None else session_date)
+        if first_unconfirmed < buy_date:
             failures.append(code)
             g.unverified_positions.add(code)
-            source_map[code] = "unverified"
             log.error(
-                "[盘前收盘确认] %s未能证明%s收盘价，自动卖出与新增买入已阻止" % (
-                    code, session_date.isoformat()))
+                "[盘前收盘确认] %s待确认日期=%s早于买入日期=%s，"
+                "自动交易已阻止" % (
+                    code,
+                    first_unconfirmed.isoformat(),
+                    buy_date.isoformat(),
+                ))
             continue
-
-        if bar["volume"] == 0:
-            if pending is not None:
-                previous_high = pending["prior_confirmed_high"]
-                g.highest_since_buy[code] = previous_high
-                g.pending_close_confirmations.pop(code, None)
-            log.info(
-                "[盘前收盘确认] %s 日期=%s 成交量=0，最高收盘价保持=%.6f" % (
-                    code, session_date.isoformat(), previous_high))
+        sessions = _confirmed_trade_sessions_between(
+            first_unconfirmed, session_date)
+        if sessions is None:
+            failures.append(code)
+            g.unverified_positions.add(code)
             continue
 
         confirmed_baseline = (
@@ -3065,15 +3150,47 @@ def _confirm_previous_session_highs(context, session_date):
             if pending is not None
             else float(previous_high)
         )
-        confirmed_high = max(confirmed_baseline, bar["close"])
+        confirmed_high = float(confirmed_baseline)
+        missing_session = None
+        zero_volume_count = 0
+        for confirmation_date in sessions:
+            bar = get_confirmed_session_bar(code, confirmation_date)
+            if bar is None:
+                missing_session = confirmation_date
+                break
+            if bar["volume"] == 0:
+                zero_volume_count += 1
+                continue
+            confirmed_high = max(confirmed_high, bar["close"])
+
+        if missing_session is not None:
+            failures.append(code)
+            g.unverified_positions.add(code)
+            _record_missing_close_confirmation(
+                code, first_unconfirmed, confirmed_baseline)
+            log.error(
+                "[盘前收盘确认] %s补确认区间=%s~%s 缺失日期=%s，"
+                "原状态保持且自动卖出与新增买入已阻止" % (
+                    code,
+                    first_unconfirmed.isoformat(),
+                    session_date.isoformat(),
+                    missing_session.isoformat(),
+                ))
+            continue
+
         g.highest_since_buy[code] = confirmed_high
         g.pending_close_confirmations.pop(code, None)
+        g.unverified_positions.discard(code)
+        _repair_verified_position_source(code, source_map)
         log.info(
-            "[盘前收盘确认] %s 日期=%s 收盘价=%.6f "
-            "确认前最高收盘价=%.6f 已确认最高收盘价=%.6f" % (
+            "[盘前收盘确认] %s 区间=%s~%s 交易日数=%d "
+            "零成交量日数=%d 确认前最高收盘价=%.6f "
+            "已确认最高收盘价=%.6f" % (
                 code,
+                first_unconfirmed.isoformat(),
                 session_date.isoformat(),
-                bar["close"],
+                len(sessions),
+                zero_volume_count,
                 confirmed_baseline,
                 confirmed_high,
             )
@@ -3753,17 +3870,8 @@ def after_close(context):
             log.error("  %s风险状态未验证，收盘价和ATR状态未更新" % code)
             continue
         is_live = getattr(g, "__is_live", False)
-        price = (
-            get_after_close_observed_price(code, context)
-            if is_live else get_current_price(code)
-        )
         pos = _get_position(context, code)
-        if price is None or price <= 0:
-            continue
-        if not is_live:
-            prev_high = g.highest_since_buy.get(code, price)
-            g.highest_since_buy[code] = max(prev_high, price)
-        else:
+        if is_live:
             session_date = _as_date(get_context_datetime(context))
             previous_pending = g.pending_close_confirmations.get(code)
             if previous_pending is not None:
@@ -3798,6 +3906,20 @@ def after_close(context):
                     "[盘后观察] %s无法证明交易日或原确认最高收盘价，"
                     "自动交易已阻止" % code)
                 continue
+            price = get_after_close_observed_price(code, context)
+            if price is None or price <= 0:
+                _record_missing_close_confirmation(
+                    code, session_date, confirmed_baseline)
+                log.warning(
+                    "[盘后观察] %s未取得可用收盘观察价，已保留日期=%s的"
+                    "待确认游标；原确认最高收盘价=%.6f，次日盘前将用"
+                    "最终日线补确认" % (
+                        code,
+                        session_date.isoformat(),
+                        float(confirmed_baseline),
+                    )
+                )
+                continue
             g.pending_close_confirmations[code] = {
                 "session_date": session_date,
                 "prior_confirmed_high": float(confirmed_baseline),
@@ -3805,6 +3927,12 @@ def after_close(context):
             }
             g.highest_since_buy[code] = max(
                 float(confirmed_baseline), float(price))
+        else:
+            price = get_current_price(code)
+            if price is None or price <= 0:
+                continue
+            prev_high = g.highest_since_buy.get(code, price)
+            g.highest_since_buy[code] = max(prev_high, price)
         if code not in g.entry_atr:
             score = g.last_scores.get(code)
             if score is not None and score.get("atr") and not pd.isna(score.get("atr")):
@@ -4838,12 +4966,11 @@ def recover_live_state(
             )
         if complete:
             g.unverified_positions.discard(code)
-            if code not in source_map:
-                source_map[code] = (
-                    getattr(g, "__state_restore_source", None) or "ptrade-g")
+            _repair_verified_position_source(code, source_map)
         else:
             g.unverified_positions.add(code)
-            source_map[code] = "unverified"
+            if not source_map.get(code):
+                source_map[code] = "unverified"
             log.error(
                 "[状态恢复] %s历史买入日期、ATR、最高价或券商成本无法证实，"
                 "自动卖出已阻止" % code

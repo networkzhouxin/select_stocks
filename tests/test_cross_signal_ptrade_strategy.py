@@ -126,8 +126,8 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.13"
-    assert pt.LIVE_STATE_SCHEMA_VERSION == 5
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.14"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -848,7 +848,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
 
     assert len({simulation_path, other_account_path, live_path}) == 3
     assert Path(simulation_path).name.startswith(
-        "cross_signal_v032_live_state_v5_")
+        "cross_signal_v032_live_state_v6_")
     assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
@@ -1576,6 +1576,28 @@ def test_live_state_rejects_invalid_pending_close_confirmation(pending):
 
     with pytest.raises(ValueError, match="pending close confirmation"):
         pt._validated_live_state(state)
+
+
+def test_live_state_accepts_pending_confirmation_without_provisional_observation():
+    code = "513100.SS"
+    pending = {
+        code: {
+            "session_date": date(2026, 7, 24),
+            "prior_confirmed_high": 2.0,
+            "observed_close": None,
+        },
+    }
+    state = {
+        field: getattr(
+            make_g(pending_close_confirmations=pending),
+            field,
+        )
+        for field in pt.LIVE_STATE_FIELDS
+    }
+
+    validated = pt._validated_live_state(state)
+
+    assert validated["pending_close_confirmations"] == pending
 
 
 @pytest.mark.parametrize(
@@ -2333,11 +2355,11 @@ def test_confirm_previous_session_highs_replaces_provisional_high_with_final_clo
     assert pt.g.unverified_positions == set()
 
 
-def test_confirm_previous_session_highs_fails_closed_on_pending_date_mismatch(
+def test_confirm_previous_session_highs_fails_closed_on_future_pending_date(
         monkeypatch):
     code = "513100.SS"
     session_date = date(2026, 7, 24)
-    pending_date = date(2026, 7, 23)
+    pending_date = date(2026, 7, 27)
     pt.g = make_g(
         highest_since_buy={code: 2.4},
         entry_atr={code: 0.05},
@@ -2373,6 +2395,138 @@ def test_confirm_previous_session_highs_fails_closed_on_pending_date_mismatch(
     assert calls == []
     assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
     assert pt.g.pending_close_confirmations[code]["session_date"] == pending_date
+    assert pt.g.unverified_positions == {code}
+
+
+def test_confirm_previous_session_highs_catches_up_stale_pending_range(
+        monkeypatch):
+    code = "513100.SS"
+    pending_date = date(2026, 7, 23)
+    session_date = date(2026, 7, 27)
+    trade_sessions = [
+        date(2026, 7, 23),
+        date(2026, 7, 24),
+        date(2026, 7, 27),
+    ]
+    pt.g = make_g(
+        highest_since_buy={code: 2.4},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={
+            code: {
+                "session_date": pending_date,
+                "prior_confirmed_high": 2.0,
+                "observed_close": 2.4,
+            },
+        },
+        __position_recovery_source={code: "journal"},
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    calls = []
+    closes = {
+        date(2026, 7, 23): 2.3,
+        date(2026, 7, 24): 2.5,
+        date(2026, 7, 27): 2.4,
+    }
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda start_date, end_date: [
+            value.strftime("%Y-%m-%d") for value in trade_sessions
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_confirmed_session_bar",
+        lambda requested, requested_date: (
+            calls.append((requested, requested_date)) or {
+                "date": requested_date,
+                "close": closes[requested_date],
+                "volume": 100000.0,
+            }
+        ),
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is True
+    assert calls == [(code, value) for value in trade_sessions]
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.5)
+    assert pt.g.pending_close_confirmations == {}
+    assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source[code] == "journal"
+
+
+def test_confirm_previous_session_highs_keeps_stale_state_atomically_when_gap_remains(
+        monkeypatch):
+    code = "513100.SS"
+    pending_date = date(2026, 7, 23)
+    session_date = date(2026, 7, 27)
+    trade_sessions = [
+        date(2026, 7, 23),
+        date(2026, 7, 24),
+        date(2026, 7, 27),
+    ]
+    pending = {
+        "session_date": pending_date,
+        "prior_confirmed_high": 2.0,
+        "observed_close": 2.4,
+    }
+    pt.g = make_g(
+        highest_since_buy={code: 2.4},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={code: dict(pending)},
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda start_date, end_date: [
+            value.strftime("%Y-%m-%d") for value in trade_sessions
+        ],
+        raising=False,
+    )
+
+    def get_bar(requested, requested_date):
+        calls.append((requested, requested_date))
+        if requested_date == date(2026, 7, 24):
+            return None
+        return {
+            "date": requested_date,
+            "close": 2.3,
+            "volume": 100000.0,
+        }
+
+    monkeypatch.setattr(pt, "get_confirmed_session_bar", get_bar)
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is False
+    assert calls == [
+        (code, date(2026, 7, 23)),
+        (code, date(2026, 7, 24)),
+    ]
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert pt.g.pending_close_confirmations == {code: pending}
     assert pt.g.unverified_positions == {code}
 
 
@@ -2526,6 +2680,46 @@ def test_confirm_previous_session_highs_fails_closed_without_exact_bar(
         },
     }
     assert pt.g.unverified_positions == {code}
+
+
+def test_live_after_close_records_retryable_pending_when_observation_is_missing(
+        monkeypatch):
+    code = "513100.SS"
+    session_date = date(2026, 7, 24)
+    pt.g = make_g(
+        highest_since_buy={code: 2.0},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 24, 15, 30),
+        portfolio=types.SimpleNamespace(
+            portfolio_value=20000.0,
+            cash=10000.0,
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        pt, "get_after_close_observed_price",
+        lambda requested, requested_context: None,
+    )
+
+    pt.after_close(context)
+
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.0)
+    assert pt.g.pending_close_confirmations == {
+        code: {
+            "session_date": session_date,
+            "prior_confirmed_high": 2.0,
+            "observed_close": None,
+        },
+    }
+    assert pt.g.unverified_positions == set()
 
 
 @pytest.mark.parametrize(
@@ -6469,6 +6663,31 @@ def test_live_recovery_requires_valid_broker_cost_for_automatic_exits():
     assert pt.g.unverified_positions == {"513100.SS"}
 
 
+def test_live_recovery_repairs_stale_unverified_source_for_complete_position():
+    code = "513100.SS"
+    position = types.SimpleNamespace(
+        amount=400,
+        cost_basis=1.18,
+        last_sale_price=1.28,
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(positions={code: position})
+    )
+    pt.g = make_g(
+        buy_date={code: date(2026, 3, 3)},
+        entry_atr={code: 0.05},
+        highest_since_buy={code: 1.35},
+        unverified_positions={code},
+        __state_restore_source="journal",
+        __position_recovery_source={code: "unverified"},
+    )
+
+    pt.recover_live_state(context)
+
+    assert pt.g.unverified_positions == set()
+    assert pt.g.__position_recovery_source == {code: "journal"}
+
+
 def test_live_recovery_rebuilds_same_day_buy_from_strategy_trades(monkeypatch):
     today = date(2026, 7, 13)
     position = types.SimpleNamespace(amount=400, cost_basis=1.181, last_sale_price=1.22)
@@ -6937,14 +7156,14 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.13" in notes
+    assert "20260726.14" in notes
     assert "1506a0e834fe" in notes
-    assert "状态结构=5" in notes
+    assert "状态结构=6" in notes
     assert "provisional risk state" in notes
     assert "exact finalized T-1 daily bar" in notes
     assert "corrects the provisional high" in notes
     assert "volume is zero" in notes
-    assert "schema 5" in notes
+    assert "schema 6" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
     assert "`INFO`" in notes

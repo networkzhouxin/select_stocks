@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.13 业务配置=1506a0e834fe 状态结构=5
+[发布指纹] 构建=20260726.14 业务配置=1506a0e834fe 状态结构=6
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -23,13 +23,14 @@ The state schema is PTrade-only and does not participate in trading decisions.
 Any mismatch from this documented identity requires a fresh local release
 check before simulation or live trading continues.
 
-State schema 5 deliberately rejects schema 4 risk state because schema 4 has no
-metadata that can distinguish a confirmed high from the provisional
-same-session value recorded at 15:30. On the first start after this upgrade,
-held-position risk facts are rebuilt from the broker delivery history and
-finalized historical daily bars. Subsequent starts use the normal bounded
-schema-5 journal, which persists both the provisional observation and its prior
-confirmed baseline until next-morning confirmation completes.
+State schema 6 deliberately rejects schema 5 risk state because schema 5 cannot
+represent a completed session whose 15:30 observation was unavailable while
+still preserving the earliest unconfirmed-session cursor. On the first start
+after this upgrade, held-position risk facts are rebuilt from broker delivery
+history and finalized historical daily bars. Subsequent starts use the normal
+bounded schema-6 journal. It persists the earliest unconfirmed session, the
+prior confirmed baseline, and an optional provisional observation until the
+full missing interval is confirmed.
 
 The indicator calculations, cross detection, buy/sell scoring, candidate
 filtering, position sizing, minimum signal hold, and ATR stop formula are
@@ -114,16 +115,23 @@ PTrade live mode registers four tasks, below the platform limit of five:
   provisional risk state, so the normal end-of-day maintenance still occurs.
   The journal also stores the session date, the prior confirmed high, and the
   observed close. This is not an additional `run_daily` thread task and does
-  not create a new trading decision.
+  not create a new trading decision. If the current-session observation is
+  unavailable, the journal still stores the session date and prior confirmed
+  high with no provisional close, so the next morning cannot silently skip
+  that session.
 - The next `before_trading_start` first restores holding state and then reads
-  the exact finalized T-1 daily bar. For a matching pending session it
-  corrects the provisional high to `max(prior confirmed high, final close)`;
-  this replacement may lower an overstated 15:30 provisional value. When
-  volume is zero, the session is treated as suspended, the prior confirmed
-  high is restored, and the pending observation is cleared. A missing,
-  stale-date, malformed, or failed T-1 response retains the pending metadata,
-  marks that holding unverified, and blocks automatic exits and new buys until
-  the final bar can be proved. This timing uses only information available
+  the exact finalized T-1 daily bar. For a matching pending session, it
+  corrects the provisional high to
+  `max(prior confirmed high, final close)`; this
+  replacement may lower an overstated 15:30 provisional value. If confirmation
+  was already missed on an earlier session, the adapter proves the complete
+  trading-day interval through `get_trade_days()` and reads every exact daily
+  bar from that earliest cursor through current T-1. When volume is zero, the
+  session is treated as suspended and does not raise the high. The high and cursor are
+  committed only after the entire interval succeeds. A missing, stale-date,
+  malformed, or failed response retains the earliest pending metadata, marks
+  that holding unverified, and blocks automatic exits and new buys until the
+  complete interval can be proved. This timing uses only information available
   before T trading and does not create a future function.
 
 Initialization must prove the runtime mode with `is_trade()` before applying
