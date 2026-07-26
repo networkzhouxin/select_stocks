@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260727.1 业务配置=1506a0e834fe 状态结构=6
+[发布指纹] 构建=20260727.2 业务配置=1506a0e834fe 状态结构=6
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -118,14 +118,12 @@ PTrade live mode registers four tasks, below the platform limit of five:
   09:36. If there is no pending order, it returns without calling
   `get_trades()` or `get_order(order_id)`. It does not read daily bars, recalculate
   indicators or scores, change ranking, or create a new trading decision.
-- A buy submission exception, missing order ID, or terminal order response
-  (`5`/`6`/`9`) with zero cumulative fills marks that ETF as a
-  `零成交终态`. The code is `当日不再重试`; the adapter immediately continues
-  through the same `冻结候选队列` and attempts the next qualified ETF without
-  consuming the vacant slot. If broker cash has not synchronized yet, the
-  existing 09:36/10:36 reconciliation path retries only that bounded backfill;
-  this behavior `不新增定时任务`. Partial fills and normal fills keep their
-  original lifecycle behavior.
+- 只有明确停牌可以释放原定买入名额并顺位补位；下一只仍须通过全部既有买入条件。
+  交易状态无法确认时继续闭锁该笔买入，但不把未知状态当成停牌事实，也不释放
+  名额。报价不可用、卖五无量或格式异常、下单异常、未返回委托编号、撤单、
+  零成交或部分成交，都不会晋升更低排名的 ETF。策略不单独把涨停作为补位理由，
+  也不会为补位新增定时任务。09:35 停牌的 ETF 若在 10:35 复牌，只有组合仍有
+  剩余仓位时才可按原始 T-1 排名提交买入，不会挤掉 09:35 已补买或已挂单的候选。
 - `after_trading_end` (normally around `15:30`): reconcile orders, print the
   position risk summary, and write the bounded state journal. An exact-date,
   finite positive close with positive volume updates `highest_since_buy` as

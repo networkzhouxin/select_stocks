@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.1"
+DEPLOYMENT_BUILD_ID = "20260727.2"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3262,7 +3262,8 @@ def get_current_price(code):
         return None
 
 
-def is_paused(code):
+def get_trade_status_state(code):
+    """返回 paused/tradable/unknown，避免把无法确认误当成停牌事实。"""
     code = normalize_code(code)
     if getattr(g, "__is_live", False):
         try:
@@ -3271,24 +3272,24 @@ def is_paused(code):
                 for key, value in result.items():
                     if normalize_code(key) == code:
                         if isinstance(value, (bool, np.bool_)):
-                            return bool(value)
+                            return "paused" if bool(value) else "tradable"
                         log.warning("[交易状态] %s停牌值无法识别=%r" % (code, value))
-                        return True
+                        break
         except Exception as exc:
             log.warning("[交易状态] %s停牌查询失败: %s" % (code, exc))
         snapshot = getattr(g, "__last_snapshot", {}).get(code)
         if snapshot:
             status = str(snapshot.get("trade_status", "")).upper()
             if status in ("HALT", "SUSP", "STOPT", "DELISTED"):
-                return True
+                return "paused"
             if status in ("TRADE", "OCALL", "BREAK", "ENDTR", "POSTR"):
-                return False
-        return True
+                return "tradable"
+        return "unknown"
 
     data = getattr(g, "__data", None)
     if data is not None:
         try:
-            return int(data[code].is_open) == 0
+            return "paused" if int(data[code].is_open) == 0 else "tradable"
         except Exception:
             pass
     try:
@@ -3296,10 +3297,23 @@ def is_paused(code):
         if isinstance(result, dict):
             for key, value in result.items():
                 if normalize_code(key) == code:
-                    return bool(value)
+                    if isinstance(value, (bool, np.bool_)):
+                        return "paused" if bool(value) else "tradable"
     except Exception:
         pass
-    return False
+    return "unknown"
+
+
+def is_confirmed_paused(code):
+    return get_trade_status_state(code) == "paused"
+
+
+def is_paused(code):
+    state = get_trade_status_state(code)
+    if getattr(g, "__is_live", False):
+        # 实盘状态未知时继续闭锁交易，但不能把它当成停牌事实去释放买入名额。
+        return state != "tradable"
+    return state == "paused"
 
 
 def _find_paused_pool_codes(pool, pause_check):
@@ -3555,7 +3569,20 @@ def execute_buy_candidates(
         available = max(0.0, float(available_cash_override))
     frozen_codes = getattr(g, "__selected_buy_codes_today", None)
     if frozen_codes is None:
-        selected_candidates = candidates[:slots]
+        selected_candidates = []
+        paused_codes = set(getattr(g, "paused_pool_codes", set()))
+        for item in candidates:
+            if len(selected_candidates) >= slots:
+                break
+            code = item["code"]
+            if is_confirmed_paused(code):
+                paused_codes.add(code)
+                log.info(
+                    "[买入停牌补位] %s已停牌，继续选择下一只达到条件的候选"
+                    % code)
+                continue
+            selected_candidates.append(item)
+        g.paused_pool_codes = paused_codes
         frozen_codes = tuple(item["code"] for item in selected_candidates)
         g.__selected_buy_codes_today = frozen_codes
         log.info("[买入名单] 当日原定候选=%s" % (
@@ -3581,6 +3608,9 @@ def execute_buy_candidates(
         if code in getattr(g, "__pending_orders", {}):
             continue
         if is_paused(code):
+            log.info(
+                "[买入闭锁] %s停牌或交易状态无法确认，本次不提交委托；"
+                "已冻结名额不晋升后排候选" % code)
             continue
         price = get_current_price(code)
         if price is None or price <= 0:
@@ -3692,7 +3722,8 @@ def do_trading(context):
     g.deferred_signal_date = prev_date
     g.deferred_scores = []
     is_rebalance = today.weekday() in p["rebalance_weekdays"]
-    g.paused_pool_codes = _find_paused_pool_codes(g.etf_pool, is_paused)
+    g.paused_pool_codes = _find_paused_pool_codes(
+        g.etf_pool, is_confirmed_paused)
 
     log.info(
         "[交易日开始] 执行日期=%s 信号日期=%s 策略=%s 是否调仓=%s" % (

@@ -127,7 +127,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.2"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -5089,6 +5089,12 @@ def test_0935_defers_paused_pool_codes_but_processes_open_codes(monkeypatch):
     monkeypatch.setattr(pt, "is_paused", lambda code: code == paused)
     monkeypatch.setattr(
         pt,
+        "is_confirmed_paused",
+        lambda code: code == paused,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
         "check_atr_stops",
         lambda context: stop_checks.append(True) or [],
     )
@@ -5121,6 +5127,65 @@ def test_0935_defers_paused_pool_codes_but_processes_open_codes(monkeypatch):
     assert pt.g.paused_pool_codes == {paused}
     assert scored == [(open_code, prev_date)]
     assert buys == [([open_code], "09:35主流程")]
+
+
+def test_0935_does_not_classify_unknown_trade_status_as_confirmed_pause(
+        monkeypatch):
+    unknown_code = "513100.SS"
+    open_code = "159985.SZ"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(etf_pool=[unknown_code, open_code])
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    scored = []
+    buys = []
+
+    def fake_get_stock_status(codes, status_type):
+        code = codes[0]
+        if code == unknown_code:
+            raise RuntimeError("status unavailable")
+        return {open_code: False}
+
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(
+        pt, "get_stock_status", fake_get_stock_status, raising=False)
+    monkeypatch.setattr(pt, "check_atr_stops", lambda context: [])
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (
+            scored.append((code, end_date)) or {
+                **make_buy_score(code),
+                "buy_score": 80 if code == unknown_code else 70,
+                "close": 1.0,
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_trade_days",
+        lambda end_date, count: [prev_date, today],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "execute_buy_candidates",
+        lambda context, scores, execution_date, diagnostic_source=None: (
+            buys.append([score["code"] for score in scores]) or 0),
+    )
+
+    pt.do_trading(context)
+
+    assert pt.g.paused_pool_codes == set()
+    assert scored == [
+        (unknown_code, prev_date),
+        (open_code, prev_date),
+    ]
+    assert buys == [[unknown_code, open_code]]
 
 
 def test_0935_logs_day_boundaries_stages_and_debug_indicator_details(
@@ -5511,6 +5576,201 @@ def test_buy_submission_failure_does_not_promote_lower_ranked_candidate(
     assert [code for code, _amount, _price in orders] == [failed_code]
     assert pt.g.failed_buy_codes == {failed_code}
     assert pt.g.__pending_orders == {}
+
+
+def test_confirmed_paused_buy_candidate_promotes_next_qualified_candidate(
+        monkeypatch):
+    paused_code = "513100.SS"
+    backup_code = "159915.SZ"
+    paused_score = make_buy_score(paused_code)
+    paused_score["buy_score"] = 80
+    backup_score = make_buy_score(backup_code)
+    backup_score["buy_score"] = 70
+    params = pt.get_default_params()
+    params["max_hold"] = 1
+    pt.g = make_g(params=params)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    orders = []
+
+    monkeypatch.setattr(pt, "is_paused", lambda code: code == paused_code)
+    monkeypatch.setattr(
+        pt,
+        "is_confirmed_paused",
+        lambda code: code == paused_code,
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "backup-order"),
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [paused_score, backup_score],
+        date(2026, 7, 23),
+    ) == 1
+
+    assert [code for code, _amount, _price in orders] == [backup_code]
+    assert pt.g.__selected_buy_codes_today == (backup_code,)
+    assert pt.g.paused_pool_codes == {paused_code}
+
+
+def test_paused_buy_candidate_does_not_promote_unqualified_lower_candidate(
+        monkeypatch):
+    paused_code = "513100.SS"
+    unqualified_code = "159915.SZ"
+    paused_score = make_buy_score(paused_code)
+    paused_score["buy_score"] = 80
+    unqualified_score = make_buy_score(unqualified_code)
+    unqualified_score["buy_score"] = 59
+    params = pt.get_default_params()
+    params["max_hold"] = 1
+    pt.g = make_g(params=params)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    orders = []
+
+    monkeypatch.setattr(pt, "is_paused", lambda code: code == paused_code)
+    monkeypatch.setattr(
+        pt,
+        "is_confirmed_paused",
+        lambda code: code == paused_code,
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "unexpected-order"),
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [paused_score, unqualified_score],
+        date(2026, 7, 23),
+    ) == 0
+
+    assert orders == []
+    assert pt.g.__selected_buy_codes_today == ()
+    assert pt.g.paused_pool_codes == {paused_code}
+
+
+def test_unknown_pause_status_consumes_slot_without_promoting_lower_candidate(
+        monkeypatch):
+    unknown_code = "513100.SS"
+    lower_code = "159915.SZ"
+    unknown_score = make_buy_score(unknown_code)
+    unknown_score["buy_score"] = 80
+    lower_score = make_buy_score(lower_code)
+    lower_score["buy_score"] = 70
+    params = pt.get_default_params()
+    params["max_hold"] = 1
+    pt.g = make_g(params=params)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    orders = []
+    def fake_get_stock_status(codes, status_type):
+        code = codes[0]
+        if code == unknown_code:
+            raise RuntimeError("status unavailable")
+        return {lower_code: False}
+
+    monkeypatch.setattr(
+        pt, "get_stock_status", fake_get_stock_status, raising=False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "unexpected-order"),
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [unknown_score, lower_score],
+        date(2026, 7, 23),
+    ) == 0
+
+    assert orders == []
+    assert pt.g.__selected_buy_codes_today == (unknown_code,)
+    assert pt.g.paused_pool_codes == set()
+
+
+def test_resumed_candidate_does_not_displace_filled_pause_backup(monkeypatch):
+    backup_code = "159915.SZ"
+    resumed_code = "513100.SS"
+    params = pt.get_default_params()
+    params["max_hold"] = 1
+    pt.g = make_g(
+        params=params,
+        __selected_buy_codes_today=(backup_code, resumed_code),
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 10, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={
+                backup_code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=2.0,
+                    last_sale_price=2.0,
+                ),
+            },
+            portfolio_value=20000.0,
+            cash=10000.0,
+        ),
+    )
+    orders = []
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "unexpected-order"),
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score(backup_code), make_buy_score(resumed_code)],
+        date(2026, 7, 23),
+        diagnostic_source="10:35复牌补偿",
+    ) == 0
+
+    assert orders == []
 
 
 def test_buy_submission_failure_still_attempts_other_preselected_slot(
@@ -7305,7 +7565,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260727.1" in notes
+    assert "20260727.2" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes
@@ -7320,15 +7580,24 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "完整指标明细" in notes
 
 
-def test_ptrade_deployment_notes_define_zero_fill_buy_backfill():
-    notes = (
+def test_release_docs_define_pause_only_buy_backup():
+    deployment = (
         ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
     ).read_text(encoding="utf-8")
+    detailed = (
+        ROOT
+        / "cross_signal_strategy"
+        / "docs"
+        / "上穿下穿ETF策略详细说明.md"
+    ).read_text(encoding="utf-8")
 
-    assert "零成交终态" in notes
-    assert "当日不再重试" in notes
-    assert "冻结候选队列" in notes
-    assert "不新增定时任务" in notes
+    for text in (deployment, detailed):
+        assert "只有明确停牌" in text
+        assert "交易状态无法确认" in text
+        assert "下一只仍须通过全部既有买入条件" in text
+        assert "不会晋升更低排名" in text
+        assert "不单独把涨停作为补位理由" in text
+        assert "剩余仓位" in text
 
 
 def test_ptrade_deployment_notes_define_bounded_full_audit_log():

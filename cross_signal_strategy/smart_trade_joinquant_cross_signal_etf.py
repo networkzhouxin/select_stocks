@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.1"
+DEPLOYMENT_BUILD_ID = "20260727.2"
 
 
 try:
@@ -950,13 +950,19 @@ def do_trading(context):
         log.info("[%s] no buy candidates above threshold" % STRATEGY_VERSION)
         return
 
-    bought = 0
+    attempted_slots = 0
     for score in candidates:
-        if bought >= slots:
+        if attempted_slots >= slots:
             break
         code = score["code"]
         if is_paused(current_data, code):
+            log.info(
+                "[buy pause backfill] %s paused; "
+                "continue with the next qualified candidate" % code)
             continue
+        # Only a confirmed suspension may release this intended slot.
+        # Every other quote/order outcome consumes the slot for the day.
+        attempted_slots += 1
         price = current_price(current_data, code)
         if price is None or price <= 0:
             continue
@@ -968,10 +974,9 @@ def do_trading(context):
         sync_buy_state_after_order(code, context, today, price, score["atr"])
         if not has_position(context, code):
             log.warning(
-                "[buy backfill] %s order did not create a position; "
-                "continue with the next candidate" % code)
+                "[buy not filled] %s order did not create a position; "
+                "lower-ranked candidates will not be promoted" % code)
             continue
-        bought += 1
 
 
 def after_close(context):
