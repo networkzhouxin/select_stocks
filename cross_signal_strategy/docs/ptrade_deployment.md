@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.14 业务配置=1506a0e834fe 状态结构=6
+[发布指纹] 构建=20260727.1 业务配置=1506a0e834fe 状态结构=6
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -36,6 +36,23 @@ The indicator calculations, cross detection, buy/sell scoring, candidate
 filtering, position sizing, minimum signal hold, and ATR stop formula are
 frozen to the JoinQuant `cross-v0.3.2` mainline. Only platform access and live
 order lifecycle handling differ.
+
+Live buy orders use the fresh snapshot already accepted by the execution-price
+guard and submit the sell-five quote (`offer_grp[5]`) as the limit price. The
+sell-five level must contain a positive price and quantity and must not exceed
+the instrument upper limit. If that evidence is missing or malformed, the
+order fails closed; it does not fall back to the latest price or upper-limit
+price. The exchange can fill at any better available ask up to that limit, so
+the recorded fill price need not equal sell-five. PTrade backtests have no
+provable live order-book depth and retain the current-price smoke-test path.
+
+The candidate list intended by the first actual buy evaluation is frozen for
+the trade day. A rejected, cancelled, or zero-fill buy never promotes a
+lower-ranked ETF. Other ETFs already selected for separate available slots may
+still submit normally. An ETF that was genuinely paused at 09:35 may join the
+same frozen score order after the existing 10:35 resume check proves that it is
+tradable; this is delayed execution of the original T-1 decision, not a backup
+selection.
 
 After PTrade restores its persisted `g` object, a configuration lock rebuilds
 `g.params` and `g.etf_pool` from the frozen source code and calls

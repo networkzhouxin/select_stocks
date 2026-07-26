@@ -69,6 +69,7 @@ def make_g(**overrides):
         "__deferred_buy_base_cash": None,
         "__deferred_sell_proceeds": 0.0,
         "__deferred_sold_codes": set(),
+        "__selected_buy_codes_today": None,
         "__order_state_unknown": False,
         "__is_live": True,
         "__mode_verified": True,
@@ -126,7 +127,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.14"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -1946,6 +1947,8 @@ def test_joinquant_and_ptrade_choose_same_buy_on_same_synthetic_day(monkeypatch)
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
     monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
+    monkeypatch.setattr(
         pt,
         "calc_cross_signal_score",
         lambda code, end_date, return_reason=False: (dict(pt_score), None),
@@ -2104,6 +2107,8 @@ def test_joinquant_and_ptrade_sell_then_replacement_flow_contract(
         lambda code: sold_price if code == pt_sold else 2.0,
     )
     monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: current)
+    monkeypatch.setattr(
         pt,
         "calc_cross_signal_score",
         lambda code, end_date, return_reason=False: (
@@ -2207,6 +2212,41 @@ def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
 
     assert pt.get_current_price("513100.SS") == pytest.approx(2.0)
     assert pt.g.__last_snapshot["513100.SS"]["last_px"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("level_key", [5, "5"])
+def test_live_buy_limit_uses_sell_five_from_fresh_snapshot(level_key):
+    pt.g = make_g(
+        __last_snapshot={
+            "513100.SS": {
+                "last_px": 2.000,
+                "up_px": 2.200,
+                "offer_grp": {level_key: [2.015, 12000, 8]},
+            }
+        }
+    )
+
+    assert pt.get_buy_limit_price("513100.SS", 2.000) == pytest.approx(2.015)
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {"last_px": 2.000, "up_px": 2.200, "offer_grp": {}},
+        {"last_px": 2.000, "up_px": 2.200, "offer_grp": {5: [0, 0, 0]}},
+        {"last_px": 2.000, "up_px": 2.200, "offer_grp": {5: [2.201, 100, 1]}},
+    ],
+)
+def test_live_buy_limit_fails_closed_when_sell_five_is_unusable(snapshot):
+    pt.g = make_g(__last_snapshot={"513100.SS": snapshot})
+
+    assert pt.get_buy_limit_price("513100.SS", 2.000) is None
+
+
+def test_backtest_buy_limit_keeps_current_price_without_order_book():
+    pt.g = make_g(__is_live=False)
+
+    assert pt.get_buy_limit_price("513100.SS", 2.0014) == pytest.approx(2.001)
 
 
 def test_live_after_close_provisionally_updates_high_and_records_confirmation(
@@ -3540,6 +3580,8 @@ def test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio(
     orders = []
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 1.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 1.0)
     monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
     monkeypatch.setattr(
         pt,
@@ -3658,6 +3700,8 @@ def test_duplicate_full_sell_callback_does_not_submit_duplicate_replacement_buy(
     orders = []
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 1.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 1.0)
     monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
     monkeypatch.setattr(
         pt,
@@ -4313,7 +4357,7 @@ def test_rejected_sell_releases_retry_guard_without_clearing_position_state():
     }
 
 
-def test_zero_fill_buy_rejection_immediately_backfills_next_frozen_candidate(
+def test_zero_fill_buy_rejection_does_not_backfill_next_candidate(
         monkeypatch):
     today = date(2026, 7, 23)
     failed_code = "513100.SS"
@@ -4349,6 +4393,8 @@ def test_zero_fill_buy_rejection_immediately_backfills_next_frozen_candidate(
     orders = []
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
     monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
     monkeypatch.setattr(
         pt,
@@ -4371,12 +4417,11 @@ def test_zero_fill_buy_rejection_immediately_backfills_next_frozen_candidate(
 
     assert pt.g.failed_buy_codes == {failed_code}
     assert pt.g.buy_backfill_pending is False
-    assert orders == [(backup_code, 1500, 2.0)]
-    assert set(pt.g.__pending_orders) == {backup_code}
-    assert pt.g.__pending_orders[backup_code]["order_id"] == "buy-order-backup"
+    assert orders == []
+    assert pt.g.__pending_orders == {}
 
 
-def test_zero_fill_buy_rejection_retries_backfill_at_0936_when_cash_sync_lags(
+def test_zero_fill_buy_rejection_does_not_backfill_at_0936(
         monkeypatch):
     today = date(2026, 7, 23)
     failed_code = "513100.SS"
@@ -4412,6 +4457,8 @@ def test_zero_fill_buy_rejection_retries_backfill_at_0936_when_cash_sync_lags(
     orders = []
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
     monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
     monkeypatch.setattr(
         pt,
@@ -4433,18 +4480,18 @@ def test_zero_fill_buy_rejection_retries_backfill_at_0936_when_cash_sync_lags(
     })
 
     assert orders == []
-    assert pt.g.buy_backfill_pending is True
+    assert pt.g.buy_backfill_pending is False
 
     context.current_dt = datetime(2026, 7, 23, 9, 36, 0)
     context.portfolio.cash = 20000.0
     pt.reconcile_recent_fills_and_resume_buys(context)
 
-    assert orders == [(backup_code, 1500, 2.0)]
+    assert orders == []
     assert pt.g.buy_backfill_pending is False
-    assert set(pt.g.__pending_orders) == {backup_code}
+    assert pt.g.__pending_orders == {}
 
 
-def test_active_order_query_backfills_after_zero_fill_buy_rejection(
+def test_active_order_query_does_not_backfill_after_zero_fill_buy_rejection(
         monkeypatch):
     today = date(2026, 7, 23)
     failed_code = "513100.SS"
@@ -4514,9 +4561,8 @@ def test_active_order_query_backfills_after_zero_fill_buy_rejection(
     assert queried_order_ids == ["buy-order-rejected"]
     assert pt.g.failed_buy_codes == {failed_code}
     assert pt.g.buy_backfill_pending is False
-    assert orders == [(backup_code, 1500, 2.0)]
-    assert set(pt.g.__pending_orders) == {backup_code}
-    assert pt.g.__pending_orders[backup_code]["order_id"] == "buy-order-backup"
+    assert orders == []
+    assert pt.g.__pending_orders == {}
 
 
 def test_active_order_query_releases_zero_fill_rejected_sell_for_retry(
@@ -5395,6 +5441,8 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
     monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.1, raising=False)
+    monkeypatch.setattr(
         pt,
         "order",
         lambda *args, **kwargs: orders.append((args, kwargs)) or "buy-order-1",
@@ -5404,8 +5452,9 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert pt.execute_buy_candidates(
         context, [make_buy_score()], date(2026, 7, 13)
     ) == 1
-    assert orders == [(('513100.SS', 3100), {'limit_price': 2.0})]
-    assert pt.g.__pending_orders["513100.SS"]["requested_qty"] == 3100
+    assert orders == [(('513100.SS', 3000), {'limit_price': 2.1})]
+    assert pt.g.__pending_orders["513100.SS"]["requested_qty"] == 3000
+    assert pt.g.__pending_orders["513100.SS"]["limit_price"] == pytest.approx(2.1)
     assert pt.g.__pending_orders["513100.SS"]["order_id"] == "buy-order-1"
     assert pt.g.__pending_orders["513100.SS"]["submitted_at"] == submitted_at
     lifecycle = next(
@@ -5415,11 +5464,11 @@ def test_buy_execution_uses_confirmed_cash_and_creates_fill_guard(monkeypatch):
     assert "来源=策略下单" in lifecycle
     assert "方向=买入" in lifecycle
     assert "委托编号=buy-order-1" in lifecycle
-    assert "请求数量=3100" in lifecycle
-    assert "剩余数量=3100" in lifecycle
+    assert "请求数量=3000" in lifecycle
+    assert "剩余数量=3000" in lifecycle
 
 
-def test_buy_submission_failure_is_excluded_for_rest_of_day_and_backfills(
+def test_buy_submission_failure_does_not_promote_lower_ranked_candidate(
         monkeypatch):
     failed_code = "513100.SS"
     backup_code = "159915.SZ"
@@ -5435,7 +5484,9 @@ def test_buy_submission_failure_is_excluded_for_rest_of_day_and_backfills(
             cash=20000.0,
         ),
     )
-    pt.g = make_g()
+    params = pt.get_default_params()
+    params["max_hold"] = 1
+    pt.g = make_g(params=params)
     orders = []
 
     def fake_order(code, amount, limit_price=None):
@@ -5446,6 +5497,8 @@ def test_buy_submission_failure_is_excluded_for_rest_of_day_and_backfills(
 
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
     monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
     monkeypatch.setattr(pt, "order", fake_order, raising=False)
 
@@ -5453,14 +5506,104 @@ def test_buy_submission_failure_is_excluded_for_rest_of_day_and_backfills(
         context,
         [failed_score, backup_score],
         date(2026, 7, 23),
-    ) == 1
+    ) == 0
 
-    assert [code for code, _amount, _price in orders] == [
-        failed_code,
-        backup_code,
-    ]
+    assert [code for code, _amount, _price in orders] == [failed_code]
     assert pt.g.failed_buy_codes == {failed_code}
-    assert set(pt.g.__pending_orders) == {backup_code}
+    assert pt.g.__pending_orders == {}
+
+
+def test_buy_submission_failure_still_attempts_other_preselected_slot(
+        monkeypatch):
+    first_code = "513100.SS"
+    second_code = "159915.SZ"
+    lower_ranked_code = "518880.SS"
+    scores = [
+        make_buy_score(first_code),
+        make_buy_score(second_code),
+        make_buy_score(lower_ranked_code),
+    ]
+    for buy_score, score in zip((80, 70, 65), scores):
+        score["buy_score"] = buy_score
+    params = pt.get_default_params()
+    params["max_hold"] = 2
+    pt.g = make_g(params=params)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    orders = []
+
+    def fake_order(code, amount, limit_price=None):
+        orders.append((code, amount, limit_price))
+        if code == first_code:
+            raise RuntimeError("submit failed")
+        return "buy-order-second"
+
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(pt, "order", fake_order, raising=False)
+
+    assert pt.execute_buy_candidates(
+        context, scores, date(2026, 7, 23)
+    ) == 1
+    assert [code for code, _amount, _price in orders] == [
+        first_code,
+        second_code,
+    ]
+    assert set(pt.g.__pending_orders) == {second_code}
+
+
+def test_later_buy_evaluation_does_not_promote_candidate_outside_frozen_selection(
+        monkeypatch):
+    first_code = "513100.SS"
+    lower_ranked_code = "159915.SZ"
+    first_score = make_buy_score(first_code)
+    first_score["buy_score"] = 80
+    lower_score = make_buy_score(lower_ranked_code)
+    lower_score["buy_score"] = 70
+    params = pt.get_default_params()
+    params["max_hold"] = 1
+    pt.g = make_g(params=params)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    orders = []
+
+    def fake_order(code, amount, limit_price=None):
+        orders.append((code, amount, limit_price))
+        raise RuntimeError("submit failed")
+
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(pt, "order", fake_order, raising=False)
+
+    scores = [first_score, lower_score]
+    assert pt.execute_buy_candidates(
+        context, scores, date(2026, 7, 23)
+    ) == 0
+
+    context.current_dt = datetime(2026, 7, 23, 10, 35, 0)
+    assert pt.execute_buy_candidates(
+        context, scores, date(2026, 7, 23),
+        diagnostic_source="10:35复牌/卖单补偿",
+    ) == 0
+    assert [code for code, _amount, _price in orders] == [first_code]
 
 
 @pytest.mark.parametrize(
@@ -5484,6 +5627,8 @@ def test_buy_submission_guard_survives_diagnostic_log_failure(
     monkeypatch.setattr(pt.log, "info", fail_selected_diagnostic)
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
     monkeypatch.setattr(
         pt,
         "order",
@@ -5629,6 +5774,8 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
         __last_snapshot={
             "513100.SS": {
                 "last_px": 2.0,
+                "up_px": 2.2,
+                "offer_grp": {5: [2.01, 10000, 3]},
                 "iopv": iopv,
                 "hsTimeStamp": "20260713093500123",
             }
@@ -5657,7 +5804,7 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
     assert pt.execute_buy_candidates(
         context, [make_buy_score()], date(2026, 7, 13)
     ) == 1
-    assert ("order", (("513100.SS", 3100), {"limit_price": 2.0})) in events
+    assert ("order", (("513100.SS", 3100), {"limit_price": 2.01})) in events
     assert any(
         kind == "log" and value.startswith("[买入委托]") and "buy-order-1" in value
         for kind, value in events
@@ -5691,6 +5838,8 @@ def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
     )
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
     monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(
+        pt, "get_buy_limit_price", lambda code, current: 2.0)
     monkeypatch.setattr(pt, "order", lambda *args, **kwargs: "buy-order-1", raising=False)
 
     assert pt.execute_buy_candidates(
@@ -7156,7 +7305,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.14" in notes
+    assert "20260727.1" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes

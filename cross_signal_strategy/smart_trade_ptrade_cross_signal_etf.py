@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.14"
+DEPLOYMENT_BUILD_ID = "20260727.1"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1343,7 +1343,7 @@ def initialize(context):
     g.execution_date = None
     g.deferred_scores = []
     g.deferred_signal_date = None
-    # 当日失败买单只影响执行补位，不参与信号、排名或持久风险状态。
+    # 当日失败买单只影响执行，不参与信号、排名或持久风险状态。
     g.failed_buy_codes = set()
     g.buy_backfill_pending = False
     # 普通 g 字段由 PTrade 框架自动持久化；盘前必须与券商持仓重新核验后才能使用。
@@ -1360,6 +1360,8 @@ def initialize(context):
     g.__deferred_buy_base_cash = None
     g.__deferred_sell_proceeds = 0.0
     g.__deferred_sold_codes = set()
+    # 首次实际买入评估后冻结原定名单，后续核对不得晋升后排候选。
+    g.__selected_buy_codes_today = None
     g.__order_state_unknown = False
     g.__data = None
     g.__is_live = is_live
@@ -1467,6 +1469,7 @@ def before_trading_start(context, data):
         g.deferred_signal_date = None
         g.failed_buy_codes = set()
         g.buy_backfill_pending = False
+        g.__selected_buy_codes_today = None
     if g.__is_live:
         if startup_recovery:
             if use_persisted_g:
@@ -3317,6 +3320,42 @@ def get_sell_limit_price(code, current):
     return price
 
 
+def get_buy_limit_price(code, current):
+    """实盘使用同一份新鲜快照的卖五价；回测保留当前价口径。"""
+    code = normalize_code(code)
+    current_price = _positive_float_or_none(current)
+    if current_price is None:
+        return None
+    if not getattr(g, "__is_live", False):
+        return round(current_price, 3)
+
+    snapshot = getattr(g, "__last_snapshot", {}).get(code)
+    if not isinstance(snapshot, dict):
+        return None
+    offer_group = snapshot.get("offer_grp")
+    if not isinstance(offer_group, dict):
+        return None
+    level_five = offer_group.get(5)
+    if level_five is None:
+        level_five = offer_group.get("5")
+    try:
+        sell_five = _positive_float_or_none(level_five[0])
+        sell_five_volume = _positive_float_or_none(level_five[1])
+    except (IndexError, KeyError, TypeError):
+        return None
+    if sell_five is None or sell_five_volume is None:
+        return None
+
+    upper_limit = _positive_float_or_none(snapshot.get("up_px"))
+    if upper_limit is not None and sell_five > upper_limit:
+        log.warning(
+            "[买入报价] %s卖五价越过涨停价，已拒绝使用 "
+            "卖五价=%.3f 涨停价=%.3f" % (
+                code, sell_five, upper_limit))
+        return None
+    return round(sell_five, 3)
+
+
 def execute_sell(code, context, reason):
     code = normalize_code(code)
     if g.sold_today.get(code) or code in getattr(g, "__pending_sells", {}):
@@ -3514,10 +3553,30 @@ def execute_buy_candidates(
         available = _available_cash(context)
     else:
         available = max(0.0, float(available_cash_override))
+    frozen_codes = getattr(g, "__selected_buy_codes_today", None)
+    if frozen_codes is None:
+        selected_candidates = candidates[:slots]
+        frozen_codes = tuple(item["code"] for item in selected_candidates)
+        g.__selected_buy_codes_today = frozen_codes
+        log.info("[买入名单] 当日原定候选=%s" % (
+            ",".join(frozen_codes) if frozen_codes else "无"))
+    else:
+        candidate_by_code = {
+            item["code"]: item
+            for item in candidates
+        }
+        selected_candidates = [
+            candidate_by_code[code]
+            for code in frozen_codes
+            if code in candidate_by_code
+        ][:slots]
+        if not selected_candidates:
+            log.info(
+                "[买入名单] 原定候选当前均不可提交，"
+                "后排候选不晋升")
+            return 0
     bought = 0
-    for score in candidates:
-        if bought >= slots:
-            break
+    for score in selected_candidates:
         code = score["code"]
         if code in getattr(g, "__pending_orders", {}):
             continue
@@ -3527,21 +3586,30 @@ def execute_buy_candidates(
         if price is None or price <= 0:
             log.warning("[买入跳过] %s当前价格不可用" % code)
             continue
+        limit_price = get_buy_limit_price(code, price)
+        if limit_price is None:
+            log.warning(
+                "[买入跳过] %s卖五报价不可用，"
+                "不使用最新价或涨停价替代" % code)
+            _mark_failed_buy_code(code, "卖五报价不可用")
+            continue
         target_value = min(calc_buy_target_value(_total_value(context), score, g.params), available)
-        shares = int(target_value / price / 100) * 100
+        shares = int(target_value / limit_price / 100) * 100
         if shares < 100:
             log.info("[买入跳过] %s可用资金不足 当前可用=%.0f" % (code, available))
             continue
         log_iopv_buy_observation(context, code, price)
         log.info(
             "[买入] %s 买入评分=%.0f 反转评分=%.0f 位置评分=%.0f "
-            "趋势评分=%.0f 量能评分=%.0f 目标金额=%.0f 股数=%d" % (
+            "趋势评分=%.0f 量能评分=%.0f 目标金额=%.0f 股数=%d "
+            "最新价=%.3f 卖五限价=%.3f" % (
                 code, score["buy_score"], score["reversal_score"],
                 score["location_score"], score["trend_score"],
-                score["volume_score"], target_value, shares))
+                score["volume_score"], target_value, shares,
+                price, limit_price))
         submitted_at = _order_lifecycle_now(context)
         try:
-            order_id = order(code, shares, limit_price=round(price, 3))
+            order_id = order(code, shares, limit_price=limit_price)
         except Exception as exc:
             log.error("[买入] %s委托提交失败: %s" % (code, exc))
             _mark_failed_buy_code(code, "委托提交异常")
@@ -3559,6 +3627,7 @@ def execute_buy_candidates(
             "buy_date": today,
             "order_id": str(order_id),
             "submitted_at": submitted_at,
+            "limit_price": limit_price,
         }
         if getattr(g, "__is_live", False):
             # 券商已经接单，成交回报缺失时仍需保留可主动核对的订单号。
@@ -3573,7 +3642,7 @@ def execute_buy_candidates(
             pass
         _log_order_lifecycle(
             context, "已提交", "策略下单", "买入", code, pending)
-        available -= shares * price
+        available -= shares * limit_price
         bought += 1
     return bought
 
@@ -3601,62 +3670,8 @@ def _mark_failed_buy_code(code, reason):
     failed_codes.add(code)
     g.failed_buy_codes = failed_codes
     log.warning(
-        "[买入补位] %s本交易日不再重试 原因=%s" % (code, reason))
-
-
-def _has_remaining_buy_backfill_candidate(context):
-    held = set(current_hold_codes(context))
-    if held & set(getattr(g, "unverified_positions", set())):
-        return False
-    pending_buys = set(getattr(g, "__pending_orders", {}).keys())
-    occupied_codes = held | pending_buys
-    if g.params["max_hold"] - len(occupied_codes) <= 0:
-        return False
-    sold_codes = set(
-        normalize_code(code)
-        for code, sold in getattr(g, "sold_today", {}).items()
-        if sold
-    )
-    exclusions = occupied_codes | sold_codes | _failed_buy_codes()
-    return bool(filter_buy_candidates(
-        list(getattr(g, "deferred_scores", [])),
-        exclusions,
-        g.params,
-    ))
-
-
-def _resume_failed_buy_backfill(context, source):
-    """用冻结候选队列补位；失败时仅保留给既有主动核对任务再试。"""
-    if not getattr(g, "buy_backfill_pending", False):
-        return 0
-    if getattr(g, "__pending_sells", {}):
-        log.info("[%s] 仍有待确认卖单，买入补位继续延后" % source)
-        return 0
-
-    today = _as_date(get_context_datetime(context))
-    if today is None or g.execution_date != today:
-        g.buy_backfill_pending = False
-        log.error("[%s] 买入补位日期不匹配，本次不提交委托" % source)
-        return 0
-
-    # 下单可能触发回调；先释放标记，保证每次恢复调用有界且可重入。
-    g.buy_backfill_pending = False
-    failed_codes = _failed_buy_codes()
-    log.info(
-        "[%s] 恢复失败买单后的顺位补位 已排除=%s" % (
-            source,
-            ",".join(sorted(failed_codes)) if failed_codes else "无",
-        ))
-    bought = execute_buy_candidates(
-        context,
-        list(getattr(g, "deferred_scores", [])),
-        today,
-        diagnostic_source=source,
-    )
-    if bought <= 0 and _has_remaining_buy_backfill_candidate(context):
-        g.buy_backfill_pending = True
-        log.info("[%s] 本次未提交补位买单，保留下一次主动核对" % source)
-    return bought
+        "[买入失败] %s本交易日不再重试，也不晋升后排候选 原因=%s" % (
+            code, reason))
 
 
 # 六、09:35 主流程与 10:35 补偿
@@ -4043,6 +4058,15 @@ def halt_recover(context):
         log.info("[卖出重试] 已重新评估=%s" % ",".join(sorted(retry_codes)))
     if recovered:
         log.info("[复牌补偿] 已复牌=%s，已执行延后卖出与买入评估" % ",".join(recovered))
+        frozen_codes = getattr(g, "__selected_buy_codes_today", None)
+        if frozen_codes is not None:
+            frozen_list = list(frozen_codes)
+            recovered_set = set(recovered)
+            for item in scores:
+                code = item["code"]
+                if code in recovered_set and code not in frozen_list:
+                    frozen_list.append(code)
+            g.__selected_buy_codes_today = tuple(frozen_list)
     elif previous:
         log.info("[复牌补偿] 受跟踪的ETF均未复牌")
     if scores:
@@ -4461,9 +4485,7 @@ def reconcile_recent_fills_and_resume_buys(
         return 0
     resumed_after_sell = _resume_deferred_buys_after_sells(
         context, diagnostic_source)
-    resumed_after_failure = _resume_failed_buy_backfill(
-        context, diagnostic_source)
-    return resumed_after_sell + resumed_after_failure
+    return resumed_after_sell
 
 
 def _delivery_trade_date(record):
@@ -5200,7 +5222,6 @@ def _apply_terminal_order_status(context, response, source):
         if not _response_matches_pending(response, buy_pending):
             log.warning("[%s] 已忽略无法匹配的买入委托 %s" % (source, code))
             return False, False
-        should_resume_failed_buy = False
         if filled > 0 and status in ("5", "6"):
             buy_pending["terminal_qty"] = filled
             if buy_pending.get("filled_qty", 0.0) >= filled:
@@ -5219,9 +5240,7 @@ def _apply_terminal_order_status(context, response, source):
                 source, code, status, error))
             if filled <= 0:
                 _mark_failed_buy_code(code, "零成交终态%s" % status)
-                g.buy_backfill_pending = True
-                should_resume_failed_buy = True
-        return True, should_resume_failed_buy
+        return True, False
 
     if sell_pending is not None:
         if not _response_matches_pending(response, sell_pending):
@@ -5395,17 +5414,12 @@ def on_order_response(context, order_list):
     if not getattr(g, "__is_live", False):
         return
     orders = order_list if isinstance(order_list, list) else [order_list]
-    should_resume_failed_buy = False
     for response in orders:
         if not isinstance(response, dict):
             log.warning("[委托回报格式异常] 已忽略类型=%s" % type(response).__name__)
             continue
-        _applied, resume_failed_buy = _apply_terminal_order_status(
+        _apply_terminal_order_status(
             context, response, "委托回报")
-        should_resume_failed_buy = (
-            should_resume_failed_buy or resume_failed_buy)
-    if should_resume_failed_buy:
-        _resume_failed_buy_backfill(context, "买入委托回报补位")
     _persist_live_state(context)
 
 
