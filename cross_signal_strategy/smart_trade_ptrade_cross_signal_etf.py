@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.9"
+DEPLOYMENT_BUILD_ID = "20260726.10"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -4796,36 +4796,70 @@ def _reconcile_pending_order_terminals(context, query_source):
                 _order_field(order_obj, "symbol", "")
                 or _order_field(order_obj, "stock_code", "")
             )
-            if returned_id != order_id or (returned_code and returned_code != code):
+            requested = abs(_safe_float(
+                pending.get("requested_qty", np.nan), np.nan))
+            returned_amount = _safe_float(
+                _order_field(order_obj, "amount", np.nan), np.nan)
+            amount_direction_matches = (
+                returned_amount > 0
+                if direction == "买入"
+                else returned_amount < 0
+            )
+            amount_matches = (
+                np.isfinite(requested)
+                and requested > 0
+                and np.isfinite(returned_amount)
+                and amount_direction_matches
+                and np.isclose(
+                    abs(returned_amount),
+                    requested,
+                    rtol=0.0,
+                    atol=1e-9,
+                )
+            )
+            if (
+                    returned_id != order_id
+                    or returned_code != code
+                    or not amount_matches):
                 log.warning(
                     "[委托终态核对] %s%s返回对象不匹配，已保留原状态 "
-                    "委托编号=%s 返回委托编号=%s 返回代码=%s" % (
+                    "委托编号=%s 返回委托编号=%s 返回代码=%s "
+                    "返回数量=%s 请求数量=%s" % (
                         code,
                         direction,
                         order_id,
                         returned_id or "未知",
                         returned_code or "未知",
+                        str(returned_amount),
+                        str(requested),
                     ))
                 continue
 
             status = str(_order_field(order_obj, "status", "") or "")
             if status not in ("5", "6", "9"):
                 continue
-            filled = _safe_float(
+            raw_filled = _safe_float(
                 _order_field(order_obj, "filled", np.nan), np.nan)
-            requested = abs(_safe_float(pending.get("requested_qty", 0)))
+            # PTrade Order.amount/filled are signed: sells are negative.
+            filled_direction_matches = (
+                raw_filled >= 0
+                if direction == "买入"
+                else raw_filled <= 0
+            )
+            filled = abs(raw_filled)
             if (
-                    not np.isfinite(filled)
-                    or filled < 0
-                    or requested <= 0
+                    not np.isfinite(raw_filled)
+                    or not filled_direction_matches
                     or filled > requested):
                 log.warning(
                     "[委托终态核对] %s%s终态数量无效，已保留原状态 "
-                    "委托编号=%s 状态=%s 已成交=%s 请求数量=%.0f" % (
+                    "委托编号=%s 状态=%s 原始成交=%s "
+                    "归一化成交=%s 请求数量=%.0f" % (
                         code,
                         direction,
                         order_id,
                         status,
+                        str(raw_filled),
                         str(filled),
                         requested,
                     ))

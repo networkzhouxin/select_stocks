@@ -136,6 +136,30 @@ def _early_failure(checks):
     }
 
 
+def _pytest_result_detail(output, returncode):
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    summary = lines[-1] if lines else "无测试输出"
+    if returncode == 0:
+        return summary
+    failed_nodes = []
+    for line in lines:
+        if not line.startswith("FAILED "):
+            continue
+        node_id = line[len("FAILED "):].split(" ", 1)[0]
+        if node_id and node_id not in failed_nodes:
+            failed_nodes.append(node_id)
+    if not failed_nodes:
+        return summary
+    suffix = ""
+    if len(failed_nodes) > 5:
+        suffix = " 等%d项" % len(failed_nodes)
+    return "失败用例=%s%s | %s" % (
+        ",".join(failed_nodes[:5]),
+        suffix,
+        summary,
+    )
+
+
 def verify_release(repo_root, run_tests=False):
     root = Path(repo_root).resolve()
     strategy_root = root / "cross_signal_strategy"
@@ -291,7 +315,7 @@ def verify_release(repo_root, run_tests=False):
             errors="replace",
         )
         output = (completed.stdout + completed.stderr).strip()
-        detail = output.splitlines()[-1] if output else "无测试输出"
+        detail = _pytest_result_detail(output, completed.returncode)
         if completed.returncode != 0 and (
             "PermissionError" in output or "WinError 5" in output
         ):

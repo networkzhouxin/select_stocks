@@ -125,7 +125,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.9"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.10"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3890,6 +3890,136 @@ def test_active_order_query_releases_zero_fill_rejected_sell_for_retry(
     }
 
 
+def test_active_order_query_normalizes_negative_partial_sell_fill(
+        monkeypatch):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36))
+    pt.g = make_g(
+        highest_since_buy={code: 1.20},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+        sold_today={code: True},
+        __pending_sells={
+            code: {
+                "requested_qty": 500,
+                "filled_qty": 200.0,
+                "reason": "atr_stop 0.900<=0.950",
+                "order_id": "sell-order-partial-cancel",
+                "submitted_at": datetime(2026, 7, 23, 9, 35),
+            }
+        },
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_order",
+        lambda order_id: [types.SimpleNamespace(
+            id=order_id,
+            symbol="513100.XSHG",
+            amount=-500,
+            filled=-200,
+            status="5",
+        )],
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    handled = pt._reconcile_pending_order_terminals(
+        context, "09:36主动核对")
+
+    assert handled == 1
+    assert pt.g.__pending_sells == {}
+    assert code not in pt.g.sold_today
+    assert code in pt.g.highest_since_buy
+    assert code in pt.g.entry_atr
+    assert code in pt.g.buy_date
+    assert pt.g.sell_retry_reasons == {
+        code: "atr_stop 0.900<=0.950",
+    }
+
+
+@pytest.mark.parametrize(
+    ("returned_symbol", "returned_amount"),
+    (
+        ("", -500),
+        ("513100.XSHG", 500),
+        ("513100.XSHG", -400),
+    ),
+)
+def test_active_order_query_rejects_unproved_order_identity(
+        monkeypatch, returned_symbol, returned_amount):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36))
+    pending = {
+        "requested_qty": 500,
+        "filled_qty": 0.0,
+        "reason": "atr_stop 0.900<=0.950",
+        "order_id": "sell-order-unproved",
+        "submitted_at": datetime(2026, 7, 23, 9, 35),
+    }
+    pt.g = make_g(
+        sold_today={code: True},
+        __pending_sells={code: dict(pending)},
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_order",
+        lambda order_id: [types.SimpleNamespace(
+            id=order_id,
+            symbol=returned_symbol,
+            amount=returned_amount,
+            filled=0,
+            status="9",
+        )],
+        raising=False,
+    )
+
+    handled = pt._reconcile_pending_order_terminals(
+        context, "09:36主动核对")
+
+    assert handled == 0
+    assert pt.g.__pending_sells == {code: pending}
+    assert pt.g.sold_today == {code: True}
+    assert pt.g.sell_retry_reasons == {}
+
+
+def test_active_order_query_rejects_positive_sell_filled_sign(monkeypatch):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36))
+    pending = {
+        "requested_qty": 500,
+        "filled_qty": 200.0,
+        "reason": "atr_stop 0.900<=0.950",
+        "order_id": "sell-order-wrong-filled-sign",
+        "submitted_at": datetime(2026, 7, 23, 9, 35),
+    }
+    pt.g = make_g(
+        sold_today={code: True},
+        __pending_sells={code: dict(pending)},
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_order",
+        lambda order_id: [types.SimpleNamespace(
+            id=order_id,
+            symbol="513100.XSHG",
+            amount=-500,
+            filled=200,
+            status="5",
+        )],
+        raising=False,
+    )
+
+    handled = pt._reconcile_pending_order_terminals(
+        context, "09:36主动核对")
+
+    assert handled == 0
+    assert pt.g.__pending_sells == {code: pending}
+    assert pt.g.sold_today == {code: True}
+
+
 def test_active_order_query_failure_keeps_pending_order(monkeypatch):
     code = "513100.SS"
     context = types.SimpleNamespace(
@@ -6272,7 +6402,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.9" in notes
+    assert "20260726.10" in notes
     assert "1506a0e834fe" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes

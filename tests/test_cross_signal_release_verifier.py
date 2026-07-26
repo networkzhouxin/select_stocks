@@ -23,7 +23,7 @@ def test_release_verifier_passes_static_formal_checks():
 
     assert report["status"] == "通过"
     assert report["strategy_version"] == "cross-v0.3.2"
-    assert report["deployment_build"] == "20260726.9"
+    assert report["deployment_build"] == "20260726.10"
     assert len(report["business_fingerprint"]) == 12
     assert all(item["status"] == "通过" for item in report["checks"])
 
@@ -62,6 +62,29 @@ def test_release_verifier_reports_temp_acl_as_environment_failure(monkeypatch):
 
     assert report["status"] == "失败"
     assert test_check["detail"].startswith("测试环境不可用:")
+
+
+def test_release_verifier_surfaces_failed_test_node_ids(monkeypatch):
+    verifier = load_verifier()
+    monkeypatch.setattr(
+        verifier.subprocess,
+        "run",
+        lambda command, **kwargs: types.SimpleNamespace(
+            returncode=1,
+            stdout=(
+                "FAILED tests/test_example.py::test_broken - AssertionError\n"
+                "1 failed, 2 passed\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    report = verifier.verify_release(ROOT, run_tests=True)
+    test_check = next(item for item in report["checks"] if item["key"] == "tests")
+
+    assert report["status"] == "失败"
+    assert "tests/test_example.py::test_broken" in test_check["detail"]
+    assert "1 failed, 2 passed" in test_check["detail"]
 
 
 def test_release_verifier_rejects_stale_formal_label(tmp_path):
