@@ -35,7 +35,7 @@ def test_formal_joinquant_source_has_no_stale_release_labels():
 def test_joinquant_exposes_stable_release_fingerprint():
     fingerprint = strategy.business_config_fingerprint()
 
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260727.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260727.5"
     assert len(fingerprint) == 12
     assert all(ch in "0123456789abcdef" for ch in fingerprint)
 

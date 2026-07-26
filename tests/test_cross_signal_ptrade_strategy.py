@@ -135,7 +135,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.4"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.5"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -275,6 +275,26 @@ def test_audit_log_proxy_isolates_platform_log_failure(monkeypatch):
     assert len(audit_records) == 1
     assert audit_records[0][0] == "audit.log"
     assert "[订单生命周期] 委托编号=order-1" in audit_records[0][1]
+
+
+def test_debug_detail_renders_printf_arguments_before_calling_platform_log(
+        monkeypatch):
+    platform_calls = []
+    platform_log = types.SimpleNamespace(
+        debug=lambda message, *args: platform_calls.append((message, args)),
+    )
+    monkeypatch.setattr(pt, "log", platform_log)
+
+    pt._log_debug_detail(
+        "[指标明细][候选#%d][%s] 买入评分=%d",
+        1,
+        "513500.SS",
+        68,
+    )
+
+    assert platform_calls == [
+        ("[指标明细][候选#1][513500.SS] 买入评分=68", ()),
+    ]
 
 
 def test_audit_log_proxy_reports_file_failure_once_without_interrupting_platform(
@@ -7829,7 +7849,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260727.4" in notes
+    assert "20260727.5" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes

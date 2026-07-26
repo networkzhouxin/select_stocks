@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.4"
+DEPLOYMENT_BUILD_ID = "20260727.5"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1197,7 +1197,7 @@ def _log_debug_detail(message, *args):
     if method is None:
         return
     try:
-        method(message, *args)
+        method(_render_log_message(message, args))
     except Exception:
         pass
 

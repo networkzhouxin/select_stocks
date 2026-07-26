@@ -1272,6 +1272,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 
 - Date: 2026-07-27.
 - Decision: Release deployment build `20260727.4` without changing the frozen `cross-v0.3.2` business configuration. PTrade live sell submission now requires the same fresh execution snapshot to prove `trade_status=TRADE`.
+
+## 2026-07-27：PTrade DEBUG 明细日志预渲染
+
+- Evidence: PTrade 模拟回测把 `_log_debug_detail()` 的 `%d`、`%s` 等占位符原样输出，说明平台日志器不保证兼容 Python logging 的延迟格式化参数。
+- Decision: `_log_debug_detail()` 在调用平台 `debug/info` 前统一复用 `_render_log_message()` 完成渲染，保证平台界面与审计文件中的完整指标明细一致可读。
+- Scope: 仅修复日志输出兼容性；策略版本、业务参数、ETF 池、信号、排序、风控和业务配置指纹均不变。部署构建更新为 `20260727.5`。
 - Root cause: `get_stock_status(code, "HALT") == False` proves only that the ETF is not suspended. It does not prove continuous matching, so call auction, midday break, post-trading, or end-trading states could previously reach `order_target`.
 - Execution contract: After obtaining a fresh current price, the sell path checks the cached snapshot produced by that quote request. Any state other than fresh `TRADE` fails closed before order submission, leaves `sold_today` and pending-order guards untouched, and preserves the original ATR or signal-sell reason for the existing bounded 10:35 re-evaluation. If the second attempt is still not orderable, the retry reason remains and logs do not falsely claim that the risk condition disappeared.
 - Test-first evidence: Five non-continuous or missing-status cases and one unavailable-price case first proved that the old path either submitted an order or lost the retry reason. A separate 10:35 test first proved the old log incorrectly reported that the risk had cleared. The implementation followed those red tests; the complete PTrade test file then passed (`259 passed`).
