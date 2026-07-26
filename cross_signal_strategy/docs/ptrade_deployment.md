@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.10 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.11 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -62,7 +62,10 @@ PTrade live mode registers four tasks, below the platform limit of five:
   A proven zero-fill failed buy releases the frozen backup queue; a proven
   zero-fill failed sell becomes retryable while its holding-risk state is
   retained. Missing, malformed, contradictory, or non-terminal results remain
-  pending and fail closed.
+  pending and fail closed. Status `8` is logged explicitly as "fully filled
+  but waiting for trade details"; it remains pending because the order object
+  alone cannot prove the exact fill price or fill value needed by the existing
+  trade-state machine.
   Confirmed buys restore their actual fill quantity, fill price, buy date, ATR,
   and highest-close baseline through the existing callback state machine.
   Once all pending sells are confirmed, the adapter immediately resumes the
@@ -100,7 +103,12 @@ PTrade live mode registers four tasks, below the platform limit of five:
 - `after_trading_end` (normally around `15:30`): use PTrade's official
   lifecycle callback to reconcile state, update the highest closing price
   since entry, print the position risk summary, and write the closing
-  bounded state journal. This is not an additional `run_daily` thread task.
+  bounded state journal. In live mode, the closing-risk update reads the
+  completed current-session daily bar through `get_history(..., include=True)`
+  and accepts it only when the bar date equals the context trade date and both
+  close and volume are positive finite values. A 15:00 realtime snapshot is
+  intentionally not reused at 15:30 because it fails the live five-minute
+  freshness contract. This is not an additional `run_daily` thread task.
 
 Initialization must prove the runtime mode with `is_trade()` before applying
 mode-specific settings. Live mode receives only live platform parameters;

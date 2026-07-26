@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.10"
+DEPLOYMENT_BUILD_ID = "20260726.11"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -2778,6 +2778,54 @@ def log_iopv_buy_observation(context, code, execution_price):
             pass
 
 
+def get_completed_session_close(code, context):
+    """读取盘后已完成的当日日线；不把陈旧实时快照当作收盘价。"""
+    code = normalize_code(code)
+    session_date = _as_date(get_context_datetime(context))
+    if session_date is None:
+        log.warning("[盘后收盘价] %s无法证明当前交易日" % code)
+        return None
+
+    series = {}
+    try:
+        for field in ("close", "volume"):
+            raw = get_history(
+                1,
+                "1d",
+                field,
+                [code],
+                fq="pre",
+                include=True,
+            )
+            values = _extract_history_field_series(raw, code, field)
+            if values is None:
+                raise ValueError("%s字段返回结构不可识别" % field)
+            series[field] = values
+        frame = pd.DataFrame(series)
+        frame = _history_frame_through_end_date(frame, session_date)
+    except Exception as exc:
+        log.warning("[盘后收盘价] %s日线数据不可用: %s" % (code, exc))
+        return None
+
+    if len(frame) == 0:
+        log.warning("[盘后收盘价] %s没有可验证的当日日线" % code)
+        return None
+    bar_date = _as_date(frame.index[-1])
+    if bar_date != session_date:
+        log.warning(
+            "[盘后收盘价] %s最新日线不是当前交易日: 最新=%s 当前=%s" % (
+                code, bar_date, session_date))
+        return None
+    close = _safe_float(frame.iloc[-1]["close"], np.nan)
+    volume = _safe_float(frame.iloc[-1]["volume"], np.nan)
+    if not _is_positive_finite(close) or not _is_positive_finite(volume):
+        log.warning(
+            "[盘后收盘价] %s当日日线无效: 收盘价=%s 成交量=%s" % (
+                code, close, volume))
+        return None
+    return float(close)
+
+
 def get_current_price(code):
     code = normalize_code(code)
     if getattr(g, "__is_live", False):
@@ -3449,7 +3497,11 @@ def after_close(context):
         if code in g.unverified_positions:
             log.error("  %s风险状态未验证，收盘价和ATR状态未更新" % code)
             continue
-        price = get_current_price(code)
+        price = (
+            get_completed_session_close(code, context)
+            if getattr(g, "__is_live", False)
+            else get_current_price(code)
+        )
         pos = _get_position(context, code)
         if price is None or price <= 0:
             continue
@@ -4836,6 +4888,13 @@ def _reconcile_pending_order_terminals(context, query_source):
                 continue
 
             status = str(_order_field(order_obj, "status", "") or "")
+            if status == "8":
+                log.warning(
+                    "[委托终态核对] %s%s状态=8（全部成交），"
+                    "但成交明细尚未返回；保留待确认委托，等待成交明细 "
+                    "委托编号=%s 来源=%s" % (
+                        code, direction, order_id, query_source))
+                continue
             if status not in ("5", "6", "9"):
                 continue
             raw_filled = _safe_float(

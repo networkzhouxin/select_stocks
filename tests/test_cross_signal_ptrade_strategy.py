@@ -125,7 +125,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.10"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.11"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2035,6 +2035,65 @@ def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
 
     assert pt.get_current_price("513100.SS") == pytest.approx(2.0)
     assert pt.g.__last_snapshot["513100.SS"]["last_px"] == pytest.approx(2.0)
+
+
+def test_after_close_uses_completed_daily_bar_when_realtime_snapshot_is_stale(
+        monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 7, 24, 15, 30, 0)
+
+    code = "513100.SS"
+    pt.g = make_g(
+        highest_since_buy={code: 2.0},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 24, 15, 30),
+        portfolio=types.SimpleNamespace(
+            portfolio_value=20000.0,
+            cash=10000.0,
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            },
+        ),
+    )
+    history_calls = []
+
+    def get_history(count, frequency, field, security_list, fq, include):
+        history_calls.append((count, frequency, field, security_list, fq, include))
+        value = 2.4 if field == "close" else 100000.0
+        return pt.pd.DataFrame(
+            {code: [value]},
+            index=pt.pd.DatetimeIndex(["2026-07-24"]),
+        )
+
+    monkeypatch.setattr(pt, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        pt,
+        "get_snapshot",
+        lambda requested: {
+            requested: {
+                "last_px": 2.4,
+                "hsTimeStamp": "20260724150000",
+            }
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "get_history", get_history, raising=False)
+
+    pt.after_close(context)
+
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert history_calls == [
+        (1, "1d", "close", [code], "pre", True),
+        (1, "1d", "volume", [code], "pre", True),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -4018,6 +4077,50 @@ def test_active_order_query_rejects_positive_sell_filled_sign(monkeypatch):
     assert handled == 0
     assert pt.g.__pending_sells == {code: pending}
     assert pt.g.sold_today == {code: True}
+
+
+def test_active_order_query_logs_full_fill_waiting_for_trade_details(
+        monkeypatch):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36))
+    pending = {
+        "requested_qty": 500,
+        "filled_qty": 0.0,
+        "reason": "atr_stop 0.900<=0.950",
+        "order_id": "sell-order-full-fill",
+        "submitted_at": datetime(2026, 7, 23, 9, 35),
+    }
+    warnings = []
+    pt.g = make_g(
+        sold_today={code: True},
+        __pending_sells={code: dict(pending)},
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_order",
+        lambda order_id: [types.SimpleNamespace(
+            id=order_id,
+            symbol="513100.XSHG",
+            amount=-500,
+            filled=-500,
+            status="8",
+        )],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt.log, "warning", lambda message: warnings.append(message))
+
+    handled = pt._reconcile_pending_order_terminals(
+        context, "09:36主动核对")
+
+    assert handled == 0
+    assert pt.g.__pending_sells == {code: pending}
+    assert pt.g.sold_today == {code: True}
+    assert any(
+        "状态=8" in message and "等待成交明细" in message
+        for message in warnings
+    )
 
 
 def test_active_order_query_failure_keeps_pending_order(monkeypatch):
@@ -6402,7 +6505,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.10" in notes
+    assert "20260726.11" in notes
     assert "1506a0e834fe" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
