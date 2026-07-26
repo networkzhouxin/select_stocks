@@ -20,8 +20,8 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.11"
-LIVE_STATE_SCHEMA_VERSION = 3
+DEPLOYMENT_BUILD_ID = "20260726.12"
+LIVE_STATE_SCHEMA_VERSION = 4
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
 LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
@@ -35,7 +35,7 @@ IOPV_OBSERVE_CODES = frozenset((
     "513880.SS",
     "513050.SS",
 ))
-LIVE_STATE_FILENAME = "cross_signal_v032_live_state_v3_%s.journal"
+LIVE_STATE_FILENAME = "cross_signal_v032_live_state_v4_%s.journal"
 DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
     "highest_since_buy",
@@ -1427,6 +1427,13 @@ def before_trading_start(context, data):
                 _restore_live_state_risk_fallback(context, journal_state)
                 recover_live_state(context)
         g.__startup_recovery_done = True
+        prev_date = get_prev_trade_date(context)
+        if prev_date is None:
+            for code in current_hold_codes(context):
+                g.unverified_positions.add(code)
+            log.error("[盘前收盘确认] 无法证明T-1交易日，持仓风险状态已阻止使用")
+        else:
+            _confirm_previous_session_highs(context, prev_date)
         _log_live_recovery_summary(context)
     else:
         g.__pending_orders = {}
@@ -2778,8 +2785,8 @@ def log_iopv_buy_observation(context, code, execution_price):
             pass
 
 
-def get_completed_session_close(code, context):
-    """读取盘后已完成的当日日线；不把陈旧实时快照当作收盘价。"""
+def get_after_close_observed_price(code, context):
+    """读取盘后当日日线观察值；该值不能直接写入权威止损基线。"""
     code = normalize_code(code)
     session_date = _as_date(get_context_datetime(context))
     if session_date is None:
@@ -2824,6 +2831,171 @@ def get_completed_session_close(code, context):
                 code, close, volume))
         return None
     return float(close)
+
+
+def _confirmed_session_bar_from_frame(frame, code, session_date):
+    """从平台返回值中提取日期完全匹配的已结束交易日行情。"""
+    if frame is None or len(frame) == 0:
+        return None
+    frame = pd.DataFrame(frame).copy()
+    code = normalize_code(code)
+    if "code" in frame.columns:
+        frame = frame[
+            frame["code"].map(normalize_code) == code
+        ]
+    if (
+        len(frame) == 0 or
+        "close" not in frame.columns or
+        "volume" not in frame.columns
+    ):
+        return None
+    try:
+        frame = _history_frame_through_end_date(frame, session_date)
+    except Exception:
+        return None
+    exact = frame[
+        [_as_date(value) == session_date for value in frame.index]
+    ]
+    if len(exact) == 0:
+        return None
+    close = _safe_float(exact.iloc[-1]["close"], np.nan)
+    volume = _safe_float(exact.iloc[-1]["volume"], np.nan)
+    if (
+        not _is_positive_finite(close) or
+        not np.isfinite(volume) or
+        volume < 0
+    ):
+        return None
+    return {
+        "date": session_date,
+        "close": float(close),
+        "volume": float(volume),
+    }
+
+
+def get_confirmed_session_bar(code, session_date):
+    """次日盘前读取精确 T-1 日线；仅该口径可更新最高收盘价。"""
+    code = normalize_code(code)
+    session_date = _as_date(session_date)
+    if session_date is None:
+        return None
+    date_text = session_date.strftime("%Y%m%d")
+    diagnostics = []
+    try:
+        frame = get_price(
+            code,
+            start_date=date_text,
+            end_date=date_text,
+            frequency="1d",
+            fields=["close", "volume"],
+            fq="pre",
+        )
+        bar = _confirmed_session_bar_from_frame(
+            frame, code, session_date)
+        if bar is not None:
+            return bar
+        diagnostics.append("get_price未返回精确日期")
+    except Exception as exc:
+        diagnostics.append("get_price失败:%s" % exc)
+
+    try:
+        series = {}
+        for field in ("close", "volume"):
+            raw = get_history(
+                1,
+                "1d",
+                field,
+                [code],
+                fq="pre",
+                include=False,
+            )
+            values = _extract_history_field_series(raw, code, field)
+            if values is None:
+                raise ValueError("%s字段返回结构不可识别" % field)
+            series[field] = values
+        bar = _confirmed_session_bar_from_frame(
+            pd.DataFrame(series), code, session_date)
+        if bar is not None:
+            return bar
+        diagnostics.append("get_history未返回精确日期")
+    except Exception as exc:
+        diagnostics.append("get_history失败:%s" % exc)
+
+    log.error(
+        "[盘前收盘确认] %s无法取得精确T-1日线 日期=%s 诊断=%s" % (
+            code,
+            session_date.isoformat(),
+            " | ".join(diagnostics),
+        )
+    )
+    return None
+
+
+def _confirm_previous_session_highs(context, session_date):
+    """用已结束的 T-1 日线更新持仓最高收盘价；失败时关闭自动交易。"""
+    session_date = _as_date(session_date)
+    held = current_hold_codes(context)
+    if session_date is None:
+        for code in held:
+            g.unverified_positions.add(code)
+        return False
+
+    failures = []
+    source_map = getattr(g, "__position_recovery_source", None)
+    if not isinstance(source_map, dict):
+        source_map = {}
+        g.__position_recovery_source = source_map
+
+    for code in held:
+        code = normalize_code(code)
+        buy_date = _as_date(g.buy_date.get(code))
+        previous_high = g.highest_since_buy.get(code)
+        if (
+            code in g.unverified_positions or
+            buy_date is None or
+            not _is_positive_finite(previous_high)
+        ):
+            failures.append(code)
+            g.unverified_positions.add(code)
+            source_map[code] = "unverified"
+            log.error(
+                "[盘前收盘确认] %s原持仓风险状态不完整，自动交易已阻止" % code)
+            continue
+        if buy_date > session_date:
+            log.info(
+                "[盘前收盘确认] %s买入日期=%s晚于T-1=%s，保留成交基线" % (
+                    code, buy_date.isoformat(), session_date.isoformat()))
+            continue
+
+        bar = get_confirmed_session_bar(code, session_date)
+        if bar is None:
+            failures.append(code)
+            g.unverified_positions.add(code)
+            source_map[code] = "unverified"
+            log.error(
+                "[盘前收盘确认] %s未能证明%s收盘价，自动卖出与新增买入已阻止" % (
+                    code, session_date.isoformat()))
+            continue
+
+        if bar["volume"] == 0:
+            log.info(
+                "[盘前收盘确认] %s 日期=%s 成交量=0，最高收盘价保持=%.6f" % (
+                    code, session_date.isoformat(), previous_high))
+            continue
+
+        confirmed_high = max(float(previous_high), bar["close"])
+        g.highest_since_buy[code] = confirmed_high
+        log.info(
+            "[盘前收盘确认] %s 日期=%s 收盘价=%.6f "
+            "原最高收盘价=%.6f 已确认最高收盘价=%.6f" % (
+                code,
+                session_date.isoformat(),
+                bar["close"],
+                previous_high,
+                confirmed_high,
+            )
+        )
+    return not failures
 
 
 def get_current_price(code):
@@ -3497,16 +3669,17 @@ def after_close(context):
         if code in g.unverified_positions:
             log.error("  %s风险状态未验证，收盘价和ATR状态未更新" % code)
             continue
+        is_live = getattr(g, "__is_live", False)
         price = (
-            get_completed_session_close(code, context)
-            if getattr(g, "__is_live", False)
-            else get_current_price(code)
+            get_after_close_observed_price(code, context)
+            if is_live else get_current_price(code)
         )
         pos = _get_position(context, code)
         if price is None or price <= 0:
             continue
-        prev_high = g.highest_since_buy.get(code, price)
-        g.highest_since_buy[code] = max(prev_high, price)
+        if not is_live:
+            prev_high = g.highest_since_buy.get(code, price)
+            g.highest_since_buy[code] = max(prev_high, price)
         if code not in g.entry_atr:
             score = g.last_scores.get(code)
             if score is not None and score.get("atr") and not pd.isna(score.get("atr")):
@@ -3517,10 +3690,26 @@ def after_close(context):
             if not pd.isna(atr_val) else np.nan
         pnl = (price - cost) / cost if cost > 0 else 0
         score = g.last_scores.get(code, {})
-        log.info("  %s 成本价=%.3f 当前价=%.3f 持仓最高收盘价=%.3f "
-                 "收益率=%.1f%% 买入评分=%.0f 卖出评分=%.0f 止损价=%.3f" % (
-            code, cost, price, g.highest_since_buy[code], pnl * 100,
-            score.get("buy_score", 0), score.get("sell_score", 0), stop_price))
+        if is_live:
+            log.info(
+                "[盘后观察] %s 成本价=%.3f 盘后观察价=%.3f "
+                "已确认最高收盘价=%.3f 收益率=%.1f%% "
+                "买入评分=%.0f 卖出评分=%.0f 止损价=%.3f；"
+                "观察价不写入风险状态，次日盘前确认" % (
+                    code, cost, price, g.highest_since_buy[code], pnl * 100,
+                    score.get("buy_score", 0), score.get("sell_score", 0),
+                    stop_price,
+                )
+            )
+        else:
+            log.info(
+                "  %s 成本价=%.3f 当前价=%.3f 持仓最高收盘价=%.3f "
+                "收益率=%.1f%% 买入评分=%.0f 卖出评分=%.0f 止损价=%.3f" % (
+                    code, cost, price, g.highest_since_buy[code], pnl * 100,
+                    score.get("buy_score", 0), score.get("sell_score", 0),
+                    stop_price,
+                )
+            )
     log.info("=" * 60)
 
 

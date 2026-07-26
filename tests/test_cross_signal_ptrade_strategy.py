@@ -125,8 +125,8 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.11"
-    assert pt.LIVE_STATE_SCHEMA_VERSION == 3
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.12"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 4
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -524,6 +524,64 @@ def test_before_trading_start_relocks_frozen_business_config_after_restore(monke
     assert pt.g.etf_pool == pt.get_default_etf_pool()
 
 
+def test_before_trading_confirms_previous_session_after_state_recovery(
+        monkeypatch):
+    today = date(2026, 7, 27)
+    previous_session = date(2026, 7, 24)
+    pt.g = make_g(
+        execution_date=today,
+        __startup_recovery_done=True,
+        __state_path="test-state.journal",
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 27, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        pt, "_lock_frozen_business_config",
+        lambda: calls.append("lock"))
+    monkeypatch.setattr(
+        pt, "_reconcile_open_orders",
+        lambda context: calls.append("orders") or True)
+    monkeypatch.setattr(
+        pt,
+        "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver:
+            calls.append(("recover", allow_deliver)),
+    )
+    monkeypatch.setattr(
+        pt, "get_prev_trade_date",
+        lambda context: calls.append("previous-session") or previous_session)
+    monkeypatch.setattr(
+        pt,
+        "_confirm_previous_session_highs",
+        lambda context, session_date:
+            calls.append(("confirm-highs", session_date)) or True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt, "_log_live_recovery_summary",
+        lambda context: calls.append("summary"))
+    monkeypatch.setattr(
+        pt, "_persist_live_state",
+        lambda context: calls.append("persist") or True)
+
+    pt.before_trading_start(context, data=None)
+
+    assert calls == [
+        "lock",
+        "orders",
+        ("recover", True),
+        "previous-session",
+        ("confirm-highs", previous_session),
+        "summary",
+        "persist",
+    ]
+
+
 def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path):
     state_path = tmp_path / "cross-signal-state.pkl"
     today = date(2026, 7, 13)
@@ -668,6 +726,32 @@ def test_missing_persisted_g_state_records_explicit_not_provided_diagnostic():
     assert pt.g.__persisted_g_generation is None
 
 
+def test_previous_schema_persisted_g_is_rejected_for_broker_rebuild():
+    code = "513100.SS"
+    position = types.SimpleNamespace(
+        amount=500, cost_basis=1.0, last_sale_price=1.1)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 9.9},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+        live_state_schema_version=3,
+        live_state_business_fingerprint=pt.business_config_fingerprint(),
+        live_state_generation=7,
+        live_state_broker_positions={
+            code: {"amount": 500.0, "cost": 1.0},
+        },
+    )
+
+    assert pt._load_persisted_g_state(context) is None
+    assert pt.g.__persisted_g_status == "rejected"
+    assert pt.g.__persisted_g_reason == "state-schema-mismatch"
+    assert pt.g.__persisted_g_generation == 7
+
+
 @pytest.mark.parametrize(
     ("current_amount", "current_cost"),
     [(600, 1.0), (500, 1.01)],
@@ -748,7 +832,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
 
     assert len({simulation_path, other_account_path, live_path}) == 3
     assert Path(simulation_path).name.startswith(
-        "cross_signal_v032_live_state_v3_")
+        "cross_signal_v032_live_state_v4_")
     assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
@@ -902,6 +986,10 @@ def test_before_trading_prefers_valid_persisted_g_over_broker_history(
         return original_recover(context, *args, **kwargs)
 
     monkeypatch.setattr(pt, "recover_live_state", validate)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: date(2026, 7, 10))
+    monkeypatch.setattr(
+        pt, "_confirm_previous_session_highs", lambda context, session_date: True
+    )
     monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
     monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
 
@@ -962,6 +1050,10 @@ def test_before_trading_uses_newer_complete_matching_journal_without_broker_hist
             AssertionError("complete broker-bound journal must not query history")
         ),
     )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: date(2026, 7, 10))
+    monkeypatch.setattr(
+        pt, "_confirm_previous_session_highs", lambda context, session_date: True
+    )
     monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
     monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
 
@@ -1015,6 +1107,10 @@ def test_before_trading_uses_complete_matching_journal_when_framework_g_missing(
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("complete broker-bound journal must not query history")
         ),
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: date(2026, 7, 10))
+    monkeypatch.setattr(
+        pt, "_confirm_previous_session_highs", lambda context, session_date: True
     )
     monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
     monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
@@ -1246,6 +1342,10 @@ def test_before_trading_uses_matching_journal_when_delivery_cannot_prove_old_buy
 
     monkeypatch.setattr(
         pt, "_recover_live_state_with_available_sources", broker_recovery
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: date(2026, 7, 17))
+    monkeypatch.setattr(
+        pt, "_confirm_previous_session_highs", lambda context, session_date: True
     )
     monkeypatch.setattr(pt, "_log_live_recovery_summary", lambda context: None)
 
@@ -2037,7 +2137,7 @@ def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
     assert pt.g.__last_snapshot["513100.SS"]["last_px"] == pytest.approx(2.0)
 
 
-def test_after_close_uses_completed_daily_bar_when_realtime_snapshot_is_stale(
+def test_live_after_close_observes_daily_bar_without_mutating_confirmed_high(
         monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
@@ -2064,6 +2164,7 @@ def test_after_close_uses_completed_daily_bar_when_realtime_snapshot_is_stale(
         ),
     )
     history_calls = []
+    infos = []
 
     def get_history(count, frequency, field, security_list, fq, include):
         history_calls.append((count, frequency, field, security_list, fq, include))
@@ -2074,6 +2175,16 @@ def test_after_close_uses_completed_daily_bar_when_realtime_snapshot_is_stale(
         )
 
     monkeypatch.setattr(pt, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: infos.append(
+                message % args if args else str(message)),
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: None,
+        ),
+    )
     monkeypatch.setattr(
         pt,
         "get_snapshot",
@@ -2089,11 +2200,147 @@ def test_after_close_uses_completed_daily_bar_when_realtime_snapshot_is_stale(
 
     pt.after_close(context)
 
-    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.0)
     assert history_calls == [
         (1, "1d", "close", [code], "pre", True),
         (1, "1d", "volume", [code], "pre", True),
     ]
+    assert any(
+        "[盘后观察]" in message and
+        "次日盘前确认" in message and
+        "已确认最高收盘价=2.000" in message
+        for message in infos
+    )
+
+
+def test_confirm_previous_session_highs_uses_exact_t_minus_one_close(
+        monkeypatch):
+    code = "513100.SS"
+    session_date = date(2026, 7, 24)
+    pt.g = make_g(
+        highest_since_buy={code: 2.0},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    calls = []
+
+    def get_price(
+            requested, start_date, end_date, frequency, fields, fq):
+        calls.append(
+            (requested, start_date, end_date, frequency, fields, fq))
+        return pt.pd.DataFrame(
+            {"close": [2.4], "volume": [100000.0]},
+            index=pt.pd.DatetimeIndex(["2026-07-24"]),
+        )
+
+    monkeypatch.setattr(pt, "get_price", get_price, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "get_history",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("exact get_price bar should avoid fallback")),
+        raising=False,
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is True
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert pt.g.unverified_positions == set()
+    assert calls == [(
+        code,
+        "20260724",
+        "20260724",
+        "1d",
+        ["close", "volume"],
+        "pre",
+    )]
+
+
+def test_confirm_previous_session_highs_keeps_high_on_suspended_day(
+        monkeypatch):
+    code = "513100.SS"
+    session_date = date(2026, 7, 24)
+    pt.g = make_g(
+        highest_since_buy={code: 2.2},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_price",
+        lambda *args, **kwargs: pt.pd.DataFrame(
+            {"close": [2.1], "volume": [0.0]},
+            index=pt.pd.DatetimeIndex(["2026-07-24"]),
+        ),
+        raising=False,
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is True
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.2)
+    assert pt.g.unverified_positions == set()
+
+
+def test_confirm_previous_session_highs_fails_closed_without_exact_bar(
+        monkeypatch):
+    code = "513100.SS"
+    session_date = date(2026, 7, 24)
+    pt.g = make_g(
+        highest_since_buy={code: 2.0},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    stale = pt.pd.DataFrame(
+        {"close": [2.4], "volume": [100000.0]},
+        index=pt.pd.DatetimeIndex(["2026-07-23"]),
+    )
+    monkeypatch.setattr(
+        pt, "get_price", lambda *args, **kwargs: stale, raising=False)
+    monkeypatch.setattr(
+        pt,
+        "get_history",
+        lambda count, frequency, field, security_list, fq, include:
+            pt.pd.DataFrame(
+                {code: [2.4 if field == "close" else 100000.0]},
+                index=pt.pd.DatetimeIndex(["2026-07-23"]),
+            ),
+        raising=False,
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is False
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.0)
+    assert pt.g.unverified_positions == {code}
 
 
 @pytest.mark.parametrize(
@@ -6505,8 +6752,13 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.11" in notes
+    assert "20260726.12" in notes
     assert "1506a0e834fe" in notes
+    assert "状态结构=4" in notes
+    assert "observation only" in notes
+    assert "exact finalized T-1 daily bar" in notes
+    assert "volume is zero" in notes
+    assert "schema 4" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
     assert "`INFO`" in notes
