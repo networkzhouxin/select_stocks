@@ -69,6 +69,7 @@ EXECUTION_CONTRACT_TESTS = {
     "test_cross_signal_ptrade_strategy.py": {
         "test_buy_execution_waits_for_submitted_sells_to_finish",
         "test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio",
+        "test_live_sell_blocks_noncontinuous_status_and_keeps_bounded_retry",
     },
 }
 

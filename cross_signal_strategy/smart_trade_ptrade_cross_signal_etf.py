@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.3"
+DEPLOYMENT_BUILD_ID = "20260727.4"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3391,6 +3391,12 @@ def get_buy_limit_price(code, current):
     return round(sell_five, 3)
 
 
+def _remember_live_sell_retry(code, reason):
+    """保留一次 10:35 卖出重评依据，不提前改变持仓或委托状态。"""
+    if getattr(g, "__is_live", False):
+        g.sell_retry_reasons[normalize_code(code)] = reason
+
+
 def execute_sell(code, context, reason):
     code = normalize_code(code)
     if g.sold_today.get(code) or code in getattr(g, "__pending_sells", {}):
@@ -3401,8 +3407,28 @@ def execute_sell(code, context, reason):
         return False
     price = get_current_price(code)
     if price is None or price <= 0:
+        _remember_live_sell_retry(code, reason)
         log.warning("[卖出] %s价格不可用，已跳过委托" % code)
         return False
+    if getattr(g, "__is_live", False):
+        snapshot = getattr(g, "__last_snapshot", {}).get(code)
+        orderability = _fresh_snapshot_trade_status(snapshot)
+        if orderability != "tradable":
+            _remember_live_sell_retry(code, reason)
+            raw_status = (
+                snapshot.get("trade_status")
+                if isinstance(snapshot, dict)
+                else None
+            )
+            log.warning(
+                "[卖出闭锁] %s缺少新鲜连续竞价状态，已跳过委托并保留10:35重评 "
+                "快照状态=%r 判定=%s" % (
+                    code,
+                    raw_status,
+                    orderability,
+                )
+            )
+            return False
     limit_price = get_sell_limit_price(code, price)
     log.info("[卖出] %s 原因=%s 数量=%s 限价=%.3f" % (
         code, _format_reason_for_log(reason), amount, limit_price))
@@ -4099,13 +4125,19 @@ def halt_recover(context):
                 _evaluate_signal_sell(
                     context, code, score, today, signal_hold_days)
         for code in sorted(retry_codes - atr_stopped):
-            if code not in getattr(g, "__pending_sells", {}):
+            if (
+                code not in getattr(g, "__pending_sells", {}) and
+                code not in getattr(g, "sell_retry_reasons", {})
+            ):
                 log.info("[卖出重试] %s风险条件已解除，本次不再卖出" % code)
         if retry_codes:
             log.info("[卖出重试] 已重新评估=%s" % ",".join(sorted(retry_codes)))
     elif retry_codes:
         for code in sorted(retry_codes - atr_stopped):
-            if code not in getattr(g, "__pending_sells", {}):
+            if (
+                code not in getattr(g, "__pending_sells", {}) and
+                code not in getattr(g, "sell_retry_reasons", {})
+            ):
                 log.info("[卖出重试] %s风险条件已解除，本次不再卖出" % code)
         log.info("[卖出重试] 已重新评估=%s" % ",".join(sorted(retry_codes)))
     if recovered:

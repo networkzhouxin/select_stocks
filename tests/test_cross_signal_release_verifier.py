@@ -23,7 +23,7 @@ def test_release_verifier_passes_static_formal_checks():
 
     assert report["status"] == "通过"
     assert report["strategy_version"] == "cross-v0.3.2"
-    assert report["deployment_build"] == "20260727.3"
+    assert report["deployment_build"] == "20260727.4"
     assert len(report["business_fingerprint"]) == 12
     assert all(item["status"] == "通过" for item in report["checks"])
 
@@ -40,7 +40,7 @@ def test_release_verifier_requires_high_risk_execution_contract_tests():
 
     assert contract_check["status"] == "通过"
     assert contract_check["label"] == "跨平台高风险执行合同"
-    assert "5" in contract_check["detail"]
+    assert "6" in contract_check["detail"]
 
 
 def test_release_verifier_disables_pytest_cache_for_full_gate(monkeypatch):

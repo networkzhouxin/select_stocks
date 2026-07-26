@@ -87,6 +87,14 @@ def make_g(**overrides):
     return types.SimpleNamespace(**values)
 
 
+def make_fresh_live_snapshot(trade_status="TRADE", last_px=1.1):
+    return {
+        "trade_status": trade_status,
+        "last_px": last_px,
+        "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+    }
+
+
 def make_buy_score(code="513100.SS"):
     return {
         "code": code,
@@ -127,7 +135,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.3"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.4"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -2098,6 +2106,12 @@ def test_joinquant_and_ptrade_sell_then_replacement_flow_contract(
         highest_since_buy={pt_sold: 10.0},
         entry_atr={pt_sold: 0.5},
         buy_date={pt_sold: buy_date},
+        __last_snapshot={
+            pt_sold: make_fresh_live_snapshot(
+                "TRADE",
+                last_px=sold_price,
+            )
+        },
     )
     monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
     monkeypatch.setattr(pt, "is_paused", lambda code: False)
@@ -3204,6 +3218,7 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
         entry_atr={"513100.SS": 0.05},
         buy_date={"513100.SS": date(2026, 6, 1)},
         last_scores={"513100.SS": {"buy_score": 60}},
+        __last_snapshot={"513100.SS": make_fresh_live_snapshot()},
     )
     orders = []
     messages = []
@@ -3257,6 +3272,7 @@ def test_sell_submission_guard_survives_diagnostic_log_failure(
         highest_since_buy={"513100.SS": 1.2},
         entry_atr={"513100.SS": 0.05},
         buy_date={"513100.SS": date(2026, 6, 1)},
+        __last_snapshot={"513100.SS": make_fresh_live_snapshot()},
     )
 
     def fail_selected_diagnostic(message, *args):
@@ -3284,7 +3300,10 @@ def test_sell_submission_failure_does_not_create_guard(monkeypatch):
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(positions={"513100.SS": position})
     )
-    pt.g = make_g(highest_since_buy={"513100.SS": 1.2})
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 1.2},
+        __last_snapshot={"513100.SS": make_fresh_live_snapshot()},
+    )
     monkeypatch.setattr(pt, "get_current_price", lambda code: 1.1)
     monkeypatch.setattr(pt, "get_sell_limit_price", lambda code, price: 1.0)
     monkeypatch.setattr(pt, "order_target", lambda *args, **kwargs: None, raising=False)
@@ -4378,6 +4397,103 @@ def test_live_pause_check_treats_noncontinuous_snapshot_status_as_unknown(
     )
 
     assert pt.get_trade_status_state("513100.SS") == "unknown"
+
+
+def test_live_sell_requires_fresh_continuous_trading_snapshot(monkeypatch):
+    code = "513100.SS"
+    position = types.SimpleNamespace(
+        amount=500,
+        cost_basis=1.0,
+        last_sale_price=1.1,
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 27, 9, 35),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        __last_snapshot={code: make_fresh_live_snapshot("TRADE")},
+    )
+    orders = []
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 1.1)
+    monkeypatch.setattr(pt, "get_sell_limit_price", lambda candidate, price: 1.0)
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda candidate, amount, limit_price=None: (
+            orders.append((candidate, amount, limit_price)) or "sell-order-1"
+        ),
+        raising=False,
+    )
+
+    assert pt.execute_sell(code, context, "atr_stop 1.100<=1.150") is True
+    assert orders == [(code, 0, 1.0)]
+    assert pt.g.sell_retry_reasons == {}
+
+
+@pytest.mark.parametrize(
+    "trade_status",
+    ["OCALL", "BREAK", "POSTR", "ENDTR", ""],
+)
+def test_live_sell_blocks_noncontinuous_status_and_keeps_bounded_retry(
+        monkeypatch, trade_status):
+    code = "513100.SS"
+    reason = "atr_stop 1.100<=1.150"
+    position = types.SimpleNamespace(
+        amount=500,
+        cost_basis=1.0,
+        last_sale_price=1.1,
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 27, 9, 35),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g(
+        __last_snapshot={code: make_fresh_live_snapshot(trade_status)},
+    )
+    orders = []
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 1.1)
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda *args, **kwargs: orders.append((args, kwargs)),
+        raising=False,
+    )
+
+    assert pt.execute_sell(code, context, reason) is False
+    assert orders == []
+    assert pt.g.sold_today == {}
+    assert pt.g.__pending_sells == {}
+    assert pt.g.sell_retry_reasons == {code: reason}
+
+
+def test_live_sell_keeps_bounded_retry_when_fresh_price_is_unavailable(
+        monkeypatch):
+    code = "513100.SS"
+    reason = "sell_score 35"
+    position = types.SimpleNamespace(
+        amount=500,
+        cost_basis=1.0,
+        last_sale_price=1.1,
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 27, 9, 35),
+        portfolio=types.SimpleNamespace(positions={code: position}),
+    )
+    pt.g = make_g()
+    orders = []
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: None)
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda *args, **kwargs: orders.append((args, kwargs)),
+        raising=False,
+    )
+
+    assert pt.execute_sell(code, context, reason) is False
+    assert orders == []
+    assert pt.g.sold_today == {}
+    assert pt.g.__pending_sells == {}
+    assert pt.g.sell_retry_reasons == {code: reason}
 
 
 def test_partial_sell_callbacks_keep_state_until_cumulative_full_fill():
@@ -6417,6 +6533,62 @@ def test_halt_recovery_retries_rejected_atr_sell_for_nonpaused_holding(monkeypat
     assert pt.g.sell_retry_reasons == {}
 
 
+def test_halt_recovery_preserves_retry_when_sell_is_still_not_orderable(
+        monkeypatch):
+    code = "513100.SS"
+    reason = "atr_stop 8.500<=8.750"
+    today = date(2026, 7, 13)
+    prev_date = date(2026, 7, 10)
+    pt.g = make_g(
+        sell_retry_reasons={code: reason},
+        execution_date=today,
+        deferred_signal_date=prev_date,
+        highest_since_buy={code: 10.0},
+        entry_atr={code: 0.5},
+        buy_date={code: date(2026, 6, 30)},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=100,
+                    cost_basis=10.0,
+                    last_sale_price=8.5,
+                )
+            }
+        ),
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources",
+        lambda context, allow_deliver: None,
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 8.5)
+
+    def block_sell(candidate, context, sell_reason):
+        pt.g.sell_retry_reasons[candidate] = sell_reason
+        return False
+
+    monkeypatch.setattr(pt, "execute_sell", block_sell)
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert pt.g.sell_retry_reasons == {code: reason}
+    assert not any("风险条件已解除" in message for message in messages)
+
+
 def test_halt_recovery_drops_rejected_atr_retry_when_risk_has_cleared(monkeypatch):
     code = "513100.SS"
     today = date(2026, 7, 13)
@@ -7657,7 +7829,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260727.3" in notes
+    assert "20260727.4" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes
