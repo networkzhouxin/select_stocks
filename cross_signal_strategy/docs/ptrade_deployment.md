@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.12 业务配置=1506a0e834fe 状态结构=4
+[发布指纹] 构建=20260726.13 业务配置=1506a0e834fe 状态结构=5
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -23,11 +23,13 @@ The state schema is PTrade-only and does not participate in trading decisions.
 Any mismatch from this documented identity requires a fresh local release
 check before simulation or live trading continues.
 
-State schema 4 deliberately rejects schema 3 risk state because the older
-adapter could have written an unfinalized same-session daily value into
-`highest_since_buy`. On the first start after this upgrade, held-position risk
-facts are rebuilt from the broker delivery history and finalized historical
-daily bars. Subsequent starts use the normal bounded schema-4 journal.
+State schema 5 deliberately rejects schema 4 risk state because schema 4 has no
+metadata that can distinguish a confirmed high from the provisional
+same-session value recorded at 15:30. On the first start after this upgrade,
+held-position risk facts are rebuilt from the broker delivery history and
+finalized historical daily bars. Subsequent starts use the normal bounded
+schema-5 journal, which persists both the provisional observation and its prior
+confirmed baseline until next-morning confirmation completes.
 
 The indicator calculations, cross detection, buy/sell scoring, candidate
 filtering, position sizing, minimum signal hold, and ATR stop formula are
@@ -107,19 +109,22 @@ PTrade live mode registers four tasks, below the platform limit of five:
   this behavior `不新增定时任务`. Partial fills and normal fills keep their
   original lifecycle behavior.
 - `after_trading_end` (normally around `15:30`): reconcile orders, print the
-  position risk summary, and write the bounded state journal. A live
-  same-session daily value is observation only: it is logged for diagnosis but
-  cannot update `highest_since_buy`, because PTrade does not guarantee that the
-  current daily period is already the final official close at callback time.
-  This is not an additional `run_daily` thread task.
+  position risk summary, and write the bounded state journal. An exact-date,
+  finite positive close with positive volume updates `highest_since_buy` as
+  provisional risk state, so the normal end-of-day maintenance still occurs.
+  The journal also stores the session date, the prior confirmed high, and the
+  observed close. This is not an additional `run_daily` thread task and does
+  not create a new trading decision.
 - The next `before_trading_start` first restores holding state and then reads
-  the exact finalized T-1 daily bar. Only an exact-date, finite positive close
-  may raise `highest_since_buy`. When volume is zero, the session is treated as
-  suspended and the prior confirmed high is retained. A missing, stale-date,
-  malformed, or failed T-1 response marks that holding unverified and blocks
-  automatic exits and new buys until the final bar can be proved. This timing
-  uses only information available before T trading and does not create a
-  future function.
+  the exact finalized T-1 daily bar. For a matching pending session it
+  corrects the provisional high to `max(prior confirmed high, final close)`;
+  this replacement may lower an overstated 15:30 provisional value. When
+  volume is zero, the session is treated as suspended, the prior confirmed
+  high is restored, and the pending observation is cleared. A missing,
+  stale-date, malformed, or failed T-1 response retains the pending metadata,
+  marks that holding unverified, and blocks automatic exits and new buys until
+  the final bar can be proved. This timing uses only information available
+  before T trading and does not create a future function.
 
 Initialization must prove the runtime mode with `is_trade()` before applying
 mode-specific settings. Live mode receives only live platform parameters;

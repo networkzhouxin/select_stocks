@@ -46,6 +46,7 @@ def make_g(**overrides):
         "highest_since_buy": {},
         "entry_atr": {},
         "buy_date": {},
+        "pending_close_confirmations": {},
         "last_scores": {},
         "sold_today": {},
         "sell_retry_reasons": {},
@@ -125,8 +126,8 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.12"
-    assert pt.LIVE_STATE_SCHEMA_VERSION == 4
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.13"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 5
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -590,6 +591,13 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
         highest_since_buy={"513100.SS": 2.5},
         entry_atr={"513100.SS": 0.05},
         buy_date={"513100.SS": signal_date},
+        pending_close_confirmations={
+            "513100.SS": {
+                "session_date": today,
+                "prior_confirmed_high": 2.5,
+                "observed_close": 2.6,
+            },
+        },
         last_scores={"513100.SS": make_buy_score()},
         sold_today={"159915.SZ": True},
         sell_retry_reasons={"513500.SS": "ATR止损重试"},
@@ -605,6 +613,7 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
     pt.g.highest_since_buy = {}
     pt.g.entry_atr = {}
     pt.g.buy_date = {}
+    pt.g.pending_close_confirmations = {}
     pt.g.last_scores = {}
     pt.g.sold_today = {}
     pt.g.sell_retry_reasons = {}
@@ -620,6 +629,13 @@ def test_explicit_live_state_round_trip_excludes_business_configuration(tmp_path
     assert pt.g.highest_since_buy == {"513100.SS": 2.5}
     assert pt.g.entry_atr == {"513100.SS": 0.05}
     assert pt.g.buy_date == {"513100.SS": signal_date}
+    assert pt.g.pending_close_confirmations == {
+        "513100.SS": {
+            "session_date": today,
+            "prior_confirmed_high": 2.5,
+            "observed_close": 2.6,
+        },
+    }
     assert pt.g.sold_today == {"159915.SZ": True}
     assert pt.g.sell_retry_reasons == {"513500.SS": "ATR止损重试"}
     assert pt.g.paused_pool_codes == {"513880.SS"}
@@ -738,7 +754,7 @@ def test_previous_schema_persisted_g_is_rejected_for_broker_rebuild():
         highest_since_buy={code: 9.9},
         entry_atr={code: 0.05},
         buy_date={code: date(2026, 7, 10)},
-        live_state_schema_version=3,
+        live_state_schema_version=4,
         live_state_business_fingerprint=pt.business_config_fingerprint(),
         live_state_generation=7,
         live_state_broker_positions={
@@ -832,7 +848,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
 
     assert len({simulation_path, other_account_path, live_path}) == 3
     assert Path(simulation_path).name.startswith(
-        "cross_signal_v032_live_state_v4_")
+        "cross_signal_v032_live_state_v5_")
     assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
@@ -1529,6 +1545,40 @@ def test_live_state_envelope_rejects_business_fingerprint_mismatch():
 
 
 @pytest.mark.parametrize(
+    "pending",
+    [
+        [],
+        {"513100.SS": None},
+        {
+            "513100.SS": {
+                "session_date": "not-a-date",
+                "prior_confirmed_high": 2.0,
+                "observed_close": 2.4,
+            },
+        },
+        {
+            "513100.SS": {
+                "session_date": date(2026, 7, 24),
+                "prior_confirmed_high": 0.0,
+                "observed_close": 2.4,
+            },
+        },
+    ],
+)
+def test_live_state_rejects_invalid_pending_close_confirmation(pending):
+    state = {
+        field: getattr(
+            make_g(pending_close_confirmations=pending),
+            field,
+        )
+        for field in pt.LIVE_STATE_FIELDS
+    }
+
+    with pytest.raises(ValueError, match="pending close confirmation"):
+        pt._validated_live_state(state)
+
+
+@pytest.mark.parametrize(
     ("raw", "expected"),
     [
         ("state schema mismatch", "状态结构版本不匹配"),
@@ -2137,7 +2187,7 @@ def test_live_price_accepts_snapshot_from_current_session(monkeypatch):
     assert pt.g.__last_snapshot["513100.SS"]["last_px"] == pytest.approx(2.0)
 
 
-def test_live_after_close_observes_daily_bar_without_mutating_confirmed_high(
+def test_live_after_close_provisionally_updates_high_and_records_confirmation(
         monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
@@ -2200,7 +2250,14 @@ def test_live_after_close_observes_daily_bar_without_mutating_confirmed_high(
 
     pt.after_close(context)
 
-    assert pt.g.highest_since_buy[code] == pytest.approx(2.0)
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert pt.g.pending_close_confirmations == {
+        code: {
+            "session_date": date(2026, 7, 24),
+            "prior_confirmed_high": 2.0,
+            "observed_close": 2.4,
+        },
+    }
     assert history_calls == [
         (1, "1d", "close", [code], "pre", True),
         (1, "1d", "volume", [code], "pre", True),
@@ -2208,9 +2265,115 @@ def test_live_after_close_observes_daily_bar_without_mutating_confirmed_high(
     assert any(
         "[盘后观察]" in message and
         "次日盘前确认" in message and
-        "已确认最高收盘价=2.000" in message
+        "临时最高收盘价=2.400" in message
         for message in infos
     )
+
+
+def test_clear_position_state_removes_pending_close_confirmation():
+    code = "513100.SS"
+    pt.g = make_g(
+        highest_since_buy={code: 2.4},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={
+            code: {
+                "session_date": date(2026, 7, 24),
+                "prior_confirmed_high": 2.0,
+                "observed_close": 2.4,
+            },
+        },
+    )
+
+    pt._clear_position_state(code)
+
+    assert code not in pt.g.pending_close_confirmations
+
+
+def test_confirm_previous_session_highs_replaces_provisional_high_with_final_close(
+        monkeypatch):
+    code = "513100.SS"
+    session_date = date(2026, 7, 24)
+    pt.g = make_g(
+        highest_since_buy={code: 2.4},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={
+            code: {
+                "session_date": session_date,
+                "prior_confirmed_high": 2.0,
+                "observed_close": 2.4,
+            },
+        },
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    monkeypatch.setattr(
+        pt,
+        "get_price",
+        lambda *args, **kwargs: pt.pd.DataFrame(
+            {"close": [2.3], "volume": [100000.0]},
+            index=pt.pd.DatetimeIndex(["2026-07-24"]),
+        ),
+        raising=False,
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is True
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.3)
+    assert pt.g.pending_close_confirmations == {}
+    assert pt.g.unverified_positions == set()
+
+
+def test_confirm_previous_session_highs_fails_closed_on_pending_date_mismatch(
+        monkeypatch):
+    code = "513100.SS"
+    session_date = date(2026, 7, 24)
+    pending_date = date(2026, 7, 23)
+    pt.g = make_g(
+        highest_since_buy={code: 2.4},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={
+            code: {
+                "session_date": pending_date,
+                "prior_confirmed_high": 2.0,
+                "observed_close": 2.4,
+            },
+        },
+    )
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=1000,
+                    cost_basis=1.8,
+                )
+            }
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        pt,
+        "get_confirmed_session_bar",
+        lambda requested, requested_date:
+            calls.append((requested, requested_date)),
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, session_date) is False
+    assert calls == []
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert pt.g.pending_close_confirmations[code]["session_date"] == pending_date
+    assert pt.g.unverified_positions == {code}
 
 
 def test_confirm_previous_session_highs_uses_exact_t_minus_one_close(
@@ -2271,9 +2434,16 @@ def test_confirm_previous_session_highs_keeps_high_on_suspended_day(
     code = "513100.SS"
     session_date = date(2026, 7, 24)
     pt.g = make_g(
-        highest_since_buy={code: 2.2},
+        highest_since_buy={code: 2.4},
         entry_atr={code: 0.05},
         buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={
+            code: {
+                "session_date": session_date,
+                "prior_confirmed_high": 2.2,
+                "observed_close": 2.4,
+            },
+        },
     )
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(
@@ -2298,6 +2468,7 @@ def test_confirm_previous_session_highs_keeps_high_on_suspended_day(
     assert pt._confirm_previous_session_highs(
         context, session_date) is True
     assert pt.g.highest_since_buy[code] == pytest.approx(2.2)
+    assert pt.g.pending_close_confirmations == {}
     assert pt.g.unverified_positions == set()
 
 
@@ -2306,9 +2477,16 @@ def test_confirm_previous_session_highs_fails_closed_without_exact_bar(
     code = "513100.SS"
     session_date = date(2026, 7, 24)
     pt.g = make_g(
-        highest_since_buy={code: 2.0},
+        highest_since_buy={code: 2.4},
         entry_atr={code: 0.05},
         buy_date={code: date(2026, 7, 1)},
+        pending_close_confirmations={
+            code: {
+                "session_date": session_date,
+                "prior_confirmed_high": 2.0,
+                "observed_close": 2.4,
+            },
+        },
     )
     context = types.SimpleNamespace(
         portfolio=types.SimpleNamespace(
@@ -2339,7 +2517,14 @@ def test_confirm_previous_session_highs_fails_closed_without_exact_bar(
 
     assert pt._confirm_previous_session_highs(
         context, session_date) is False
-    assert pt.g.highest_since_buy[code] == pytest.approx(2.0)
+    assert pt.g.highest_since_buy[code] == pytest.approx(2.4)
+    assert pt.g.pending_close_confirmations == {
+        code: {
+            "session_date": session_date,
+            "prior_confirmed_high": 2.0,
+            "observed_close": 2.4,
+        },
+    }
     assert pt.g.unverified_positions == {code}
 
 
@@ -6752,13 +6937,14 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.12" in notes
+    assert "20260726.13" in notes
     assert "1506a0e834fe" in notes
-    assert "状态结构=4" in notes
-    assert "observation only" in notes
+    assert "状态结构=5" in notes
+    assert "provisional risk state" in notes
     assert "exact finalized T-1 daily bar" in notes
+    assert "corrects the provisional high" in notes
     assert "volume is zero" in notes
-    assert "schema 4" in notes
+    assert "schema 5" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
     assert "`INFO`" in notes
