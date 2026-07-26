@@ -125,7 +125,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.8"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260726.9"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 3
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -1794,6 +1794,190 @@ def test_joinquant_and_ptrade_choose_same_buy_on_same_synthetic_day(monkeypatch)
     pt.do_trading(pt_context)
 
     assert jq_orders == pt_orders == [("buy", "513100")]
+
+
+@pytest.mark.parametrize("sell_mode", ["atr", "signal"])
+def test_joinquant_and_ptrade_sell_then_replacement_flow_contract(
+        monkeypatch, sell_mode):
+    today = date(2026, 7, 24)
+    prev_date = date(2026, 7, 23)
+    buy_date = date(2026, 7, 10)
+    jq_sold = "513100.XSHG"
+    jq_replacement = "159915.XSHE"
+    pt_sold = "513100.SS"
+    pt_replacement = "159915.SZ"
+    trade_days = [
+        date(2026, 7, 10),
+        date(2026, 7, 13),
+        date(2026, 7, 14),
+        date(2026, 7, 15),
+        date(2026, 7, 16),
+        date(2026, 7, 17),
+        date(2026, 7, 20),
+        date(2026, 7, 21),
+        date(2026, 7, 22),
+        prev_date,
+        today,
+    ]
+
+    def complete_score(score):
+        score.update({
+            "close": 2.0,
+            "loose_reversal_count": 0,
+            "rsi_turn_up": False,
+            "rsi6_delta": 0.0,
+            "macd_turn_up": False,
+            "dif_delta": 0.0,
+            "kdj_turn_up": False,
+            "k_delta": 0.0,
+            "j_delta": 0.0,
+        })
+        return score
+
+    if sell_mode == "atr":
+        jq_sold_score = complete_score(make_buy_score(jq_sold))
+        pt_sold_score = complete_score(make_buy_score(pt_sold))
+        jq_sold_score["buy_score"] = 80
+        pt_sold_score["buy_score"] = 80
+        sold_price = 8.0
+    else:
+        jq_sold_score = complete_score(make_sell_score(jq_sold))
+        pt_sold_score = complete_score(make_sell_score(pt_sold))
+        sold_price = 10.0
+    jq_buy_score = complete_score(make_buy_score(jq_replacement))
+    pt_buy_score = complete_score(make_buy_score(pt_replacement))
+    jq_scores = {
+        jq_sold: jq_sold_score,
+        jq_replacement: jq_buy_score,
+    }
+    pt_scores = {
+        pt_sold: pt_sold_score,
+        pt_replacement: pt_buy_score,
+    }
+
+    jq_orders = []
+    jq_position = types.SimpleNamespace(total_amount=500, avg_cost=10.0)
+    jq_context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 24, 9, 35),
+        portfolio=types.SimpleNamespace(
+            positions={jq_sold: jq_position},
+            total_value=20000.0,
+            available_cash=1000.0,
+        ),
+    )
+    jq.g = types.SimpleNamespace(
+        params=jq.get_default_params(),
+        etf_pool=[jq_sold, jq_replacement],
+        highest_since_buy={jq_sold: 10.0},
+        entry_atr={jq_sold: 0.5},
+        buy_date={jq_sold: buy_date},
+        last_scores={},
+        sold_today=set(),
+        sold_guard_date=today,
+    )
+    jq_current = {
+        jq_sold: types.SimpleNamespace(
+            paused=False, last_price=sold_price),
+        jq_replacement: types.SimpleNamespace(
+            paused=False, last_price=2.0),
+    }
+    monkeypatch.setattr(jq, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(
+        jq, "get_current_data", lambda: jq_current, raising=False)
+    monkeypatch.setattr(
+        jq,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (
+            dict(jq_scores[code]), None),
+    )
+    monkeypatch.setattr(
+        jq, "get_trade_days", lambda **kwargs: trade_days, raising=False)
+
+    def jq_sell(code, amount):
+        jq_orders.append(("sell", code.split(".")[0]))
+        jq_context.portfolio.positions.pop(code, None)
+
+    def jq_buy(code, value):
+        jq_orders.append(("buy", code.split(".")[0]))
+        jq_context.portfolio.positions[code] = types.SimpleNamespace(
+            total_amount=100, avg_cost=2.0)
+
+    monkeypatch.setattr(jq, "order_target", jq_sell, raising=False)
+    monkeypatch.setattr(
+        jq, "order_target_value", jq_buy, raising=False)
+
+    pt_orders = []
+    pt_position = types.SimpleNamespace(
+        amount=500, cost_basis=10.0, last_sale_price=sold_price)
+    pt_context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 24, 9, 35)),
+        portfolio=types.SimpleNamespace(
+            positions={pt_sold: pt_position},
+            portfolio_value=20000.0,
+            cash=1000.0,
+        ),
+    )
+    pt.g = make_g(
+        etf_pool=[pt_sold, pt_replacement],
+        highest_since_buy={pt_sold: 10.0},
+        entry_atr={pt_sold: 0.5},
+        buy_date={pt_sold: buy_date},
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: prev_date)
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(
+        pt,
+        "get_current_price",
+        lambda code: sold_price if code == pt_sold else 2.0,
+    )
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda code, end_date, return_reason=False: (
+            dict(pt_scores[code]), None),
+    )
+    monkeypatch.setattr(
+        pt, "get_trade_days", lambda **kwargs: trade_days, raising=False)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda code, amount, limit_price=None: (
+            pt_orders.append(("sell", code.split(".")[0]))
+            or "sell-order-1"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, shares, limit_price=None: (
+            pt_orders.append(("buy", code.split(".")[0]))
+            or "buy-order-1"
+        ),
+        raising=False,
+    )
+
+    jq.do_trading(jq_context)
+    pt.do_trading(pt_context)
+    assert pt_orders == [("sell", "513100")]
+
+    pt.on_trade_response(pt_context, {
+        "stock_code": pt_sold,
+        "entrust_bs": "2",
+        "business_amount": 500,
+        "business_price": sold_price,
+        "business_id": "sell-fill-1",
+        "order_id": "sell-order-1",
+    })
+
+    assert jq_orders == pt_orders == [
+        ("sell", "513100"),
+        ("buy", "159915"),
+    ]
+    assert pt_sold not in pt.g.__pending_orders
 
 
 def test_ptrade_normalizes_callback_codes_to_universe_format():
@@ -3573,6 +3757,164 @@ def test_zero_fill_buy_rejection_retries_backfill_at_0936_when_cash_sync_lags(
     assert orders == [(backup_code, 1500, 2.0)]
     assert pt.g.buy_backfill_pending is False
     assert set(pt.g.__pending_orders) == {backup_code}
+
+
+def test_active_order_query_backfills_after_zero_fill_buy_rejection(
+        monkeypatch):
+    today = date(2026, 7, 23)
+    failed_code = "513100.SS"
+    backup_code = "159915.SZ"
+    failed_score = make_buy_score(failed_code)
+    failed_score["buy_score"] = 80
+    backup_score = make_buy_score(backup_code)
+    backup_score["buy_score"] = 70
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36),
+        portfolio=types.SimpleNamespace(
+            positions={},
+            portfolio_value=20000.0,
+            cash=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        execution_date=today,
+        deferred_scores=[failed_score, backup_score],
+        __pending_orders={
+            failed_code: {
+                "requested_qty": 3000,
+                "filled_qty": 0.0,
+                "filled_value": 0.0,
+                "fill_value_complete": True,
+                "atr": failed_score["atr"],
+                "buy_date": today,
+                "order_id": "buy-order-rejected",
+                "submitted_at": datetime(2026, 7, 23, 9, 35),
+            }
+        },
+    )
+    monkeypatch.setattr(
+        pt, "_fetch_current_strategy_trades", lambda: [])
+    queried_order_ids = []
+    monkeypatch.setattr(
+        pt,
+        "get_order",
+        lambda order_id: (
+            queried_order_ids.append(order_id)
+            or [types.SimpleNamespace(
+                id=order_id,
+                symbol="513100.XSHG",
+                amount=3000,
+                filled=0,
+                status="9",
+            )]
+        ),
+        raising=False,
+    )
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda code, amount, limit_price=None: (
+            orders.append((code, amount, limit_price)) or "buy-order-backup"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert queried_order_ids == ["buy-order-rejected"]
+    assert pt.g.failed_buy_codes == {failed_code}
+    assert pt.g.buy_backfill_pending is False
+    assert orders == [(backup_code, 1500, 2.0)]
+    assert set(pt.g.__pending_orders) == {backup_code}
+    assert pt.g.__pending_orders[backup_code]["order_id"] == "buy-order-backup"
+
+
+def test_active_order_query_releases_zero_fill_rejected_sell_for_retry(
+        monkeypatch):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(amount=500, cost_basis=1.10),
+            },
+            cash=1000.0,
+            portfolio_value=20000.0,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={code: 1.20},
+        entry_atr={code: 0.05},
+        buy_date={code: date(2026, 7, 10)},
+        sold_today={code: True},
+        __pending_sells={
+            code: {
+                "requested_qty": 500,
+                "filled_qty": 0.0,
+                "reason": "atr_stop 0.900<=0.950",
+                "order_id": "sell-order-rejected",
+                "submitted_at": datetime(2026, 7, 23, 9, 35),
+            }
+        },
+    )
+    monkeypatch.setattr(
+        pt, "_fetch_current_strategy_trades", lambda: [])
+    monkeypatch.setattr(
+        pt,
+        "get_order",
+        lambda order_id: [types.SimpleNamespace(
+            id=order_id,
+            symbol="513100.XSHG",
+            amount=-500,
+            filled=0,
+            status="9",
+        )],
+        raising=False,
+    )
+    monkeypatch.setattr(pt, "_persist_live_state", lambda context: True)
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert pt.g.__pending_sells == {}
+    assert code not in pt.g.sold_today
+    assert code in pt.g.highest_since_buy
+    assert code in pt.g.entry_atr
+    assert code in pt.g.buy_date
+    assert pt.g.sell_retry_reasons == {
+        code: "atr_stop 0.900<=0.950",
+    }
+
+
+def test_active_order_query_failure_keeps_pending_order(monkeypatch):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 7, 23, 9, 36))
+    pending = {
+        "requested_qty": 500,
+        "filled_qty": 0.0,
+        "order_id": "buy-order-pending",
+        "submitted_at": datetime(2026, 7, 23, 9, 35),
+    }
+    pt.g = make_g(__pending_orders={code: dict(pending)})
+    monkeypatch.setattr(
+        pt, "_fetch_current_strategy_trades", lambda: [])
+
+    def fail_get_order(order_id):
+        raise RuntimeError("temporary query failure")
+
+    monkeypatch.setattr(
+        pt, "get_order", fail_get_order, raising=False)
+
+    pt.reconcile_recent_fills_and_resume_buys(context)
+
+    assert pt.g.__pending_orders == {code: pending}
+    assert pt.g.failed_buy_codes == set()
+    assert pt.g.buy_backfill_pending is False
 
 
 def test_partial_cancelled_sell_keeps_risk_state_for_remaining_position():
@@ -5923,13 +6265,14 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "bounded state journal" in notes
     assert "four tasks" in notes
     assert "`get_trades()`" in notes
+    assert "`get_order(order_id)`" in notes
     assert "after_trading_end" in notes
     assert "path is resolved and cached at the start of" in notes
     assert "`before_trading_start`" in notes
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260726.8" in notes
+    assert "20260726.9" in notes
     assert "1506a0e834fe" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes

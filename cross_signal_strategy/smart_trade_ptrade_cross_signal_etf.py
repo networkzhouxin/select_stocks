@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260726.8"
+DEPLOYMENT_BUILD_ID = "20260726.9"
 LIVE_STATE_SCHEMA_VERSION = 3
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3885,6 +3885,7 @@ def reconcile_recent_fills_and_resume_buys(
                 context, direction, records, query_source)
         if matched_groups:
             _persist_live_state(context)
+        _reconcile_pending_order_terminals(context, query_source)
 
         remaining_buys = getattr(g, "__pending_orders", {})
         remaining_sells = getattr(g, "__pending_sells", {})
@@ -4684,6 +4685,172 @@ def _finish_terminal_sell(code, pending):
     return True
 
 
+def _apply_terminal_order_status(context, response, source):
+    """统一处理委托主推或 get_order 主动查询得到的终态。"""
+    code = normalize_code(response.get("stock_code"))
+    status = str(response.get("status", ""))
+    if not code or status not in ("5", "6", "9"):
+        return False, False
+
+    filled = _safe_float(response.get("business_amount", 0))
+    error = response.get("error_info", "")
+    buy_pending = getattr(g, "__pending_orders", {}).get(code)
+    sell_pending = getattr(g, "__pending_sells", {}).get(code)
+
+    if buy_pending is not None:
+        if not _response_matches_pending(response, buy_pending):
+            log.warning("[%s] 已忽略无法匹配的买入委托 %s" % (source, code))
+            return False, False
+        should_resume_failed_buy = False
+        if filled > 0 and status in ("5", "6"):
+            buy_pending["terminal_qty"] = filled
+            if buy_pending.get("filled_qty", 0.0) >= filled:
+                _complete_buy(code, buy_pending)
+            _log_order_lifecycle(
+                context, "部分成交或撤单", source, "买入",
+                code, buy_pending, status=status, reported_filled=filled)
+            log.warning("[%s] 买入部分成交或撤单 %s 已成交=%.0f 原因=%s" % (
+                source, code, filled, error))
+        else:
+            g.__pending_orders.pop(code, None)
+            _log_order_lifecycle(
+                context, "拒绝或撤单", source, "买入",
+                code, buy_pending, status=status, reported_filled=filled)
+            log.warning("[%s] 买入拒绝或撤单 %s 状态=%s 原因=%s" % (
+                source, code, status, error))
+            if filled <= 0:
+                _mark_failed_buy_code(code, "零成交终态%s" % status)
+                g.buy_backfill_pending = True
+                should_resume_failed_buy = True
+        return True, should_resume_failed_buy
+
+    if sell_pending is not None:
+        if not _response_matches_pending(response, sell_pending):
+            log.warning("[%s] 已忽略无法匹配的卖出委托 %s" % (source, code))
+            return False, False
+        if filled > 0 and status in ("5", "6"):
+            sell_pending["terminal_qty"] = filled
+            _finish_terminal_sell(code, sell_pending)
+            _log_order_lifecycle(
+                context, "部分成交或撤单", source, "卖出",
+                code, sell_pending, status=status, reported_filled=filled)
+            log.warning("[%s] 卖出部分成交或撤单 %s 已成交=%.0f 原因=%s" % (
+                source, code, filled, error))
+        else:
+            g.__pending_sells.pop(code, None)
+            g.sold_today.pop(code, None)
+            g.sell_retry_reasons[code] = sell_pending.get(
+                "reason", "sell_retry")
+            _log_order_lifecycle(
+                context, "拒绝或撤单", source, "卖出",
+                code, sell_pending, status=status, reported_filled=filled)
+            log.error("[%s] 卖出拒绝或撤单 %s 状态=%s 原因=%s" % (
+                source, code, status, error))
+        return True, False
+
+    return False, False
+
+
+def _reconcile_pending_order_terminals(context, query_source):
+    """用 get_order 补齐可能早到或缺失的终态主推，不推断成交明细。"""
+    getter = globals().get("get_order")
+    if getter is None:
+        log.warning("[委托终态核对] get_order接口不可用，保留待确认委托")
+        return 0
+
+    snapshots = (
+        ("买入", dict(getattr(g, "__pending_orders", {}))),
+        ("卖出", dict(getattr(g, "__pending_sells", {}))),
+    )
+    handled = 0
+    for direction, pending_map in snapshots:
+        for raw_code, pending in sorted(pending_map.items()):
+            code = normalize_code(raw_code)
+            if not code or not isinstance(pending, dict):
+                log.error(
+                    "[委托终态核对] %s待确认委托格式异常，已保留原状态" % direction)
+                continue
+            order_id = str(pending.get("order_id", "") or "")
+            if not order_id:
+                log.error(
+                    "[委托终态核对] %s%s缺少委托编号，已保留原状态" % (
+                        code, direction))
+                continue
+            try:
+                payload = getter(order_id)
+            except Exception as exc:
+                log.warning(
+                    "[委托终态核对] %s%s查询失败，已保留原状态 "
+                    "委托编号=%s 原因=%s" % (
+                        code, direction, order_id, exc))
+                continue
+            if not isinstance(payload, (list, tuple)) or len(payload) != 1:
+                log.warning(
+                    "[委托终态核对] %s%s返回值无效，已保留原状态 "
+                    "委托编号=%s" % (code, direction, order_id))
+                continue
+
+            order_obj = payload[0]
+            returned_id = str(_order_field(order_obj, "id", "") or "")
+            returned_code = normalize_code(
+                _order_field(order_obj, "symbol", "")
+                or _order_field(order_obj, "stock_code", "")
+            )
+            if returned_id != order_id or (returned_code and returned_code != code):
+                log.warning(
+                    "[委托终态核对] %s%s返回对象不匹配，已保留原状态 "
+                    "委托编号=%s 返回委托编号=%s 返回代码=%s" % (
+                        code,
+                        direction,
+                        order_id,
+                        returned_id or "未知",
+                        returned_code or "未知",
+                    ))
+                continue
+
+            status = str(_order_field(order_obj, "status", "") or "")
+            if status not in ("5", "6", "9"):
+                continue
+            filled = _safe_float(
+                _order_field(order_obj, "filled", np.nan), np.nan)
+            requested = abs(_safe_float(pending.get("requested_qty", 0)))
+            if (
+                    not np.isfinite(filled)
+                    or filled < 0
+                    or requested <= 0
+                    or filled > requested):
+                log.warning(
+                    "[委托终态核对] %s%s终态数量无效，已保留原状态 "
+                    "委托编号=%s 状态=%s 已成交=%s 请求数量=%.0f" % (
+                        code,
+                        direction,
+                        order_id,
+                        status,
+                        str(filled),
+                        requested,
+                    ))
+                continue
+
+            response = {
+                "stock_code": code,
+                "status": status,
+                "business_amount": filled,
+                "error_info": _order_field(
+                    order_obj, "error_info", "get_order主动核对"),
+                "order_id": order_id,
+            }
+            applied, _should_resume = _apply_terminal_order_status(
+                context, response, "%s委托查询" % query_source)
+            if applied:
+                handled += 1
+
+    if handled:
+        _persist_live_state(context)
+    log.info("[委托终态核对] 来源=%s 已处理终态=%d" % (
+        query_source, handled))
+    return handled
+
+
 def on_order_response(context, order_list):
     if not getattr(g, "__is_live", False):
         return
@@ -4693,63 +4860,10 @@ def on_order_response(context, order_list):
         if not isinstance(response, dict):
             log.warning("[委托回报格式异常] 已忽略类型=%s" % type(response).__name__)
             continue
-        code = normalize_code(response.get("stock_code"))
-        status = str(response.get("status", ""))
-        if not code or status not in ("5", "6", "9"):
-            continue
-        filled = _safe_float(response.get("business_amount", 0))
-        error = response.get("error_info", "")
-        buy_pending = getattr(g, "__pending_orders", {}).get(code)
-        sell_pending = getattr(g, "__pending_sells", {}).get(code)
-
-        if buy_pending is not None:
-            if not _response_matches_pending(response, buy_pending):
-                log.warning("[委托回报] 已忽略无法匹配的买入委托 %s" % code)
-                continue
-            if filled > 0 and status in ("5", "6"):
-                buy_pending["terminal_qty"] = filled
-                if buy_pending.get("filled_qty", 0.0) >= filled:
-                    _complete_buy(code, buy_pending)
-                _log_order_lifecycle(
-                    context, "部分成交或撤单", "委托回报", "买入",
-                    code, buy_pending, status=status, reported_filled=filled)
-                log.warning("[买入部分成交或撤单] %s 已成交=%.0f 原因=%s" % (
-                    code, filled, error))
-            else:
-                g.__pending_orders.pop(code, None)
-                _log_order_lifecycle(
-                    context, "拒绝或撤单", "委托回报", "买入",
-                    code, buy_pending, status=status, reported_filled=filled)
-                log.warning("[买入拒绝或撤单] %s 状态=%s 原因=%s" % (
-                    code, status, error))
-                if filled <= 0:
-                    _mark_failed_buy_code(
-                        code, "零成交终态%s" % status)
-                    g.buy_backfill_pending = True
-                    should_resume_failed_buy = True
-            continue
-
-        if sell_pending is not None:
-            if not _response_matches_pending(response, sell_pending):
-                log.warning("[委托回报] 已忽略无法匹配的卖出委托 %s" % code)
-                continue
-            if filled > 0 and status in ("5", "6"):
-                sell_pending["terminal_qty"] = filled
-                _finish_terminal_sell(code, sell_pending)
-                _log_order_lifecycle(
-                    context, "部分成交或撤单", "委托回报", "卖出",
-                    code, sell_pending, status=status, reported_filled=filled)
-                log.warning("[卖出部分成交或撤单] %s 已成交=%.0f 原因=%s" % (
-                    code, filled, error))
-            else:
-                g.__pending_sells.pop(code, None)
-                g.sold_today.pop(code, None)
-                g.sell_retry_reasons[code] = sell_pending.get("reason", "sell_retry")
-                _log_order_lifecycle(
-                    context, "拒绝或撤单", "委托回报", "卖出",
-                    code, sell_pending, status=status, reported_filled=filled)
-                log.error("[卖出拒绝或撤单] %s 状态=%s 原因=%s" % (
-                    code, status, error))
+        _applied, resume_failed_buy = _apply_terminal_order_status(
+            context, response, "委托回报")
+        should_resume_failed_buy = (
+            should_resume_failed_buy or resume_failed_buy)
     if should_resume_failed_buy:
         _resume_failed_buy_backfill(context, "买入委托回报补位")
     _persist_live_state(context)

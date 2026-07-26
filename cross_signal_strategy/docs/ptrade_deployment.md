@@ -13,7 +13,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260726.8 业务配置=1506a0e834fe 状态结构=3
+[发布指纹] 构建=20260726.9 业务配置=1506a0e834fe 状态结构=3
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -56,6 +56,13 @@ PTrade live mode registers four tasks, below the platform limit of five:
   are never added on top of the cumulative `Order.filled` value restored from
   `get_open_orders()`. Repeating the same query is therefore idempotent, while
   a later unique fill still advances the cumulative quantity.
+  For an exact pending order that still has no matching fill, the same task
+  calls `get_order(order_id)` and accepts only terminal status `5`, `6`, or
+  `9` after validating the returned order ID, code, and cumulative quantity.
+  A proven zero-fill failed buy releases the frozen backup queue; a proven
+  zero-fill failed sell becomes retryable while its holding-risk state is
+  retained. Missing, malformed, contradictory, or non-terminal results remain
+  pending and fail closed.
   Confirmed buys restore their actual fill quantity, fill price, buy date, ATR,
   and highest-close baseline through the existing callback state machine.
   Once all pending sells are confirmed, the adapter immediately resumes the
@@ -78,9 +85,9 @@ PTrade live mode registers four tasks, below the platform limit of five:
   a date mismatch blocks execution.
 - `10:36`: reconcile buy and sell fills for orders still pending after the
   10:35 pass with the same cumulative and idempotent order-level accounting;
-  it reuses the same strict side-and-order-ID matching as 09:36. If there is
-  no pending order, it returns
-  without calling `get_trades()`. It does not read daily bars, recalculate
+  it reuses the same strict fill matching and exact-ID terminal-order query as
+  09:36. If there is no pending order, it returns without calling
+  `get_trades()` or `get_order(order_id)`. It does not read daily bars, recalculate
   indicators or scores, change ranking, or create a new trading decision.
 - A buy submission exception, missing order ID, or terminal order response
   (`5`/`6`/`9`) with zero cumulative fills marks that ETF as a
