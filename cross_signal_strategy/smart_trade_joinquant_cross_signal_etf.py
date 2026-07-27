@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.5"
+DEPLOYMENT_BUILD_ID = "20260727.6"
 
 
 try:
@@ -325,6 +325,29 @@ def latest_cross_direction_by_diff_recent(fast, slow, window=3):
         elif not _builtins.any(pd.isna(v) for v in [prev_diff, cur_diff]) and prev_diff >= 0 and cur_diff < 0:
             latest_direction = "below"
     return latest_direction
+
+
+def _latest_cross_age_by_diff_recent(fast, slow, window=3, direction=None):
+    """返回窗口内最后一次指定方向交叉距最新数据的交易日数。"""
+    fast_values = _as_float_array(fast)
+    slow_values = _as_float_array(slow)
+    if len(fast_values) < window + 1 or len(slow_values) < window + 1:
+        return None
+    diff = fast_values - slow_values
+    latest_direction = None
+    latest_age = None
+    for offset in range(window, 0, -1):
+        prev_diff = diff[-offset - 1]
+        cur_diff = diff[-offset]
+        if _builtins.any(pd.isna(v) for v in [prev_diff, cur_diff]):
+            continue
+        if prev_diff <= 0 and cur_diff > 0:
+            latest_direction = "above"
+            latest_age = offset - 1
+        elif prev_diff >= 0 and cur_diff < 0:
+            latest_direction = "below"
+            latest_age = offset - 1
+    return latest_age if latest_direction == direction else None
 
 
 def crossed_above_by_diff_recent(fast, slow, window=3):
@@ -678,6 +701,27 @@ def build_signal_snapshot(df, params):
         "kdj_j_cross_up": crossed_above_recent(j, d, params["cross_window"]),
         "kdj_k_cross_down": crossed_below_recent(k, d, params["cross_window"]),
         "kdj_j_cross_down": crossed_below_recent(j, d, params["cross_window"]),
+        "cross_window": params["cross_window"],
+        "rsi6_cross_rsi12_up_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi12, params["cross_window"], "above"),
+        "rsi6_cross_rsi24_up_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi24, params["cross_window"], "above"),
+        "rsi6_cross_rsi12_down_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi12, params["cross_window"], "below"),
+        "rsi6_cross_rsi24_down_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi24, params["cross_window"], "below"),
+        "macd_cross_up_age": _latest_cross_age_by_diff_recent(
+            dif, dea, params["cross_window"], "above"),
+        "macd_cross_down_age": _latest_cross_age_by_diff_recent(
+            dif, dea, params["cross_window"], "below"),
+        "kdj_k_cross_up_age": _latest_cross_age_by_diff_recent(
+            k, d, params["cross_window"], "above"),
+        "kdj_j_cross_up_age": _latest_cross_age_by_diff_recent(
+            j, d, params["cross_window"], "above"),
+        "kdj_k_cross_down_age": _latest_cross_age_by_diff_recent(
+            k, d, params["cross_window"], "below"),
+        "kdj_j_cross_down_age": _latest_cross_age_by_diff_recent(
+            j, d, params["cross_window"], "below"),
         "close_between_boll_lower_mid": boll_lower.iloc[-1] <= latest <= boll_mid.iloc[-1],
         "close_cross_boll_mid_up": crossed_above_recent(C, boll_mid, params["cross_window"]),
         "close_near_ma20": abs(latest / ma20.iloc[-1] - 1) <= 0.05 if ma20.iloc[-1] > 0 else False,

@@ -135,7 +135,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.5"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.6"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -456,14 +456,45 @@ def test_ptrade_dynamic_log_formatters_translate_business_text():
         "rsi6_cross_rsi12_up": True,
         "rsi6_cross_rsi24_down": False,
     })
-    assert "RSI12上穿=是" in flags
-    assert "RSI24下穿=否" in flags
+    assert "RSI6上穿RSI12=是" in flags
+    assert "RSI6下穿RSI24=否" in flags
+    assert "RSI12上穿=是" not in flags
     assert "_UP" not in flags
     assert "_DOWN" not in flags
 
     assert pt._format_reason_for_log("short_data:10<110") == "数据长度不足:10<110"
     assert pt._format_reason_for_log("sell_score 35") == "卖出分 35"
     assert pt._format_reason_for_log("atr_stop 1.000<=1.100") == "ATR止损 1.000<=1.100"
+
+
+def test_ptrade_cross_summary_reports_full_line_names_and_cross_age():
+    fast = [-1.0, -0.5, 0.5, 1.0]
+    slow = [0.0, 0.0, 0.0, 0.0]
+
+    assert pt._latest_cross_age_by_diff_recent(
+        fast, slow, window=3, direction="above") == 1
+    assert jq._latest_cross_age_by_diff_recent(
+        fast, slow, window=3, direction="above") == 1
+
+    summary = pt._format_active_crosses_for_log({
+        "cross_window": 3,
+        "rsi6_cross_rsi12_up": True,
+        "rsi6_cross_rsi12_up_age": 1,
+        "rsi6_cross_rsi24_up": False,
+        "macd_cross_up": False,
+        "kdj_k_cross_up": True,
+        "kdj_k_cross_up_age": 0,
+        "kdj_j_cross_up": False,
+        "rsi6_cross_rsi12_down": False,
+        "rsi6_cross_rsi24_down": False,
+        "macd_cross_down": False,
+        "kdj_k_cross_down": False,
+        "kdj_j_cross_down": False,
+    })
+
+    assert "RSI6上穿RSI12(近3日有效,距发生1个交易日)" in summary
+    assert "K上穿D(近3日有效,当日新发生)" in summary
+    assert "上穿=RSI12" not in summary
 
 
 def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
@@ -5509,7 +5540,9 @@ def test_0935_logs_day_boundaries_stages_and_debug_indicator_details(
     cross_summary = next(
         message for message in info_messages
         if message.startswith("[上穿#1]"))
-    assert "上穿=RSI12,MACD,KDJ_K" in cross_summary
+    assert "上穿=RSI6上穿RSI12(近3日有效,发生日未知)" in cross_summary
+    assert "DIF上穿DEA(近3日有效,发生日未知)" in cross_summary
+    assert "K上穿D(近3日有效,发生日未知)" in cross_summary
     assert "BOLL[U/M/L]" not in cross_summary
     assert any(
         message.startswith("[指标明细][候选#1][513100.SS]")
@@ -5519,7 +5552,7 @@ def test_0935_logs_day_boundaries_stages_and_debug_indicator_details(
     )
     assert any(
         message.startswith("[指标明细][上穿#1][513100.SS]")
-        and "RSI12上穿=是" in message
+        and "RSI6上穿RSI12=是" in message
         for message in debug_messages
     )
     assert any(

@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.5"
+DEPLOYMENT_BUILD_ID = "20260727.6"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -1205,16 +1205,16 @@ def _log_debug_detail(message, *args):
 def _format_cross_flags_for_log(item):
     text = format_cross_flags(item)
     replacements = (
-        ("RSI12_UP", "RSI12上穿"),
-        ("RSI24_UP", "RSI24上穿"),
-        ("MACD_UP", "MACD上穿"),
-        ("KDJ_K_UP", "KDJ_K上穿"),
-        ("KDJ_J_UP", "KDJ_J上穿"),
-        ("RSI12_DOWN", "RSI12下穿"),
-        ("RSI24_DOWN", "RSI24下穿"),
-        ("MACD_DOWN", "MACD下穿"),
-        ("KDJ_K_DOWN", "KDJ_K下穿"),
-        ("KDJ_J_DOWN", "KDJ_J下穿"),
+        ("RSI12_UP", "RSI6上穿RSI12"),
+        ("RSI24_UP", "RSI6上穿RSI24"),
+        ("MACD_UP", "DIF上穿DEA"),
+        ("KDJ_K_UP", "K上穿D"),
+        ("KDJ_J_UP", "J上穿D"),
+        ("RSI12_DOWN", "RSI6下穿RSI12"),
+        ("RSI24_DOWN", "RSI6下穿RSI24"),
+        ("MACD_DOWN", "DIF下穿DEA"),
+        ("KDJ_K_DOWN", "K下穿D"),
+        ("KDJ_J_DOWN", "J下穿D"),
         ("True", "是"),
         ("False", "否"),
         ("None", "未知"),
@@ -1227,15 +1227,46 @@ def _format_cross_flags_for_log(item):
 def _format_active_crosses_for_log(item):
     """压缩交叉摘要，完整真假标志仍写入 DEBUG 明细。"""
     definitions = (
-        ("RSI12", "rsi6_cross_rsi12_up", "rsi6_cross_rsi12_down"),
-        ("RSI24", "rsi6_cross_rsi24_up", "rsi6_cross_rsi24_down"),
-        ("MACD", "macd_cross_up", "macd_cross_down"),
-        ("KDJ_K", "kdj_k_cross_up", "kdj_k_cross_down"),
-        ("KDJ_J", "kdj_j_cross_up", "kdj_j_cross_down"),
+        (
+            "RSI6", "RSI12",
+            "rsi6_cross_rsi12_up", "rsi6_cross_rsi12_down",
+        ),
+        (
+            "RSI6", "RSI24",
+            "rsi6_cross_rsi24_up", "rsi6_cross_rsi24_down",
+        ),
+        ("DIF", "DEA", "macd_cross_up", "macd_cross_down"),
+        ("K", "D", "kdj_k_cross_up", "kdj_k_cross_down"),
+        ("J", "D", "kdj_j_cross_up", "kdj_j_cross_down"),
     )
-    up = [name for name, up_key, _down_key in definitions if item.get(up_key)]
+    window = int(item.get("cross_window", 3) or 3)
+
+    def label(fast_name, slow_name, direction, key):
+        age = item.get("%s_age" % key)
+        if isinstance(age, (int, np.integer)) and age >= 0:
+            age_text = (
+                "当日新发生" if age == 0
+                else "距发生%d个交易日" % age
+            )
+        else:
+            age_text = "发生日未知"
+        return "%s%s%s(近%d日有效,%s)" % (
+            fast_name,
+            "上穿" if direction == "up" else "下穿",
+            slow_name,
+            window,
+            age_text,
+        )
+
+    up = [
+        label(fast_name, slow_name, "up", up_key)
+        for fast_name, slow_name, up_key, _down_key in definitions
+        if item.get(up_key)
+    ]
     down = [
-        name for name, _up_key, down_key in definitions if item.get(down_key)
+        label(fast_name, slow_name, "down", down_key)
+        for fast_name, slow_name, _up_key, down_key in definitions
+        if item.get(down_key)
     ]
     return "上穿=%s 下穿=%s" % (
         ",".join(up) if up else "无",
@@ -1648,6 +1679,29 @@ def crossed_above_recent(fast, slow, window=3):
 
 def crossed_below_recent(fast, slow, window=3):
     return crossed_below_by_diff_recent(fast, slow, window)
+
+
+def _latest_cross_age_by_diff_recent(fast, slow, window=3, direction=None):
+    """返回窗口内最后一次指定方向交叉距最新数据的交易日数。"""
+    fast_values = _as_float_array(fast)
+    slow_values = _as_float_array(slow)
+    if len(fast_values) < window + 1 or len(slow_values) < window + 1:
+        return None
+    diff = fast_values - slow_values
+    latest_direction = None
+    latest_age = None
+    for offset in range(window, 0, -1):
+        prev_diff = diff[-offset - 1]
+        cur_diff = diff[-offset]
+        if _builtins.any(pd.isna(v) for v in [prev_diff, cur_diff]):
+            continue
+        if prev_diff <= 0 and cur_diff > 0:
+            latest_direction = "above"
+            latest_age = offset - 1
+        elif prev_diff >= 0 and cur_diff < 0:
+            latest_direction = "below"
+            latest_age = offset - 1
+    return latest_age if latest_direction == direction else None
 
 
 def rsi_group_direction(snapshot):
@@ -2314,6 +2368,27 @@ def build_signal_snapshot(df, params):
         "kdj_j_cross_up": crossed_above_recent(j, d, params["cross_window"]),
         "kdj_k_cross_down": crossed_below_recent(k, d, params["cross_window"]),
         "kdj_j_cross_down": crossed_below_recent(j, d, params["cross_window"]),
+        "cross_window": params["cross_window"],
+        "rsi6_cross_rsi12_up_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi12, params["cross_window"], "above"),
+        "rsi6_cross_rsi24_up_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi24, params["cross_window"], "above"),
+        "rsi6_cross_rsi12_down_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi12, params["cross_window"], "below"),
+        "rsi6_cross_rsi24_down_age": _latest_cross_age_by_diff_recent(
+            rsi6, rsi24, params["cross_window"], "below"),
+        "macd_cross_up_age": _latest_cross_age_by_diff_recent(
+            dif, dea, params["cross_window"], "above"),
+        "macd_cross_down_age": _latest_cross_age_by_diff_recent(
+            dif, dea, params["cross_window"], "below"),
+        "kdj_k_cross_up_age": _latest_cross_age_by_diff_recent(
+            k, d, params["cross_window"], "above"),
+        "kdj_j_cross_up_age": _latest_cross_age_by_diff_recent(
+            j, d, params["cross_window"], "above"),
+        "kdj_k_cross_down_age": _latest_cross_age_by_diff_recent(
+            k, d, params["cross_window"], "below"),
+        "kdj_j_cross_down_age": _latest_cross_age_by_diff_recent(
+            j, d, params["cross_window"], "below"),
         "close_between_boll_lower_mid": boll_lower.iloc[-1] <= latest <= boll_mid.iloc[-1],
         "close_cross_boll_mid_up": crossed_above_recent(C, boll_mid, params["cross_window"]),
         "close_near_ma20": abs(latest / ma20.iloc[-1] - 1) <= 0.05 if ma20.iloc[-1] > 0 else False,
