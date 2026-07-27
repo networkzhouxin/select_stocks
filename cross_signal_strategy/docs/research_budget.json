@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 53,
+  "expected_failed_experiment_count": 54,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -266,6 +266,40 @@
       },
       "gate_passed": false,
       "gate_reason": "2020 average execution price does not improve"
+    },
+    {
+      "key": "same_side_reexpansion_user_authorized",
+      "label": "User-authorized same-side contraction and re-expansion observation",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The fixed same-side re-expansion observation failed its five-day aggregate and annual consistency gate in both directions. Bullish novel events returned less with lower win rate than active true crosses overall, weakened in 2020, and were negative in 2021. Bearish novel events were followed by positive returns overall and did not improve directional accuracy. No score or order candidate was permitted.",
+      "primary_horizon": 5,
+      "descriptive_horizons": [
+        1,
+        3,
+        10
+      ],
+      "minimum_total_observations": 30,
+      "minimum_annual_observations": 5,
+      "candidate_action": "observation_only",
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true,
+      "total_event_count": 2000,
+      "bullish_novel_5d_observations": 318,
+      "bullish_cross_5d_observations": 730,
+      "bullish_novel_5d_average_return": 0.0047,
+      "bullish_novel_5d_win_rate": 0.5723,
+      "bullish_cross_5d_average_return": 0.0062,
+      "bullish_cross_5d_win_rate": 0.5932,
+      "bearish_novel_5d_observations": 236,
+      "bearish_cross_5d_observations": 700,
+      "bearish_novel_5d_average_return": 0.0073,
+      "bearish_novel_5d_directional_win_rate": 0.4068,
+      "bearish_cross_5d_average_return": 0.0053,
+      "bearish_cross_5d_directional_win_rate": 0.4143,
+      "gate_passed": false,
+      "candidate_created": false
     }
   ]
 }

@@ -92,6 +92,13 @@
       "mechanism": "tail_execution",
       "evidence": "2020 年 23/29 笔改善且中位数 +9.52bp，但均值 -0.78bp；513500 在 2020-02-03 单笔恶化 119.45bp，显示失败由追价尾部主导。",
       "interpretation": "固定被动等待具有小额频繁改善、少数大额追价损失的逆向选择。"
+    },
+    {
+      "record_id": "53c6a77da8a3a74c",
+      "failed_years": [2021],
+      "mechanism": "regime_reversal",
+      "evidence": "Bullish novel re-expansion averaged -0.36% with a 51.35% directional win rate in 2021, versus +0.28% and 58.27% for active true crosses.",
+      "interpretation": "Same-side renewed divergence weakened across the training years and did not provide a stable substitute for a mathematical cross."
     }
   ]
 }

@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 53
-    assert report.expected_failed_experiment_count == 53
+    assert report.failed_experiment_count == 54
+    assert report.expected_failed_experiment_count == 54
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -179,6 +179,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     intraday.pop("planned_experiment", None)
+    reexpansion = next(
+        item for item in payload["families"]
+        if item["key"] == "same_side_reexpansion_user_authorized"
+    )
+    reexpansion.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    reexpansion.pop("planned_experiment", None)
     market = next(item for item in payload["families"] if item["key"] == "market_breadth")
     market.update({
         "status": "open",
@@ -206,6 +215,49 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
     assert budget.max_total_open_experiments == 0
+
+
+def test_user_authorized_reexpansion_observation_is_consumed_and_rejected():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["same_side_reexpansion_user_authorized"]
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["primary_horizon"] == 5
+    assert raw["descriptive_horizons"] == [1, 3, 10]
+    assert raw["minimum_total_observations"] == 30
+    assert raw["minimum_annual_observations"] == 5
+    assert raw["candidate_action"] == "observation_only"
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["total_event_count"] == 2000
+    assert raw["bullish_novel_5d_observations"] == 318
+    assert raw["bullish_novel_5d_average_return"] == pytest.approx(0.0047)
+    assert raw["bullish_novel_5d_win_rate"] == pytest.approx(0.5723)
+    assert raw["bullish_cross_5d_average_return"] == pytest.approx(0.0062)
+    assert raw["bullish_cross_5d_win_rate"] == pytest.approx(0.5932)
+    assert raw["bearish_novel_5d_average_return"] == pytest.approx(0.0073)
+    assert raw["bearish_novel_5d_directional_win_rate"] == pytest.approx(0.4068)
+    assert raw["gate_passed"] is False
+    assert raw["candidate_created"] is False
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is False
 
 
 def test_user_authorized_intraday_overlay_is_consumed_after_fixed_training_gate():

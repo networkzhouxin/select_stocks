@@ -23,8 +23,8 @@ def test_parser_excludes_template_and_preserves_all_real_ledger_entries():
 
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
 
-    assert len(records) == 53
-    assert len({record.record_id for record in records}) == 53
+    assert len(records) == 54
+    assert len({record.record_id for record in records}) == 54
     assert all(record.date.startswith("2026-") for record in records)
     assert all(record.experiment for record in records)
 
@@ -59,7 +59,7 @@ def test_atlas_counts_only_explicit_annual_contradictions():
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
     atlas = build_failure_year_atlas(records, load_annotations(ANNOTATIONS_PATH))
 
-    assert atlas.total_experiments == 53
+    assert atlas.total_experiments == 54
     assert atlas.annotated_experiments < atlas.total_experiments
     assert atlas.unreported_annual_experiments == (
         atlas.total_experiments - atlas.annotated_experiments
@@ -71,6 +71,12 @@ def test_atlas_counts_only_explicit_annual_contradictions():
         2020: pytest.approx(0.4974),
         2021: pytest.approx(0.0846),
     }
+    reexpansion = next(
+        item for item in atlas.annotated_records
+        if "same-side-reexpansion-observation" in item.record.version
+    )
+    assert reexpansion.annotation.failed_years == (2021,)
+    assert reexpansion.annotation.mechanism == "regime_reversal"
 
 
 def test_2020_minute_overlay_is_tail_execution_not_mainline_weakness():

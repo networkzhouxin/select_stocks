@@ -7882,7 +7882,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260727.5" in notes
+    assert "20260727.6" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes
