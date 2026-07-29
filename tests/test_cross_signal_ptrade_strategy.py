@@ -135,7 +135,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260727.6"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260730.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 6
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3696,9 +3696,9 @@ def test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio(
     pt.on_trade_response(context, {
         "stock_code": "513050.SS",
         "entrust_bs": "2",
-        "business_amount": 2100,
+        "business_amount": -2100,
         "business_price": 1.082,
-        "business_balance": 2272.2,
+        "business_balance": -2272.2,
         "business_id": "sell-fill-1",
         "order_id": "sell-order-1",
     })
@@ -7883,7 +7883,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260727.6" in notes
+    assert "20260730.1" in notes
     assert "1506a0e834fe" in notes
     assert "状态结构=6" in notes
     assert "provisional risk state" in notes

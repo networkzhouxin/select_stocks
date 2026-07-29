@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260727.6"
+DEPLOYMENT_BUILD_ID = "20260730.1"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -5657,7 +5657,8 @@ def on_trade_response(context, trade_list):
             continue
         code = normalize_code(trade.get("stock_code"))
         direction = str(trade.get("entrust_bs", ""))
-        quantity = _safe_float(trade.get("business_amount", 0))
+        raw_quantity = _safe_float(trade.get("business_amount", 0))
+        quantity = abs(raw_quantity) if direction == "2" else raw_quantity
         price = _safe_float(trade.get("business_price", 0))
         if not code or quantity <= 0:
             continue
