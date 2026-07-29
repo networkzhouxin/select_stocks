@@ -19,6 +19,7 @@ FORMAL_FILES = (
 PURE_BUSINESS_FUNCTIONS = {
     "_as_float_array",
     "_date_key",
+    "_latest_cross_age_by_diff_recent",
     "_numeric_score",
     "_valid_pair",
     "build_signal_snapshot",

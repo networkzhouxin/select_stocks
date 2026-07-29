@@ -501,6 +501,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
     function_names = {
         "_as_float_array",
         "_date_key",
+        "_latest_cross_age_by_diff_recent",
         "_numeric_score",
         "_valid_pair",
         "build_signal_snapshot",

@@ -102,6 +102,15 @@ def test_release_verifier_surfaces_failed_test_node_ids(monkeypatch):
     assert "1 failed, 2 passed" in test_check["detail"]
 
 
+def test_release_verifier_registers_cross_age_helper_for_ast_parity():
+    verifier = load_verifier()
+
+    assert (
+        "_latest_cross_age_by_diff_recent"
+        in verifier.PURE_BUSINESS_FUNCTIONS
+    )
+
+
 def test_release_verifier_rejects_stale_formal_label(tmp_path):
     verifier = load_verifier()
     strategy_root = tmp_path / "cross_signal_strategy"
