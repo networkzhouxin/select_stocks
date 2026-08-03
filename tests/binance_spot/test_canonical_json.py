@@ -223,6 +223,18 @@ class CanonicalJsonTests(unittest.TestCase):
         with self.assertRaises(CanonicalJsonError):
             canonical_hashed_payload_bytes(payload)
 
+    def test_hashed_versions_validate_raw_types_before_normalization(self) -> None:
+        q18_version = quantize_q18(Decimal("1"))
+        for field in ("schema_version", "numeric_protocol_version"):
+            payload = {
+                "schema_version": "test_v1",
+                "numeric_protocol_version": "numeric_protocol_v1",
+            }
+            payload[field] = q18_version
+            with self.subTest(field=field):
+                with self.assertRaises(CanonicalJsonError):
+                    canonical_hashed_payload_bytes(payload)
+
     def test_builtin_value_and_key_subclasses_never_reach_json_encoder(self) -> None:
         forbidden_values = (
             StringSubclass("value"),

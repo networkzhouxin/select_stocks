@@ -65,6 +65,31 @@ def _normalized_snapshot(payload: object) -> object:
         ) from exc
 
 
+def _raw_top_level_snapshot(payload: Mapping) -> dict[str, object]:
+    try:
+        raw_items: list[tuple[str, object]] = []
+        normalized_keys: set[str] = set()
+        for key, item in payload.items():
+            if type(key) is not str:
+                raise CanonicalJsonError(
+                    "canonical JSON object keys must be exact strings"
+                )
+            normalized_key = _normalize_string(key)
+            if normalized_key in normalized_keys:
+                raise CanonicalJsonError(
+                    "canonical JSON object keys collide after NFC normalization"
+                )
+            normalized_keys.add(normalized_key)
+            raw_items.append((normalized_key, item))
+        return dict(sorted(raw_items))
+    except CanonicalJsonError:
+        raise
+    except (RecursionError, UnicodeEncodeError) as exc:
+        raise CanonicalJsonError(
+            "canonical JSON top-level mapping cannot be snapshotted"
+        ) from exc
+
+
 def _encode_snapshot(normalized: object) -> bytes:
     try:
         return json.dumps(
@@ -87,19 +112,17 @@ def canonical_json_bytes(payload: object) -> bytes:
 
 
 def canonical_hashed_payload_bytes(payload: object) -> bytes:
-    """Encode one normalized snapshot of a versioned top-level mapping."""
+    """Validate raw versions, then encode one top-level mapping snapshot."""
 
     if not isinstance(payload, Mapping):
         raise CanonicalJsonError("hashed payload must be a mapping")
-    snapshot = _normalized_snapshot(payload)
-    if type(snapshot) is not dict:
-        raise CanonicalJsonError("hashed payload must normalize to an object")
-    schema_version = snapshot.get("schema_version")
+    raw_snapshot = _raw_top_level_snapshot(payload)
+    schema_version = raw_snapshot.get("schema_version")
     if type(schema_version) is not str or not schema_version:
         raise CanonicalJsonError(
             "hashed payload requires a nonempty schema_version"
         )
-    numeric_protocol_version = snapshot.get("numeric_protocol_version")
+    numeric_protocol_version = raw_snapshot.get("numeric_protocol_version")
     if (
         type(numeric_protocol_version) is not str
         or numeric_protocol_version != "numeric_protocol_v1"
@@ -108,6 +131,9 @@ def canonical_hashed_payload_bytes(payload: object) -> bytes:
             "hashed payload requires numeric_protocol_version "
             "numeric_protocol_v1"
         )
+    snapshot = _normalized_snapshot(raw_snapshot)
+    if type(snapshot) is not dict:
+        raise CanonicalJsonError("hashed payload must normalize to an object")
     return _encode_snapshot(snapshot)
 
 
