@@ -170,7 +170,7 @@ def _validate_semantic_dependency_lock(lock: object) -> dict[str, Any]:
     source = _require_exact_object(
         root["source_hash_convention"], _SOURCE_KEYS, "source_hash_convention"
     )
-    for field in _SOURCE_KEYS:
+    for field in sorted(_SOURCE_KEYS):
         _require_string(source[field], f"source_hash_convention.{field}")
     if source != _SOURCE_CONVENTION:
         _schema_error(
@@ -194,7 +194,7 @@ def _validate_semantic_dependency_lock(lock: object) -> dict[str, Any]:
     _validate_digest(python["executable_sha256"], "python.executable_sha256")
 
     float64 = _require_exact_object(root["float64"], _FLOAT64_KEYS, "float64")
-    for field in _FLOAT64_KEYS:
+    for field in sorted(_FLOAT64_KEYS):
         _require_integer(float64[field], f"float64.{field}")
 
     decimal_lock = _require_exact_object(root["decimal"], _DECIMAL_KEYS, "decimal")

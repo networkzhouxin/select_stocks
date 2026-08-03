@@ -1,6 +1,9 @@
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -261,6 +264,54 @@ class DependencyLockTests(unittest.TestCase):
                 with self.subTest(index=index, operation=operation.__name__):
                     with self.assertRaises(DependencyLockError):
                         operation(lock)
+
+    def test_schema_error_paths_are_stable_across_python_hash_seeds(self) -> None:
+        script = """
+from binance_spot_strategy.identity import (
+    DependencyLockError,
+    load_semantic_dependency_lock,
+    semantic_dependency_lock_hash,
+)
+
+
+def error_text(lock):
+    try:
+        semantic_dependency_lock_hash(lock)
+    except DependencyLockError as exc:
+        return str(exc)
+    raise AssertionError("invalid lock unexpectedly passed")
+
+
+source_lock = load_semantic_dependency_lock()
+source_lock["source_hash_convention"]["digest_encoding"] = 1
+source_lock["source_hash_convention"]["logical_path"] = 2
+print(error_text(source_lock))
+
+float_lock = load_semantic_dependency_lock()
+float_lock["float64"]["dig"] = "bad"
+float_lock["float64"]["radix"] = "bad"
+print(error_text(float_lock))
+"""
+        expected = (
+            "invalid semantic dependency lock at "
+            "source_hash_convention.digest_encoding: must be a nonempty string\n"
+            "invalid semantic dependency lock at float64.dig: must be an integer"
+        )
+        repository_root = Path(__file__).resolve().parents[2]
+        outputs = []
+        for seed in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            environment = os.environ.copy()
+            environment["PYTHONHASHSEED"] = seed
+            completed = subprocess.run(
+                [sys.executable, "-B", "-c", script],
+                cwd=repository_root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            outputs.append(completed.stdout.strip())
+        self.assertEqual(outputs, [expected] * len(outputs))
 
     def test_missing_distribution_record_fails_closed_at_record_path(self) -> None:
         import importlib.metadata
