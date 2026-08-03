@@ -1,0 +1,77 @@
+{
+  "candidate": {
+    "schema_version": "candidate_manifest_v1",
+    "numeric_protocol_version": "numeric_protocol_v1",
+    "design_revision_sha256": "18adf5fd56177354e5e4194a416ae1c9de5a4371ae6c6872783cb08d7a3026a0",
+    "baseline": {"id": "baseline_a", "semantic_version": "0.1.0"},
+    "conventions": {
+      "universe": ["BTCUSDT", "ETHUSDT"],
+      "bar_interval": "4h",
+      "decision_timing": "closed_bar_only",
+      "formal_starting_balance": "500.000000000000000000"
+    },
+    "contracts": [
+      {"role": "strategy", "sha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+      {"role": "risk", "sha256": "2222222222222222222222222222222222222222222222222222222222222222"},
+      {"role": "cost", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"},
+      {"role": "accounting", "sha256": "4444444444444444444444444444444444444444444444444444444444444444"},
+      {"role": "metric", "sha256": "5555555555555555555555555555555555555555555555555555555555555555"},
+      {"role": "selection", "sha256": "6666666666666666666666666666666666666666666666666666666666666666"}
+    ],
+    "baseline_strategy_module": {
+      "role": "baseline_strategy",
+      "logical_name": "binance_spot_strategy.strategies.baseline_a",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "shared_modules": [
+      {"role": "indicator", "logical_name": "binance_spot_strategy.synthetic.indicator", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+      {"role": "strategy_support", "logical_name": "binance_spot_strategy.synthetic.strategy_support", "sha256": "9999999999999999999999999999999999999999999999999999999999999999"},
+      {"role": "risk", "logical_name": "binance_spot_strategy.synthetic.risk", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"role": "cost", "logical_name": "binance_spot_strategy.synthetic.cost", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      {"role": "accounting", "logical_name": "binance_spot_strategy.synthetic.accounting", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+      {"role": "metric", "logical_name": "binance_spot_strategy.synthetic.metric", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+      {"role": "selection", "logical_name": "binance_spot_strategy.synthetic.selection", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
+    ],
+    "protocols": {
+      "canonical_json_version": "canonical_json_v1",
+      "canonical_protocol_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "numeric_protocol_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "golden_vectors_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "semantic_dependency_lock_sha256": "7d7c3124979b3a217b401e1e975fab8d97f837b4e7c9d732cfbeb1ea1cc74ca8"
+    }
+  },
+  "historical_run": {
+    "schema_version": "historical_run_manifest_v1",
+    "numeric_protocol_version": "numeric_protocol_v1",
+    "candidate_strategy_fingerprint": "b5d1981da1427653c76a6cfc3504f15a5bf88b813b34029eb56ab1ec5b2d59ad",
+    "business_artifact_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "business_source_tree_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_commit": "0123456789abcdef0123456789abcdef01234567",
+    "dependency_lock_sha256": "7d7c3124979b3a217b401e1e975fab8d97f837b4e7c9d732cfbeb1ea1cc74ca8",
+    "runtime_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "broker_adapter": {"role": "broker_adapter", "logical_name": "synthetic_historical_broker", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    "stage_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "execution_manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "environment_contract_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "input": {"kind": "historical", "immutable_raw_data_manifest_sha256": "2222222222222222222222222222222222222222222222222222222222222222"}
+  },
+  "paper_run": {
+    "schema_version": "paper_run_manifest_v1",
+    "numeric_protocol_version": "numeric_protocol_v1",
+    "candidate_strategy_fingerprint": "b5d1981da1427653c76a6cfc3504f15a5bf88b813b34029eb56ab1ec5b2d59ad",
+    "business_artifact_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "business_source_tree_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_commit": "0123456789abcdef0123456789abcdef01234567",
+    "dependency_lock_sha256": "7d7c3124979b3a217b401e1e975fab8d97f837b4e7c9d732cfbeb1ea1cc74ca8",
+    "runtime_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "broker_adapter": {"role": "broker_adapter", "logical_name": "synthetic_paper_broker", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"},
+    "stage_manifest_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "execution_manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "environment_contract_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "input": {
+      "kind": "paper",
+      "paper_startup_semantic_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+      "feed_contract_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  }
+}
