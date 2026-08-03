@@ -30,6 +30,16 @@ class StringSubclass(str):
     pass
 
 
+class MutableDecimal(Decimal):
+    def __new__(cls, value: str) -> "MutableDecimal":
+        instance = super().__new__(cls, value)
+        instance.rendered = value
+        return instance
+
+    def __format__(self, format_spec: str) -> str:
+        return self.rendered
+
+
 class ManifestSubclass(CandidateManifestV1):
     pass
 
@@ -297,6 +307,42 @@ class FingerprintTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             run_fingerprint(candidate)
         self.assertIsInstance(historical, RunCommonV1)
+
+    def test_mutable_decimal_cannot_change_a_frozen_candidate_fingerprint(self) -> None:
+        candidate = candidate_manifest_from_payload(self.candidate_payload)
+        mutable = MutableDecimal("500.000000000000000000")
+        try:
+            malicious_balance = Q18(mutable)
+        except TypeError:
+            return
+        direct_fields = {
+            "schema_version": candidate.schema_version,
+            "numeric_protocol_version": candidate.numeric_protocol_version,
+            "design_revision_sha256": candidate.design_revision_sha256,
+            "baseline_id": candidate.baseline_id,
+            "baseline_semantic_version": candidate.baseline_semantic_version,
+            "universe": candidate.universe,
+            "bar_interval": candidate.bar_interval,
+            "decision_timing": candidate.decision_timing,
+            "formal_starting_balance": malicious_balance,
+            "contracts": candidate.contracts,
+            "baseline_strategy_module": candidate.baseline_strategy_module,
+            "shared_modules": candidate.shared_modules,
+            "canonical_json_version": candidate.canonical_json_version,
+            "canonical_protocol_sha256": candidate.canonical_protocol_sha256,
+            "numeric_protocol_sha256": candidate.numeric_protocol_sha256,
+            "golden_vectors_sha256": candidate.golden_vectors_sha256,
+            "semantic_dependency_lock_sha256": candidate.semantic_dependency_lock_sha256,
+        }
+
+        malicious = CandidateManifestV1(**direct_fields)
+        original_fingerprint = candidate_strategy_fingerprint(malicious)
+        mutable.rendered = "501.000000000000000000"
+        self.assertEqual(
+            candidate_strategy_fingerprint(malicious),
+            original_fingerprint,
+            "a frozen candidate fingerprint must not change after construction",
+        )
 
     def test_to_payload_is_exact_and_does_not_leak_metadata(self) -> None:
         candidate = candidate_manifest_from_payload(self.candidate_payload)

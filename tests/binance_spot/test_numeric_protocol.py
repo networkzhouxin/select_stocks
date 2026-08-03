@@ -38,6 +38,10 @@ from binance_spot_strategy.protocols import (
 from binance_spot_strategy.protocols import numeric_v1
 
 
+class DecimalSubclass(Decimal):
+    pass
+
+
 class NumericProtocolTests(unittest.TestCase):
     def test_fixture_declares_the_approved_protocol_versions(self) -> None:
         self.assertEqual(VECTORS["schema_version"], "numeric_protocol_vectors_v1")
@@ -98,6 +102,10 @@ class NumericProtocolTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(NumericProtocolError):
                     Q18(invalid)
+
+    def test_q18_public_constructor_rejects_decimal_subclasses(self) -> None:
+        with self.assertRaises(TypeError):
+            Q18(DecimalSubclass("1.000000000000000000"))
 
     def test_canonical_q18_parser_requires_canonical_text(self) -> None:
         self.assertEqual(

@@ -51,7 +51,7 @@ class Q18:
     value: Decimal
 
     def __post_init__(self) -> None:
-        if not isinstance(self.value, Decimal):
+        if type(self.value) is not Decimal:
             raise TypeError("Q18 value must be Decimal")
         if not self.value.is_finite():
             raise NumericProtocolError("Q18 value must be finite")
