@@ -1,0 +1,8 @@
+{
+  "schema_version": "canonical_records_fixture_v1",
+  "numeric_protocol_version": "numeric_protocol_v1",
+  "primary_expected_utf8": "{\"amount\":\"1.005000000000000000\",\"items\":[\"ETHUSDT\",\"BTCUSDT\"],\"name\":\"Café\",\"numeric_protocol_version\":\"numeric_protocol_v1\",\"schema_version\":\"test_v1\"}",
+  "primary_expected_sha256": "af8caff70bb766eeb44a352274b84f9818442374281722c947acdf1b87e82745",
+  "unicode_expected_utf8": "{\"a\":\"1.000000000000000000\",\"numeric_protocol_version\":\"numeric_protocol_v1\",\"schema_version\":\"golden_v1\",\"z\":[\"ETHUSDT\",\"BTCUSDT\"],\"é\":\"Café\"}",
+  "unicode_expected_sha256": "679c36854682695f528e450a90e9b9921662825653ce86fc35d5bd0894804279"
+}
