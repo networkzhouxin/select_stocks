@@ -43,7 +43,7 @@ def sha256_tracked_text(path: str | Path) -> str:
 def require_sha256(value: object, path: str = "sha256") -> str:
     """Return a digest only if it uses canonical lowercase hex encoding."""
 
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise TypeError(f"{path} must be a lowercase SHA-256 digest")
     if _SHA256_RE.fullmatch(value) is None:
         raise ValueError(f"{path} must be a lowercase SHA-256 digest")

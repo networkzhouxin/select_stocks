@@ -25,6 +25,15 @@ EXPECTED_LOCK_HASH = (
 )
 
 
+class AlwaysEqual:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+
+class DigestStringSubclass(str):
+    pass
+
+
 class DigestTests(unittest.TestCase):
     def test_sha256_bytes_and_raw_file_hash_exact_bytes(self) -> None:
         expected = (
@@ -39,7 +48,13 @@ class DigestTests(unittest.TestCase):
     def test_require_sha256_rejects_noncanonical_digests(self) -> None:
         canonical = "a" * 64
         self.assertEqual(require_sha256(canonical), canonical)
-        for invalid in (canonical.upper(), "a" * 63, "g" * 64, 123):
+        for invalid in (
+            canonical.upper(),
+            "a" * 63,
+            "g" * 64,
+            123,
+            DigestStringSubclass(canonical),
+        ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises((TypeError, ValueError)):
                     require_sha256(invalid)
@@ -203,6 +218,50 @@ class DependencyLockTests(unittest.TestCase):
                 with self.assertRaises(DependencyLockError):
                     operation(lock)
 
+    def test_constant_and_digest_boundaries_reject_equality_bypasses(self) -> None:
+        original = load_semantic_dependency_lock()
+        mutations = []
+
+        for field in ("schema_version", "numeric_protocol_version"):
+            non_string = deepcopy(original)
+            non_string[field] = AlwaysEqual()
+            mutations.append(non_string)
+            string_subclass = deepcopy(original)
+            string_subclass[field] = DigestStringSubclass(string_subclass[field])
+            mutations.append(string_subclass)
+
+        for field in original["source_hash_convention"]:
+            lock = deepcopy(original)
+            lock["source_hash_convention"][field] = DigestStringSubclass(
+                lock["source_hash_convention"][field]
+            )
+            mutations.append(lock)
+
+        normalization = deepcopy(original)
+        normalization["unicode"]["normalization"] = DigestStringSubclass("NFC")
+        mutations.append(normalization)
+
+        digest_paths = (
+            ("design_revision_sha256",),
+            ("requirements_lock_sha256",),
+            ("python", "executable_sha256"),
+            ("decimal", "extension_sha256"),
+            ("distributions", 0, "record_sha256"),
+        )
+        for path in digest_paths:
+            lock = deepcopy(original)
+            target = lock
+            for component in path[:-1]:
+                target = target[component]
+            target[path[-1]] = DigestStringSubclass(target[path[-1]])
+            mutations.append(lock)
+
+        for index, lock in enumerate(mutations):
+            for operation in (semantic_dependency_lock_hash, verify_current_runtime):
+                with self.subTest(index=index, operation=operation.__name__):
+                    with self.assertRaises(DependencyLockError):
+                        operation(lock)
+
     def test_missing_distribution_record_fails_closed_at_record_path(self) -> None:
         import importlib.metadata
 
@@ -259,6 +318,105 @@ class DependencyLockTests(unittest.TestCase):
             with self.assertRaises(DependencyLockError) as raised:
                 verify_current_runtime(load_semantic_dependency_lock())
         self.assertIn("distributions.numpy.record_sha256", str(raised.exception))
+
+    def test_distribution_version_property_error_is_collected_without_os_text(self) -> None:
+        import importlib.metadata
+
+        real_distribution = importlib.metadata.distribution
+        real_numpy = real_distribution("numpy")
+
+        class BrokenVersionDistribution:
+            files = real_numpy.files
+
+            @property
+            def version(self) -> str:
+                raise OSError("VOLATILE C:\\private\\python")
+
+            @staticmethod
+            def locate_file(path: object) -> Path:
+                return real_numpy.locate_file(path)
+
+        def distribution(name: str):
+            if name == "numpy":
+                return BrokenVersionDistribution()
+            return real_distribution(name)
+
+        lock = deepcopy(load_semantic_dependency_lock())
+        lock["unicode"]["database_version"] = "0.0.0"
+        with patch(
+            "binance_spot_strategy.identity.dependency_lock_v1.metadata.distribution",
+            side_effect=distribution,
+        ):
+            with self.assertRaises(DependencyLockError) as raised:
+                verify_current_runtime(lock)
+        self.assertEqual(
+            str(raised.exception),
+            "semantic dependency drift: distributions.numpy.version, "
+            "unicode.database_version",
+        )
+        self.assertNotIn("VOLATILE", str(raised.exception))
+        self.assertNotIn("private", str(raised.exception))
+
+    def test_distribution_files_property_error_maps_to_record_path(self) -> None:
+        import importlib.metadata
+
+        real_distribution = importlib.metadata.distribution
+        real_numpy = real_distribution("numpy")
+
+        class BrokenFilesDistribution:
+            version = real_numpy.version
+
+            @property
+            def files(self) -> list[Path]:
+                raise OSError("VOLATILE files")
+
+        def distribution(name: str):
+            if name == "numpy":
+                return BrokenFilesDistribution()
+            return real_distribution(name)
+
+        with patch(
+            "binance_spot_strategy.identity.dependency_lock_v1.metadata.distribution",
+            side_effect=distribution,
+        ):
+            with self.assertRaises(DependencyLockError) as raised:
+                verify_current_runtime(load_semantic_dependency_lock())
+        self.assertEqual(
+            str(raised.exception),
+            "semantic dependency drift: distributions.numpy.record_sha256",
+        )
+        self.assertNotIn("VOLATILE", str(raised.exception))
+
+    def test_distribution_locate_file_error_maps_to_record_path(self) -> None:
+        import importlib.metadata
+
+        real_distribution = importlib.metadata.distribution
+        real_numpy = real_distribution("numpy")
+
+        class BrokenLocateDistribution:
+            version = real_numpy.version
+            files = real_numpy.files
+
+            @staticmethod
+            def locate_file(path: object) -> Path:
+                raise OSError("VOLATILE locate")
+
+        def distribution(name: str):
+            if name == "numpy":
+                return BrokenLocateDistribution()
+            return real_distribution(name)
+
+        with patch(
+            "binance_spot_strategy.identity.dependency_lock_v1.metadata.distribution",
+            side_effect=distribution,
+        ):
+            with self.assertRaises(DependencyLockError) as raised:
+                verify_current_runtime(load_semantic_dependency_lock())
+        self.assertEqual(
+            str(raised.exception),
+            "semantic dependency drift: distributions.numpy.record_sha256",
+        )
+        self.assertNotIn("VOLATILE", str(raised.exception))
 
 
 if __name__ == "__main__":

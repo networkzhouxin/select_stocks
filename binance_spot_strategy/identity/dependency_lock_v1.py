@@ -156,9 +156,13 @@ def _validate_digest(value: object, path: str) -> None:
 
 def _validate_semantic_dependency_lock(lock: object) -> dict[str, Any]:
     root = _require_exact_object(lock, _TOP_LEVEL_KEYS, "$.")
-    if root["schema_version"] != "semantic_dependency_lock_v1":
+    schema_version = _require_string(root["schema_version"], "schema_version")
+    if schema_version != "semantic_dependency_lock_v1":
         _schema_error("schema_version", "must equal semantic_dependency_lock_v1")
-    if root["numeric_protocol_version"] != "numeric_protocol_v1":
+    numeric_protocol_version = _require_string(
+        root["numeric_protocol_version"], "numeric_protocol_version"
+    )
+    if numeric_protocol_version != "numeric_protocol_v1":
         _schema_error("numeric_protocol_version", "must equal numeric_protocol_v1")
     _validate_digest(root["design_revision_sha256"], "design_revision_sha256")
     _validate_digest(root["requirements_lock_sha256"], "requirements_lock_sha256")
@@ -166,6 +170,8 @@ def _validate_semantic_dependency_lock(lock: object) -> dict[str, Any]:
     source = _require_exact_object(
         root["source_hash_convention"], _SOURCE_KEYS, "source_hash_convention"
     )
+    for field in _SOURCE_KEYS:
+        _require_string(source[field], f"source_hash_convention.{field}")
     if source != _SOURCE_CONVENTION:
         _schema_error(
             "source_hash_convention", "must equal the source hash convention v1"
@@ -212,7 +218,10 @@ def _validate_semantic_dependency_lock(lock: object) -> dict[str, Any]:
 
     unicode_lock = _require_exact_object(root["unicode"], _UNICODE_KEYS, "unicode")
     _require_string(unicode_lock["database_version"], "unicode.database_version")
-    if unicode_lock["normalization"] != "NFC":
+    normalization = _require_string(
+        unicode_lock["normalization"], "unicode.normalization"
+    )
+    if normalization != "NFC":
         _schema_error("unicode.normalization", "must equal NFC")
 
     distributions = _require_list(root["distributions"], "distributions")
@@ -317,20 +326,20 @@ def semantic_dependency_lock_hash(lock: object) -> str:
 
 
 def _distribution_record_hash(distribution: Any) -> str | None:
-    files = distribution.files
-    if type(files) is not list:
-        return None
-    records = [
-        item
-        for item in files
-        if str(item).replace("\\", "/").endswith(".dist-info/RECORD")
-    ]
-    if len(records) != 1:
-        return None
     try:
+        files = distribution.files
+        if type(files) is not list:
+            return None
+        records = [
+            item
+            for item in files
+            if str(item).replace("\\", "/").endswith(".dist-info/RECORD")
+        ]
+        if len(records) != 1:
+            return None
         record_path = distribution.locate_file(records[0])
         return sha256_raw_file(record_path)
-    except (OSError, TypeError, ValueError):
+    except Exception:
         return None
 
 
@@ -478,11 +487,15 @@ def verify_current_runtime(lock: object) -> None:
         except Exception:
             drift_paths.update((version_path, record_path))
             continue
+        try:
+            installed_version = installed.version
+        except Exception:
+            installed_version = None
         _compare(
             drift_paths,
             version_path,
             distribution_lock["version"],
-            installed.version,
+            installed_version,
         )
         record_hash = _distribution_record_hash(installed)
         _compare(
