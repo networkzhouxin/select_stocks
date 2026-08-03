@@ -1,4 +1,5 @@
 from collections import UserDict
+from collections.abc import Mapping
 from decimal import Decimal
 import hashlib
 import json
@@ -12,6 +13,7 @@ with FIXTURE_PATH.open("r", encoding="utf-8") as fixture_file:
 
 from binance_spot_strategy.protocols import (
     CanonicalJsonError,
+    Q18,
     canonical_hashed_payload_bytes,
     canonical_json_bytes,
     quantize_q18,
@@ -21,6 +23,76 @@ from binance_spot_strategy.protocols import (
 class UnsupportedObject:
     def __str__(self) -> str:
         return "must-not-be-serialized"
+
+
+class AlwaysEqualStr(str):
+    def __eq__(self, other: object) -> bool:
+        return True
+
+
+class StringSubclass(str):
+    pass
+
+
+class IntSubclass(int):
+    pass
+
+
+class ListSubclass(list):
+    pass
+
+
+class TupleSubclass(tuple):
+    pass
+
+
+class Q18Subclass(Q18):
+    pass
+
+
+class SplitViewMapping(Mapping):
+    def __getitem__(self, key: str) -> object:
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(("actual",))
+
+    def __len__(self) -> int:
+        return 1
+
+    def get(self, key: str, default: object = None) -> object:
+        if key == "schema_version":
+            return "split_v1"
+        if key == "numeric_protocol_version":
+            return "numeric_protocol_v1"
+        return default
+
+    def items(self):
+        return (("actual", 1),)
+
+
+class ItemsOnlyVersionMapping(Mapping):
+    def __init__(self) -> None:
+        self.items_calls = 0
+
+    def __getitem__(self, key: str) -> object:
+        raise AssertionError("hashed encoding must not call get or __getitem__")
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self) -> int:
+        return 3
+
+    def items(self):
+        self.items_calls += 1
+        if self.items_calls != 1:
+            raise AssertionError("items must be observed exactly once")
+        return (
+            ("schema_version", "snapshot_v1"),
+            ("numeric_protocol_version", "numeric_protocol_v1"),
+            ("value", 1),
+        )
 
 
 class CanonicalJsonTests(unittest.TestCase):
@@ -131,6 +203,60 @@ class CanonicalJsonTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 with self.assertRaises(CanonicalJsonError):
                     canonical_hashed_payload_bytes(payload)
+
+    def test_hashed_payload_validates_and_encodes_one_normalized_snapshot(self) -> None:
+        with self.assertRaises(CanonicalJsonError):
+            canonical_hashed_payload_bytes(SplitViewMapping())
+
+        payload = ItemsOnlyVersionMapping()
+        self.assertEqual(
+            canonical_hashed_payload_bytes(payload),
+            b'{"numeric_protocol_version":"numeric_protocol_v1","schema_version":"snapshot_v1","value":1}',
+        )
+        self.assertEqual(payload.items_calls, 1)
+
+    def test_hashed_versions_require_exact_builtin_strings(self) -> None:
+        payload = {
+            "schema_version": "test_v1",
+            "numeric_protocol_version": AlwaysEqualStr("wrong_numeric"),
+        }
+        with self.assertRaises(CanonicalJsonError):
+            canonical_hashed_payload_bytes(payload)
+
+    def test_builtin_value_and_key_subclasses_never_reach_json_encoder(self) -> None:
+        forbidden_values = (
+            StringSubclass("value"),
+            IntSubclass(1),
+            ListSubclass([1]),
+            TupleSubclass((1,)),
+            Q18Subclass(Decimal("1.000000000000000000")),
+        )
+        for value in forbidden_values:
+            with self.subTest(value_type=type(value).__name__):
+                with self.assertRaises(CanonicalJsonError):
+                    canonical_json_bytes({"value": value})
+        with self.assertRaises(CanonicalJsonError):
+            canonical_json_bytes({StringSubclass("key"): "value"})
+
+    def test_lone_surrogates_are_reported_as_canonical_json_errors(self) -> None:
+        for payload in (
+            {"value": "\ud800"},
+            {"\ud800": "value"},
+        ):
+            with self.subTest(position=tuple(payload)):
+                with self.assertRaises(CanonicalJsonError):
+                    canonical_json_bytes(payload)
+
+    def test_recursive_payload_is_reported_as_canonical_json_error(self) -> None:
+        recursive = []
+        recursive.append(recursive)
+        with self.assertRaises(CanonicalJsonError):
+            canonical_json_bytes({"value": recursive})
+
+    def test_encoder_integer_limit_is_reported_as_canonical_json_error(self) -> None:
+        huge_integer = 10**5000
+        with self.assertRaises(CanonicalJsonError):
+            canonical_json_bytes({"value": huge_integer})
 
     def test_hashed_payload_preserves_hash_fields(self) -> None:
         actual = canonical_hashed_payload_bytes(

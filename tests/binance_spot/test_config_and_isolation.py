@@ -14,6 +14,19 @@ _INTRODUCED_MODULES = set(sys.modules).difference(_MODULES_BEFORE_IMPORT)
 UTC = timezone.utc
 
 
+class AlwaysEqual:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+
+class IntSubclass(int):
+    pass
+
+
+class DatetimeSubclass(datetime):
+    pass
+
+
 class ConfigAndIsolationTests(unittest.TestCase):
     def test_package_import_does_not_introduce_cross_signal_strategy_modules(self) -> None:
         offending_modules = tuple(
@@ -99,6 +112,49 @@ class ConfigAndIsolationTests(unittest.TestCase):
                 datetime(2018, 1, 1, tzinfo=UTC),
                 datetime(2022, 1, 1, tzinfo=UTC),
                 warmup_bars=539,
+            )
+
+    def test_stage_window_public_constructor_requires_exact_types(self) -> None:
+        start = datetime(2018, 1, 1, tzinfo=UTC)
+        end = datetime(2022, 1, 1, tzinfo=UTC)
+        invalid_arguments = (
+            ("training", start, end, 540),
+            (
+                frozen.StageName.TRAINING,
+                DatetimeSubclass(2018, 1, 1, tzinfo=UTC),
+                end,
+                540,
+            ),
+            (
+                frozen.StageName.TRAINING,
+                start,
+                DatetimeSubclass(2022, 1, 1, tzinfo=UTC),
+                540,
+            ),
+            (frozen.StageName.TRAINING, start, end, AlwaysEqual()),
+            (frozen.StageName.TRAINING, start, end, IntSubclass(540)),
+        )
+        for name, invalid_start, invalid_end, warmup_bars in invalid_arguments:
+            with self.subTest(
+                name_type=type(name).__name__,
+                start_type=type(invalid_start).__name__,
+                end_type=type(invalid_end).__name__,
+                warmup_type=type(warmup_bars).__name__,
+            ):
+                with self.assertRaises((TypeError, ValueError)):
+                    frozen.StageWindow(
+                        name,
+                        invalid_start,
+                        invalid_end,
+                        warmup_bars=warmup_bars,
+                    )
+
+    def test_stage_window_admits_requires_exact_datetime_types(self) -> None:
+        training = frozen.STAGE_WINDOWS[0]
+        with self.assertRaises((TypeError, ValueError)):
+            training.admits(
+                DatetimeSubclass(2021, 1, 1, tzinfo=UTC),
+                datetime(2021, 1, 1, 4, tzinfo=UTC),
             )
 
     def test_stage_window_rejects_naive_bar_times(self) -> None:

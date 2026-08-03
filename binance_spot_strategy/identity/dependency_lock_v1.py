@@ -123,6 +123,12 @@ def _require_string(value: object, path: str) -> str:
     if type(value) is not str or not value:
         _schema_error(path, "must be a nonempty string")
     assert isinstance(value, str)
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise DependencyLockError(
+            f"invalid semantic dependency lock at {path}: must contain only Unicode scalar values"
+        ) from exc
     return value
 
 
@@ -258,6 +264,12 @@ def _reject_json_constant(_: str) -> NoReturn:
 def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
+        try:
+            key.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise DependencyLockError(
+                "invalid semantic dependency lock JSON: object key is not a Unicode scalar string"
+            ) from exc
         if key in result:
             raise DependencyLockError(
                 f"invalid semantic dependency lock JSON: duplicate key {key!r}"
@@ -308,13 +320,17 @@ def load_semantic_dependency_lock(path: str | Path | None = None) -> dict[str, A
             parse_float=_reject_json_number,
             parse_constant=_reject_json_constant,
         )
+        _reject_nulls(lock)
     except DependencyLockError:
         raise
     except json.JSONDecodeError as exc:
         raise DependencyLockError(
             "invalid semantic dependency lock JSON: malformed document"
         ) from exc
-    _reject_nulls(lock)
+    except (ValueError, RecursionError) as exc:
+        raise DependencyLockError(
+            "invalid semantic dependency lock JSON: parser limit exceeded"
+        ) from exc
     return _validate_semantic_dependency_lock(lock)
 
 
@@ -346,7 +362,7 @@ def _distribution_record_hash(distribution: Any) -> str | None:
 def _compare(
     drift_paths: set[str], path: str, expected: object, actual: object
 ) -> None:
-    if actual != expected or type(actual) is not type(expected):
+    if type(actual) is not type(expected) or actual != expected:
         drift_paths.add(path)
 
 

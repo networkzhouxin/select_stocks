@@ -42,6 +42,19 @@ class DecimalSubclass(Decimal):
     pass
 
 
+class RedirectDecimal(Decimal):
+    def quantize(self, *args: object, **kwargs: object) -> Decimal:
+        return Decimal("9.000000000000000000")
+
+
+class StringSubclass(str):
+    pass
+
+
+class Q18Subclass(Q18):
+    pass
+
+
 class NumericProtocolTests(unittest.TestCase):
     def test_fixture_declares_the_approved_protocol_versions(self) -> None:
         self.assertEqual(VECTORS["schema_version"], "numeric_protocol_vectors_v1")
@@ -106,6 +119,24 @@ class NumericProtocolTests(unittest.TestCase):
     def test_q18_public_constructor_rejects_decimal_subclasses(self) -> None:
         with self.assertRaises(TypeError):
             Q18(DecimalSubclass("1.000000000000000000"))
+
+    def test_public_numeric_inputs_require_exact_builtin_protocol_types(self) -> None:
+        with self.assertRaises(TypeError):
+            parse_finite_decimal(StringSubclass("1.0"))
+        with self.assertRaises(TypeError):
+            parse_canonical_q18(StringSubclass("1.000000000000000000"))
+        with self.assertRaises(TypeError):
+            format_q18(Q18Subclass(Decimal("1.000000000000000000")))
+
+    def test_redirect_decimal_cannot_control_quantization_or_grid_floor(self) -> None:
+        redirected_value = RedirectDecimal("1")
+        redirected_step = RedirectDecimal("0.1")
+        with self.assertRaises(TypeError):
+            quantize_q18(redirected_value)
+        with self.assertRaises(TypeError):
+            floor_positive_to_step(redirected_value, Decimal("0.1"))
+        with self.assertRaises(TypeError):
+            floor_positive_to_step(Decimal("1"), redirected_step)
 
     def test_canonical_q18_parser_requires_canonical_text(self) -> None:
         self.assertEqual(

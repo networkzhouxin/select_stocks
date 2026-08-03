@@ -15,7 +15,9 @@ class StageName(StrEnum):
 
 
 def _require_utc(value: datetime, name: str) -> None:
-    if not isinstance(value, datetime) or value.tzinfo is not timezone.utc:
+    if type(value) is not datetime:
+        raise TypeError(f"{name} must be exact datetime")
+    if value.tzinfo is not timezone.utc:
         raise ValueError(f"{name} must use timezone.utc")
 
 
@@ -29,10 +31,14 @@ class StageWindow:
     warmup_bars: int = 540
 
     def __post_init__(self) -> None:
+        if type(self.name) is not StageName:
+            raise TypeError("name must be StageName")
         _require_utc(self.start, "start")
         _require_utc(self.end, "end")
         if self.end <= self.start:
             raise ValueError("stage end must be after start")
+        if type(self.warmup_bars) is not int:
+            raise TypeError("warmup_bars must be exact int")
         if self.warmup_bars != 540:
             raise ValueError("warmup_bars must equal 540")
 

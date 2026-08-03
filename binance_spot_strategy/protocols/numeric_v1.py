@@ -64,7 +64,7 @@ class Q18:
 def parse_finite_decimal(text: str) -> Decimal:
     """Parse exchange decimal text without rounding or scale relaxation."""
 
-    if not isinstance(text, str):
+    if type(text) is not str:
         raise TypeError("exchange decimal input must be str")
     if EXCHANGE_DECIMAL_RE.fullmatch(text) is None:
         raise NumericProtocolError("invalid exchange decimal text")
@@ -74,7 +74,7 @@ def parse_finite_decimal(text: str) -> Decimal:
 def quantize_q18(value: Decimal) -> Q18:
     """Round a finite Decimal to Q18 with protocol-local HALF_EVEN rules."""
 
-    if not isinstance(value, Decimal):
+    if type(value) is not Decimal:
         raise TypeError("Q18 quantization input must be Decimal")
     try:
         with localcontext(numeric_context()):
@@ -91,7 +91,7 @@ def quantize_q18(value: Decimal) -> Q18:
 def parse_canonical_q18(text: str) -> Q18:
     """Parse an already-canonical Q18 string without rounding it."""
 
-    if not isinstance(text, str):
+    if type(text) is not str:
         raise TypeError("canonical Q18 input must be str")
     if CANONICAL_Q18_RE.fullmatch(text) is None:
         raise NumericProtocolError("invalid canonical Q18 text")
@@ -104,7 +104,7 @@ def parse_canonical_q18(text: str) -> Q18:
 def format_q18(value: Q18) -> str:
     """Format only a validated Q18 value as fixed-point text."""
 
-    if not isinstance(value, Q18):
+    if type(value) is not Q18:
         raise TypeError("Q18 formatter input must be Q18")
     return format(value.value, "f")
 
@@ -130,7 +130,7 @@ def _digits_from_nonnegative_integer(value: int) -> tuple[int, ...]:
 
 
 def _require_positive_grid_operand(value: object, name: str) -> Decimal:
-    if not isinstance(value, Decimal):
+    if type(value) is not Decimal:
         raise TypeError(f"{name} must be Decimal")
     if not value.is_finite():
         raise NumericProtocolError(f"{name} must be finite")

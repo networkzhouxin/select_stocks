@@ -26,5 +26,14 @@ Deferred scope is explicit:
 - no formal candidate fingerprint or real Baseline A/B fingerprint was
   generated.
 
+M1 runtime attestation is deliberately limited. It freezes runtime versions,
+the exact `python.exe` and `_decimal` artifacts, and each distribution's raw
+`RECORD` bytes. It does not prove the actual content of every installed
+dependency file or standard-library file.
+
+Before any formal candidate is generated or any training begins, a complete
+source-execution and dependency-content attestation protocol must be frozen
+and pass.
+
 This package is not a complete Binance strategy and is not ready for real
 trading.

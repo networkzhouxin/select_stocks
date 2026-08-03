@@ -125,6 +125,12 @@ def _require_nonempty_string(value: object, path: str) -> str:
     if type(value) is not str or not value:
         _validation_error(path, "must be a nonempty string")
     assert isinstance(value, str)
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ManifestValidationError(
+            f"invalid identity manifest at {path}: must contain only Unicode scalar values"
+        ) from exc
     return value
 
 
@@ -298,17 +304,19 @@ class CandidateManifestV1:
                 "CandidateManifestV1.baseline_semantic_version",
                 "must be a semantic version",
             )
-        if type(self.universe) is not tuple or self.universe != (
-            "BTCUSDT",
-            "ETHUSDT",
-        ):
+        if type(self.universe) is not tuple:
             _validation_error(
                 "CandidateManifestV1.universe",
-                "must equal ('BTCUSDT', 'ETHUSDT')",
+                "must be a tuple",
             )
         if not all(type(symbol) is str for symbol in self.universe):
             _validation_error(
                 "CandidateManifestV1.universe", "must contain exact strings"
+            )
+        if self.universe != ("BTCUSDT", "ETHUSDT"):
+            _validation_error(
+                "CandidateManifestV1.universe",
+                "must equal ('BTCUSDT', 'ETHUSDT')",
             )
         _require_constant(
             self.bar_interval, "4h", "CandidateManifestV1.bar_interval"

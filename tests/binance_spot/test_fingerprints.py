@@ -9,6 +9,7 @@ from binance_spot_strategy.identity.manifests_v1 import (
     CandidateManifestV1,
     ContractDigest,
     HistoricalRunManifestV1,
+    ManifestValidationError,
     ModuleDigest,
     PaperRunManifestV1,
     RunCommonV1,
@@ -28,6 +29,11 @@ EXPECTED_PAPER = "5fbb792d5df25200720ba766349afa7a343855c750e20eb164eb90a6f6ef30
 
 class StringSubclass(str):
     pass
+
+
+class ExplodingString(str):
+    def __eq__(self, other: object) -> bool:
+        raise AssertionError("string subclass equality must not be observed")
 
 
 class MutableDecimal(Decimal):
@@ -223,6 +229,36 @@ class FingerprintTests(unittest.TestCase):
         for invalid in invalid_payloads:
             with self.assertRaises((TypeError, ValueError)):
                 candidate_manifest_from_payload(invalid)
+
+    def test_candidate_direct_universe_rejects_subclass_before_equality(self) -> None:
+        candidate = candidate_manifest_from_payload(self.candidate_payload)
+        direct_fields = {
+            "schema_version": candidate.schema_version,
+            "numeric_protocol_version": candidate.numeric_protocol_version,
+            "design_revision_sha256": candidate.design_revision_sha256,
+            "baseline_id": candidate.baseline_id,
+            "baseline_semantic_version": candidate.baseline_semantic_version,
+            "universe": (ExplodingString("BTCUSDT"), "ETHUSDT"),
+            "bar_interval": candidate.bar_interval,
+            "decision_timing": candidate.decision_timing,
+            "formal_starting_balance": candidate.formal_starting_balance,
+            "contracts": candidate.contracts,
+            "baseline_strategy_module": candidate.baseline_strategy_module,
+            "shared_modules": candidate.shared_modules,
+            "canonical_json_version": candidate.canonical_json_version,
+            "canonical_protocol_sha256": candidate.canonical_protocol_sha256,
+            "numeric_protocol_sha256": candidate.numeric_protocol_sha256,
+            "golden_vectors_sha256": candidate.golden_vectors_sha256,
+            "semantic_dependency_lock_sha256": candidate.semantic_dependency_lock_sha256,
+        }
+        with self.assertRaises(ManifestValidationError):
+            CandidateManifestV1(**direct_fields)
+
+    def test_manifest_parser_rejects_lone_surrogate_logical_names(self) -> None:
+        payload = deepcopy(self.candidate_payload)
+        payload["baseline_strategy_module"]["logical_name"] = "\ud800"
+        with self.assertRaises(ManifestValidationError):
+            candidate_manifest_from_payload(payload)
 
     def test_schema_and_input_discriminator_are_bound_as_exact_pairs(self) -> None:
         mutations = []

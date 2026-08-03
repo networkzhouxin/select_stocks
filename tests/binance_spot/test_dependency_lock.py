@@ -37,6 +37,14 @@ class DigestStringSubclass(str):
     pass
 
 
+class ExplodingComparisonString(str):
+    def __eq__(self, other: object) -> bool:
+        raise AssertionError("external equality must not run before exact type check")
+
+    def __ne__(self, other: object) -> bool:
+        raise AssertionError("external inequality must not run before exact type check")
+
+
 class DigestTests(unittest.TestCase):
     def test_sha256_bytes_and_raw_file_hash_exact_bytes(self) -> None:
         expected = (
@@ -110,6 +118,27 @@ class DependencyLockTests(unittest.TestCase):
         path.write_bytes(raw)
         return path
 
+    def test_parser_limit_exceptions_have_stable_dependency_lock_errors(self) -> None:
+        failures = (
+            ValueError("volatile integer limit detail"),
+            RecursionError("volatile recursion detail"),
+        )
+        with TemporaryDirectory() as directory:
+            path = self._write_lock(directory, b"{}")
+            for failure in failures:
+                with self.subTest(failure_type=type(failure).__name__):
+                    with patch(
+                        "binance_spot_strategy.identity.dependency_lock_v1.json.loads",
+                        side_effect=failure,
+                    ):
+                        with self.assertRaises(DependencyLockError) as raised:
+                            load_semantic_dependency_lock(path)
+                    self.assertEqual(
+                        str(raised.exception),
+                        "invalid semantic dependency lock JSON: parser limit exceeded",
+                    )
+                    self.assertIs(raised.exception.__cause__, failure)
+
     def test_checked_in_lock_has_frozen_semantic_hash(self) -> None:
         lock = load_semantic_dependency_lock()
         self.assertEqual(semantic_dependency_lock_hash(lock), EXPECTED_LOCK_HASH)
@@ -122,6 +151,19 @@ class DependencyLockTests(unittest.TestCase):
         lock["python"]["version"] = "3.13.5"
         with self.assertRaisesRegex(DependencyLockError, r"python\.version"):
             verify_current_runtime(lock)
+
+    def test_runtime_compare_checks_exact_type_before_external_equality(self) -> None:
+        lock = load_semantic_dependency_lock()
+        with patch(
+            "binance_spot_strategy.identity.dependency_lock_v1.platform.python_version",
+            return_value=ExplodingComparisonString(lock["python"]["version"]),
+        ):
+            with self.assertRaises(DependencyLockError) as raised:
+                verify_current_runtime(lock)
+        self.assertEqual(
+            str(raised.exception),
+            "semantic dependency drift: python.version",
+        )
 
     def test_all_drift_paths_are_sorted_into_one_error(self) -> None:
         lock = deepcopy(load_semantic_dependency_lock())
@@ -183,6 +225,45 @@ class DependencyLockTests(unittest.TestCase):
                 with self.subTest(index=index):
                     with self.assertRaises(DependencyLockError):
                         load_semantic_dependency_lock(path)
+
+    def test_json_loader_wraps_integer_limit_and_recursion_errors(self) -> None:
+        invalid_documents = (
+            b'{"value":' + (b"1" * 5000) + b"}",
+            (b"[" * 2000) + b"0" + (b"]" * 2000),
+        )
+        with TemporaryDirectory() as directory:
+            for index, raw in enumerate(invalid_documents):
+                path = self._write_lock(directory, raw)
+                with self.subTest(index=index):
+                    with self.assertRaises(DependencyLockError):
+                        load_semantic_dependency_lock(path)
+
+    def test_strict_lock_strings_reject_lone_surrogates(self) -> None:
+        lock = load_semantic_dependency_lock()
+        lock["python"]["version"] = "\ud800"
+        with self.assertRaises(DependencyLockError):
+            semantic_dependency_lock_hash(lock)
+
+        encoded_lock = json.dumps(
+            lock,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+        with TemporaryDirectory() as directory:
+            path = self._write_lock(directory, encoded_lock)
+            with self.assertRaises(DependencyLockError):
+                load_semantic_dependency_lock(path)
+
+    def test_json_object_key_surrogate_has_utf8_safe_protocol_error(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = self._write_lock(directory, b'{"\\ud800":null}')
+            with self.assertRaises(DependencyLockError) as raised:
+                load_semantic_dependency_lock(path)
+        self.assertEqual(
+            str(raised.exception),
+            "invalid semantic dependency lock JSON: object key is not a Unicode scalar string",
+        )
+        str(raised.exception).encode("utf-8")
 
     def test_schema_rejects_bool_for_int_tuple_for_array_and_bad_digest(self) -> None:
         original = load_semantic_dependency_lock()
