@@ -204,6 +204,23 @@ class TimestampAndBarContractTests(unittest.TestCase):
 
 
 class DecisionKeyContractTests(unittest.TestCase):
+    def test_decision_key_rejects_scope_id_subclass_that_skips_validation(self) -> None:
+        class UnvalidatedTrainingStageId(TrainingStageId):
+            def __post_init__(self) -> None:
+                pass
+
+        forged_scope_id = UnvalidatedTrainingStageId("bad scope id")
+
+        with self.assertRaises(TypeError):
+            DecisionKey(
+                "run-1",
+                ScopeType.TRAINING_STAGE,
+                forged_scope_id,
+                CANDIDATE_FINGERPRINT,
+                RUN_FINGERPRINT,
+                CLOSE_TIME,
+            )
+
     def test_scope_specific_keys_are_hashable_immutable_and_pairwise_unequal(self) -> None:
         keys = (
             DecisionKey(
@@ -300,6 +317,23 @@ class DecisionKeyContractTests(unittest.TestCase):
 
 
 class DecisionPlanContractTests(unittest.TestCase):
+    def test_decision_plan_rejects_signal_subclass_that_skips_validation(self) -> None:
+        class UnvalidatedSignalIntent(SignalIntent):
+            def __post_init__(self) -> None:
+                pass
+
+        forged_buy = UnvalidatedSignalIntent(
+            "signal-buy",
+            Symbol.BTCUSDT,
+            Side.BUY,
+            CLOSE_TIME,
+            "ranked-signal",
+            None,
+        )
+
+        with self.assertRaises(TypeError):
+            DecisionPlan(training_key(), "group-1", buy=forged_buy)
+
     def test_decision_plan_accepts_exactly_the_four_supported_shapes(self) -> None:
         key = training_key()
         sell = signal(Side.SELL)
@@ -390,6 +424,19 @@ class DecisionPlanContractTests(unittest.TestCase):
 
 
 class ExecutionGroupContractTests(unittest.TestCase):
+    def test_execution_group_rejects_duplicate_parent_and_child_intent_ids(self) -> None:
+        parent = order("same-intent", Side.SELL)
+        child = order(
+            "same-intent",
+            Side.BUY,
+            OrderState.BLOCKED,
+            symbol=Symbol.ETHUSDT,
+            depends_on=parent.intent_id,
+        )
+
+        with self.assertRaises(ValueError):
+            ExecutionGroup("group-1", (parent, child))
+
     def test_execution_group_accepts_pending_standalone_buy_or_sell(self) -> None:
         for side in (Side.BUY, Side.SELL):
             with self.subTest(side=side):
@@ -463,6 +510,58 @@ class ExecutionGroupContractTests(unittest.TestCase):
                     )
         with self.assertRaises(ValueError):
             order("intent-1", Side.BUY, depends_on="bad dependency")
+
+    def test_order_intent_rejects_q18_subclass_that_skips_validation(self) -> None:
+        class UnvalidatedQ18(Q18):
+            def __post_init__(self) -> None:
+                pass
+
+        forged_quantity = UnvalidatedQ18(Decimal("1"))
+
+        with self.assertRaises(TypeError):
+            OrderIntent(
+                "intent-1",
+                "group-1",
+                Symbol.BTCUSDT,
+                Side.BUY,
+                OrderState.PENDING,
+                forged_quantity,
+            )
+
+
+class ExactBuiltinBoundaryTests(unittest.TestCase):
+    def test_identifier_rejects_str_subclass(self) -> None:
+        class ForgedStr(str):
+            pass
+
+        with self.assertRaises(TypeError):
+            TrainingStageId(ForgedStr("train-1"))
+
+    def test_timestamp_rejects_datetime_subclass(self) -> None:
+        class ForgedDatetime(datetime):
+            pass
+
+        forged_time = ForgedDatetime(2026, 8, 1, tzinfo=timezone.utc)
+
+        with self.assertRaises(TypeError):
+            canonical_utc_timestamp(forged_time)
+
+    def test_bar_rejects_decimal_subclass(self) -> None:
+        class ForgedDecimal(Decimal):
+            pass
+
+        with self.assertRaises(TypeError):
+            Bar(
+                Symbol.BTCUSDT,
+                BarInterval.FOUR_HOURS,
+                OPEN_TIME,
+                CLOSE_TIME,
+                ForgedDecimal("100"),
+                Decimal("120"),
+                Decimal("90"),
+                Decimal("110"),
+                Decimal("5"),
+            )
 
 
 class PortfolioRecordContractTests(unittest.TestCase):

@@ -39,7 +39,7 @@ class ScopeType(str, Enum):
 
 
 def _require_identifier(value: object, name: str) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise TypeError(f"{name} must be str")
     if _IDENTIFIER_RE.fullmatch(value) is None:
         raise ValueError(f"{name} has invalid identifier grammar")
@@ -47,12 +47,12 @@ def _require_identifier(value: object, name: str) -> str:
 
 
 def _require_enum(value: object, enum_type: type[Enum], name: str) -> None:
-    if not isinstance(value, enum_type):
+    if type(value) is not enum_type:
         raise TypeError(f"{name} must be {enum_type.__name__}")
 
 
 def _require_canonical_utc(value: object, name: str) -> datetime:
-    if not isinstance(value, datetime):
+    if type(value) is not datetime:
         raise TypeError(f"{name} must be datetime")
     if value.tzinfo is not timezone.utc:
         raise ValueError(f"{name} must use timezone.utc")
@@ -62,7 +62,7 @@ def _require_canonical_utc(value: object, name: str) -> datetime:
 
 
 def _require_fingerprint(value: object, name: str) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise TypeError(f"{name} must be str")
     if _FINGERPRINT_RE.fullmatch(value) is None:
         raise ValueError(f"{name} must be lowercase 64-hex")
@@ -70,7 +70,7 @@ def _require_fingerprint(value: object, name: str) -> str:
 
 
 def _require_decimal(value: object, name: str) -> Decimal:
-    if not isinstance(value, Decimal):
+    if type(value) is not Decimal:
         raise TypeError(f"{name} must be Decimal")
     if not value.is_finite():
         raise ValueError(f"{name} must be finite")
@@ -78,7 +78,7 @@ def _require_decimal(value: object, name: str) -> Decimal:
 
 
 def _require_q18(value: object, name: str) -> Q18:
-    if not isinstance(value, Q18):
+    if type(value) is not Q18:
         raise TypeError(f"{name} must be Q18")
     return value
 
@@ -135,7 +135,7 @@ class DecisionKey:
             ScopeType.RESERVED_STAGE: StageActivationId,
             ScopeType.PAPER_EPOCH: PaperObservationEpochId,
         }[self.scope_type]
-        if not isinstance(self.scope_id, required_scope_id_type):
+        if type(self.scope_id) is not required_scope_id_type:
             raise TypeError(
                 f"scope_id must be {required_scope_id_type.__name__} "
                 f"for {self.scope_type.value}"
@@ -216,18 +216,18 @@ class DecisionPlan:
     buy: SignalIntent | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.decision_key, DecisionKey):
+        if type(self.decision_key) is not DecisionKey:
             raise TypeError("decision_key must be DecisionKey")
         _require_identifier(self.execution_group_id, "execution_group_id")
         if self.sell is not None:
-            if not isinstance(self.sell, SignalIntent):
+            if type(self.sell) is not SignalIntent:
                 raise TypeError("sell must be SignalIntent or None")
             if self.sell.side is not Side.SELL:
                 raise ValueError("sell slot requires a sell intent")
             if self.sell.bar_close_time != self.decision_key.bar_close_time:
                 raise ValueError("sell bar_close_time must match decision key")
         if self.buy is not None:
-            if not isinstance(self.buy, SignalIntent):
+            if type(self.buy) is not SignalIntent:
                 raise TypeError("buy must be SignalIntent or None")
             if self.buy.side is not Side.BUY:
                 raise ValueError("buy slot requires a buy intent")
@@ -274,10 +274,10 @@ class ExecutionGroup:
 
     def __post_init__(self) -> None:
         _require_identifier(self.execution_group_id, "execution_group_id")
-        if not isinstance(self.order_intents, tuple):
+        if type(self.order_intents) is not tuple:
             raise TypeError("order_intents must be tuple")
         if not all(
-            isinstance(intent, OrderIntent) for intent in self.order_intents
+            type(intent) is OrderIntent for intent in self.order_intents
         ):
             raise TypeError("order_intents must contain only OrderIntent")
         if not all(
@@ -298,6 +298,7 @@ class ExecutionGroup:
             if not (
                 parent.side is Side.SELL
                 and parent.state is OrderState.PENDING
+                and parent.intent_id != child.intent_id
                 and parent.depends_on_intent_id is None
                 and child.side is Side.BUY
                 and child.state is OrderState.BLOCKED
