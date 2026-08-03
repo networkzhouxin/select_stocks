@@ -146,6 +146,13 @@ def floor_positive_to_step(value: Decimal, step: Decimal) -> Q18:
 
     checked_value = _require_positive_grid_operand(value, "value")
     checked_step = _require_positive_grid_operand(step, "step")
+    if checked_value < checked_step:
+        return quantize_q18(Decimal(0))
+    maximum_integer_digits = (
+        numeric_context().prec + Q18_QUANTUM.as_tuple().exponent
+    )
+    if checked_value.adjusted() >= maximum_integer_digits:
+        raise NumericProtocolError("value cannot be represented as Q18")
     value_coefficient, value_exponent = _decimal_coefficient_and_exponent(
         checked_value
     )

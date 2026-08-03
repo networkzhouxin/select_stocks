@@ -13,6 +13,7 @@ from decimal import (
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -34,6 +35,7 @@ from binance_spot_strategy.protocols import (
     parse_finite_decimal,
     quantize_q18,
 )
+from binance_spot_strategy.protocols import numeric_v1
 
 
 class NumericProtocolTests(unittest.TestCase):
@@ -143,6 +145,31 @@ class NumericProtocolTests(unittest.TestCase):
             with self.subTest(value=value, step=step):
                 with self.assertRaises(NumericProtocolError):
                     floor_positive_to_step(value, step)
+
+    def test_grid_floor_rejects_huge_value_before_integer_alignment(self) -> None:
+        with patch.object(
+            numeric_v1,
+            "_decimal_coefficient_and_exponent",
+            side_effect=AssertionError("unsafe integer alignment entered"),
+        ):
+            with self.assertRaises(NumericProtocolError):
+                floor_positive_to_step(
+                    Decimal("1E+1000000000"),
+                    Decimal("1E-18"),
+                )
+
+    def test_grid_floor_short_circuits_value_below_huge_step_to_zero(self) -> None:
+        with patch.object(
+            numeric_v1,
+            "_decimal_coefficient_and_exponent",
+            side_effect=AssertionError("unsafe integer alignment entered"),
+        ):
+            actual = floor_positive_to_step(
+                Decimal("1E-18"),
+                Decimal("1E+1000000000"),
+            )
+
+        self.assertEqual(format_q18(actual), "0.000000000000000000")
 
     def test_quantization_is_independent_of_caller_context_across_threads(self) -> None:
         def quantize_tie(_: int) -> str:
