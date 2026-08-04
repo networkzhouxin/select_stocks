@@ -38,6 +38,21 @@ from .manifests_v1 import (
     run_fingerprint,
     run_manifest_from_payload,
 )
+from .source_execution_v1 import (
+    AttestedExecutionAdmissionV1,
+    AttestedExecutionSessionV1,
+    BusinessModuleBindingV1,
+    EntrypointBindingV1,
+    ExecutionClosureV1,
+    SourceExecutionPolicyV1,
+    SourceExecutionValidationError,
+    establish_attested_execution,
+    issue_m2_admission,
+    require_attested_m2_admission,
+    source_execution_policy_from_payload,
+    source_execution_policy_hash,
+    verify_execution_closure,
+)
 
 __all__ = (
     "ContentFileV1",
@@ -69,4 +84,17 @@ __all__ = (
     "sha256_raw_file",
     "sha256_tracked_text",
     "verify_current_runtime",
+    "AttestedExecutionAdmissionV1",
+    "AttestedExecutionSessionV1",
+    "BusinessModuleBindingV1",
+    "EntrypointBindingV1",
+    "ExecutionClosureV1",
+    "SourceExecutionPolicyV1",
+    "SourceExecutionValidationError",
+    "establish_attested_execution",
+    "issue_m2_admission",
+    "require_attested_m2_admission",
+    "source_execution_policy_from_payload",
+    "source_execution_policy_hash",
+    "verify_execution_closure",
 )
