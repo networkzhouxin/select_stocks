@@ -676,5 +676,183 @@ class DependencyContentFilesystemTests(unittest.TestCase):
         self.assertIn("reparse", str(raised.exception))
 
 
+class DependencyContentFixRoundOneTests(unittest.TestCase):
+    def test_no_importable_module_token_can_mint_verified_receipts(self) -> None:
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        self.assertFalse(hasattr(module, "_VERIFIER_TOKEN"))
+        self.assertFalse(hasattr(module, "_issue_verified_receipt"))
+        with self.assertRaises(TypeError):
+            VerifiedDependencyContentV1(object())
+
+    def test_authenticity_check_accepts_real_receipt_and_rejects_exact_type_forge(self) -> None:
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        with TemporaryDirectory() as directory:
+            fixture = SyntheticContentEnvironment(directory)
+            lock = _build_dependency_content_lock(fixture.environment)
+            real = _verify_dependency_contents_in_environment(
+                lock, fixture.environment
+            )
+        self.assertIs(module._require_verified_dependency_content(real), real)
+
+        forged = object.__new__(VerifiedDependencyContentV1)
+        object.__setattr__(forged, "_content_lock_hash", "0" * 64)
+        object.__setattr__(forged, "_trees", ())
+        with self.assertRaises(DependencyContentLockError):
+            module._require_verified_dependency_content(forged)
+
+    def test_receipt_material_from_another_process_is_rejected(self) -> None:
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        script = """
+import json
+import os
+from tempfile import TemporaryDirectory
+from tests.binance_spot.test_dependency_contents import SyntheticContentEnvironment
+from binance_spot_strategy.identity.dependency_contents_v1 import _build_dependency_content_lock, _verify_dependency_contents_in_environment
+with TemporaryDirectory() as directory:
+    fixture = SyntheticContentEnvironment(directory)
+    lock = _build_dependency_content_lock(fixture.environment)
+    receipt = _verify_dependency_contents_in_environment(lock, fixture.environment)
+print(json.dumps({"pid": os.getpid(), "content_lock_hash": receipt._content_lock_hash}))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", script],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        foreign_material = json.loads(completed.stdout)
+        self.assertNotEqual(foreign_material["pid"], os.getpid())
+        foreign = object.__new__(VerifiedDependencyContentV1)
+        object.__setattr__(
+            foreign, "_content_lock_hash", foreign_material["content_lock_hash"]
+        )
+        object.__setattr__(foreign, "_trees", ())
+        with self.assertRaises(DependencyContentLockError):
+            module._require_verified_dependency_content(foreign)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction contract")
+    def test_record_row_rejects_in_prefix_junction_before_resolve(self) -> None:
+        import _winapi
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        with TemporaryDirectory() as directory:
+            fixture = SyntheticContentEnvironment(directory)
+            target = fixture.prefix / "row-target"
+            target.mkdir()
+            target_file = target / "module.py"
+            target_file.write_bytes(b"alias")
+            junction = fixture.site_packages / "row-junction"
+            _winapi.CreateJunction(str(target), str(junction))
+            record = fixture.records["numpy"]
+            fixture.write_record(
+                record,
+                [
+                    fixture.record_row(target_file, "row-junction/module.py"),
+                    (
+                        record.relative_to(fixture.site_packages).as_posix(),
+                        "",
+                        "",
+                    ),
+                ],
+            )
+            numpy_input = fixture.environment.distributions[0]
+            with self.assertRaisesRegex(DependencyContentLockError, "reparse"):
+                module._parse_distribution(numpy_input, fixture.prefix.resolve())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows junction contract")
+    def test_record_file_rejects_in_prefix_junction_before_resolve(self) -> None:
+        import _winapi
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        with TemporaryDirectory() as directory:
+            fixture = SyntheticContentEnvironment(directory)
+            target_info = fixture.site_packages / "target-record.dist-info"
+            target_info.mkdir()
+            target_record = target_info / "RECORD"
+            fixture.write_record(
+                target_record,
+                [(target_record.relative_to(fixture.site_packages).as_posix(), "", "")],
+            )
+            junction_info = fixture.site_packages / "record-junction.dist-info"
+            _winapi.CreateJunction(str(target_info), str(junction_info))
+            aliased = _DistributionInputV1(
+                name="numpy",
+                version=fixture.environment.distributions[0].version,
+                install_root=fixture.site_packages,
+                record_path=junction_info / "RECORD",
+            )
+            with self.assertRaisesRegex(DependencyContentLockError, "reparse"):
+                module._parse_distribution(aliased, fixture.prefix.resolve())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows snapshot lock contract")
+    def test_previously_hashed_file_cannot_change_during_later_scan(self) -> None:
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        with TemporaryDirectory() as directory:
+            fixture = SyntheticContentEnvironment(directory)
+            lock = _build_dependency_content_lock(fixture.environment)
+            target = fixture.site_packages / "locked_package_0" / "module.py"
+            original_stat = target.stat()
+            real_snapshot = module._snapshot_file
+            state = {"seen": False, "attempted": False, "blocked": False}
+
+            def racing_snapshot(path: Path, prefix: Path, keep_data: bool = False):
+                snapshot = real_snapshot(path, prefix, keep_data)
+                resolved = Path(path).resolve()
+                if resolved == target.resolve():
+                    state["seen"] = True
+                elif state["seen"] and not state["attempted"]:
+                    state["attempted"] = True
+                    try:
+                        target.write_bytes(b"PACKAGE-0")
+                        os.utime(
+                            target,
+                            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                        )
+                    except PermissionError:
+                        state["blocked"] = True
+                return snapshot
+
+            with patch.object(module, "_snapshot_file", side_effect=racing_snapshot):
+                receipt = _verify_dependency_contents_in_environment(
+                    lock, fixture.environment
+                )
+        self.assertIs(type(receipt), VerifiedDependencyContentV1)
+        self.assertTrue(state["attempted"])
+        self.assertTrue(state["blocked"], "scan must hold a deny-write snapshot")
+
+    def test_default_environment_labels_from_running_interpreter(self) -> None:
+        import platform
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        with patch.object(platform, "python_implementation", return_value="LiveImpl"), patch.object(
+            platform, "python_version", return_value="9.8.7"
+        ):
+            environment = module._default_environment()
+        self.assertEqual(environment.implementation, "LiveImpl")
+        self.assertEqual(environment.python_version, "9.8.7")
+
+    def test_generator_attests_runtime_before_creating_candidate(self) -> None:
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        with TemporaryDirectory() as directory:
+            fixture = SyntheticContentEnvironment(directory)
+            output = Path(directory) / "must-not-exist.json"
+            with patch.object(
+                module, "_default_environment", return_value=fixture.environment
+            ), patch.object(
+                module,
+                "verify_current_runtime",
+                side_effect=DependencyContentLockError("runtime drift"),
+            ):
+                with self.assertRaisesRegex(DependencyContentLockError, "runtime drift"):
+                    module.generate_dependency_content_lock(output)
+            self.assertFalse(output.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,18 +5,22 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import ctypes
+from contextvars import ContextVar
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib import metadata
 import io
 import json
 from pathlib import Path
+import platform
 import os
 import re
 from typing import Any, NoReturn
 import stat
 import sys
 import sysconfig
+import weakref
 import unicodedata
 
 from binance_spot_strategy.protocols import canonical_json_bytes
@@ -407,24 +411,14 @@ def dependency_content_lock_hash(lock: DependencyContentLockV1) -> str:
     return hash_canonical_payload(lock.to_payload())
 
 
-_VERIFIER_TOKEN = object()
-
-
 class _OpaqueVerified:
-    __slots__ = ()
+    __slots__ = ("__weakref__",)
 
-    def __new__(cls, token: object, *args: object):
-        if token is not _VERIFIER_TOKEN:
-            raise TypeError("verified content values are issued only by the verifier")
-        return super().__new__(cls)
-
-    def __init__(self, token: object, *args: object) -> None:
-        if token is not _VERIFIER_TOKEN:
-            raise TypeError("verified content values are issued only by the verifier")
+    def __new__(cls, *args: object, **kwargs: object):
+        raise TypeError("verified content values are issued only by the verifier")
 
     def __reduce__(self) -> NoReturn:
         raise TypeError("verified content values cannot be serialized")
-
 
     def __reduce_ex__(self, protocol: int) -> NoReturn:
         raise TypeError("verified content values cannot be serialized")
@@ -446,9 +440,51 @@ class VerifiedContentTreeV1(_OpaqueVerified):
 class VerifiedDependencyContentV1(_OpaqueVerified):
     __slots__ = ("_content_lock_hash", "_trees")
 
-
     def __init_subclass__(cls, **kwargs: object) -> NoReturn:
         raise TypeError("verified content values cannot be subclassed")
+
+
+def _create_receipt_authority():
+    registry: weakref.WeakKeyDictionary[object, int] = weakref.WeakKeyDictionary()
+
+    def issue(
+        receipt_type: type[VerifiedContentTreeV1] | type[VerifiedDependencyContentV1],
+        attributes: tuple[tuple[str, object], ...],
+    ) -> VerifiedContentTreeV1 | VerifiedDependencyContentV1:
+        if receipt_type not in (VerifiedContentTreeV1, VerifiedDependencyContentV1):
+            raise TypeError("unsupported verified receipt type")
+        receipt = object.__new__(receipt_type)
+        for name, value in attributes:
+            object.__setattr__(receipt, name, value)
+        registry[receipt] = os.getpid()
+        return receipt
+
+    def require_dependency(
+        value: object,
+    ) -> VerifiedDependencyContentV1:
+        if type(value) is not VerifiedDependencyContentV1:
+            raise DependencyContentLockError(
+                "untrusted verified dependency content receipt"
+            )
+        try:
+            issuer_pid = registry[value]
+        except (KeyError, TypeError) as exc:
+            raise DependencyContentLockError(
+                "untrusted verified dependency content receipt"
+            ) from exc
+        if issuer_pid != os.getpid():
+            raise DependencyContentLockError(
+                "foreign-process verified dependency content receipt"
+            )
+        return value
+
+    return issue, require_dependency
+
+
+_issue_verified_receipt, _require_verified_dependency_content = (
+    _create_receipt_authority()
+)
+del _create_receipt_authority
 
 @dataclass(frozen=True, slots=True)
 class _DistributionInputV1:
@@ -499,6 +535,144 @@ class _SnapshotV1:
     size_bytes: int
     sha256: str
     data: bytes | None = None
+
+
+_STABLE_STAT_FIELDS = (
+    "st_dev",
+    "st_ino",
+    "st_size",
+    "st_mtime_ns",
+    "st_ctime_ns",
+)
+
+
+class _SnapshotSessionV1:
+    __slots__ = ("_windows_leases", "_portable_streams", "_captured")
+
+    def __init__(self) -> None:
+        self._windows_leases: list[tuple[int, Path]] = []
+        self._portable_streams: list[tuple[object, Path]] = []
+        self._captured: dict[Path, os.stat_result] = {}
+
+    def open_stream(self, path: Path):
+        if sys.platform != "win32":
+            stream = path.open("rb", buffering=0)
+            self._portable_streams.append((stream, path))
+            return stream, False
+
+        import msvcrt
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = (
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        )
+        create_file.restype = ctypes.c_void_p
+        handle = create_file(
+            str(path),
+            0x80000000,
+            0x00000001,
+            None,
+            3,
+            0x08000000,
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        if handle in (None, invalid_handle):
+            raise OSError(ctypes.get_last_error(), "unable to lock snapshot file")
+
+        duplicate_handle = kernel32.DuplicateHandle
+        duplicate_handle.argtypes = (
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.c_uint32,
+        )
+        duplicate_handle.restype = ctypes.c_int
+        current_process = kernel32.GetCurrentProcess()
+        duplicate = ctypes.c_void_p()
+        if not duplicate_handle(
+            current_process,
+            handle,
+            current_process,
+            ctypes.byref(duplicate),
+            0,
+            False,
+            0x00000002,
+        ):
+            error = ctypes.get_last_error()
+            kernel32.CloseHandle(handle)
+            raise OSError(error, "unable to retain snapshot handle")
+        assert duplicate.value is not None
+        self._windows_leases.append((int(duplicate.value), path))
+        try:
+            descriptor = msvcrt.open_osfhandle(
+                int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            )
+            stream = os.fdopen(descriptor, "rb", buffering=0)
+        except Exception:
+            kernel32.CloseHandle(handle)
+            raise
+        return stream, True
+
+    def require_unseen(self, path: Path) -> None:
+        if path in self._captured:
+            raise DependencyContentLockError(
+                "dependency content scan failed: multiple distribution owners"
+            )
+
+
+    def capture(self, path: Path, information: os.stat_result) -> None:
+        if path in self._captured:
+            raise DependencyContentLockError(
+                "dependency content scan failed: file hashed more than once"
+            )
+        self._captured[path] = information
+
+    def validate(self) -> None:
+        for path, captured in self._captured.items():
+            try:
+                current = path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise DependencyContentLockError(
+                    "dependency content scan failed: controlled file changed after hashing"
+                ) from exc
+            if any(
+                getattr(captured, field) != getattr(current, field)
+                for field in _STABLE_STAT_FIELDS
+            ):
+                logical = path.name
+                raise DependencyContentLockError(
+                    f"dependency content scan failed: final snapshot drift {logical}"
+                )
+
+    def close(self) -> None:
+        for stream, _ in reversed(self._portable_streams):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        self._portable_streams.clear()
+        if sys.platform == "win32":
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            for handle, _ in reversed(self._windows_leases):
+                kernel32.CloseHandle(ctypes.c_void_p(handle))
+        self._windows_leases.clear()
+        self._captured.clear()
+
+
+_ACTIVE_SNAPSHOT_SESSION: ContextVar[_SnapshotSessionV1 | None] = ContextVar(
+    "dependency_content_snapshot_session", default=None
+)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -560,6 +734,15 @@ def _check_components(path: Path, prefix: Path) -> None:
         ) from exc
     current = prefix
     for component in relative.parts:
+        if component == "..":
+            current = current.parent
+            if not _is_relative_to(current, prefix):
+                raise DependencyContentLockError(
+                    "dependency content scan failed: final prefix escape"
+                )
+            continue
+        if component == ".":
+            continue
         current = current / component
         try:
             information = current.stat(follow_symlinks=False)
@@ -651,9 +834,18 @@ def _snapshot_file(path: Path, prefix: Path, keep_data: bool = False) -> _Snapsh
             raise DependencyContentLockError(
                 f"dependency content scan failed: hardlink alias {logical}"
             )
+        active_session = _ACTIVE_SNAPSHOT_SESSION.get()
+        if active_session is not None:
+            active_session.require_unseen(path)
         digest = sha256()
         chunks: list[bytes] | None = [] if keep_data else None
-        with path.open("rb", buffering=0) as stream:
+        session = _ACTIVE_SNAPSHOT_SESSION.get()
+        if session is None:
+            stream = path.open("rb", buffering=0)
+            close_after_read = True
+        else:
+            stream, close_after_read = session.open_stream(path)
+        try:
             opened = os.fstat(stream.fileno())
             if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
                 raise DependencyContentLockError(
@@ -666,21 +858,19 @@ def _snapshot_file(path: Path, prefix: Path, keep_data: bool = False) -> _Snapsh
                 digest.update(chunk)
                 if chunks is not None:
                     chunks.append(chunk)
+        finally:
+            if close_after_read:
+                stream.close()
         after = path.stat(follow_symlinks=False)
+        if session is not None:
+            session.capture(path, after)
     except DependencyContentLockError:
         raise
     except OSError as exc:
         raise DependencyContentLockError(
             f"dependency content scan failed: unable to snapshot {logical}"
         ) from exc
-    stable_fields = (
-        "st_dev",
-        "st_ino",
-        "st_size",
-        "st_mtime_ns",
-        "st_ctime_ns",
-    )
-    if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+    if any(getattr(before, field) != getattr(after, field) for field in _STABLE_STAT_FIELDS):
         raise DependencyContentLockError(
             f"dependency content scan failed: file changed during scan {logical}"
         )
@@ -761,8 +951,10 @@ def _record_target(raw_path: str, install_root: Path, prefix: Path) -> Path:
         raise DependencyContentLockError(
             "dependency RECORD failed: invalid raw path segment"
         )
+    candidate = install_root.joinpath(*parts)
+    _check_components(candidate, prefix)
     try:
-        target = install_root.joinpath(*parts).resolve(strict=True)
+        target = candidate.resolve(strict=True)
     except OSError as exc:
         raise DependencyContentLockError(
             "dependency RECORD failed: controlled file unavailable"
@@ -820,7 +1012,17 @@ def _parse_distribution(
         raise DependencyContentLockError(
             "dependency RECORD failed: installation root escape"
         )
-    record_path = distribution.record_path.resolve(strict=True)
+    try:
+        record_relative = distribution.record_path.relative_to(
+            distribution.install_root
+        )
+    except ValueError as exc:
+        raise DependencyContentLockError(
+            "dependency RECORD failed: RECORD outside installation root"
+        ) from exc
+    record_candidate = install_root.joinpath(*record_relative.parts)
+    _check_components(record_candidate, prefix)
+    record_path = record_candidate.resolve(strict=True)
     if not _is_relative_to(record_path, install_root):
         raise DependencyContentLockError(
             "dependency RECORD failed: RECORD outside installation root"
@@ -882,7 +1084,7 @@ def _parse_distribution(
     return tuple(snapshots), tuple(sorted(root_candidates, key=lambda item: str(item)))
 
 
-def _scan_environment(environment: _ScanEnvironmentV1) -> DependencyContentLockV1:
+def _scan_environment_once(environment: _ScanEnvironmentV1) -> DependencyContentLockV1:
     if type(environment) is not _ScanEnvironmentV1:
         raise TypeError("environment must be an exact _ScanEnvironmentV1")
     prefix = _canonical_root(environment.prefix, "base prefix")
@@ -1019,27 +1221,35 @@ def _scan_environment(environment: _ScanEnvironmentV1) -> DependencyContentLockV
     )
 
 
+def _scan_environment(environment: _ScanEnvironmentV1) -> DependencyContentLockV1:
+    if _ACTIVE_SNAPSHOT_SESSION.get() is not None:
+        raise DependencyContentLockError(
+            "dependency content scan failed: nested snapshot session"
+        )
+    session = _SnapshotSessionV1()
+    token = _ACTIVE_SNAPSHOT_SESSION.set(session)
+    try:
+        lock = _scan_environment_once(environment)
+        session.validate()
+        return lock
+    finally:
+        try:
+            session.close()
+        finally:
+            _ACTIVE_SNAPSHOT_SESSION.reset(token)
+
+
+
 def _build_dependency_content_lock(
     environment: _ScanEnvironmentV1,
 ) -> DependencyContentLockV1:
     return _scan_environment(environment)
 
 
-def _tree_receipt(tree: ContentTreeV1) -> VerifiedContentTreeV1:
-    receipt = VerifiedContentTreeV1(_VERIFIER_TOKEN)
-    object.__setattr__(receipt, "_owner_key", (tree.owner_kind, tree.owner_name))
-    payload = {
-        "schema_version": "verified_content_tree_v1",
-        "numeric_protocol_version": "numeric_protocol_v1",
-        "tree": tree.to_payload(),
-    }
-    object.__setattr__(receipt, "_tree_hash", hash_canonical_payload(payload))
-    return receipt
-
-
 def _verify_dependency_contents_in_environment(
     lock: DependencyContentLockV1,
     environment: _ScanEnvironmentV1,
+    _issue_receipt=_issue_verified_receipt,
 ) -> VerifiedDependencyContentV1:
     if type(lock) is not DependencyContentLockV1:
         _error("$", "must be an exact DependencyContentLockV1")
@@ -1063,13 +1273,38 @@ def _verify_dependency_contents_in_environment(
         ]
         detail = drift[0] if drift else "owner metadata"
         raise DependencyContentLockError(f"dependency content drift: {detail}")
-    tree_receipts = tuple(_tree_receipt(tree) for tree in actual.trees)
-    receipt = VerifiedDependencyContentV1(_VERIFIER_TOKEN)
-    object.__setattr__(
-        receipt, "_content_lock_hash", dependency_content_lock_hash(lock)
+    tree_receipts_list: list[VerifiedContentTreeV1] = []
+    for tree in actual.trees:
+        payload = {
+            "schema_version": "verified_content_tree_v1",
+            "numeric_protocol_version": "numeric_protocol_v1",
+            "tree": tree.to_payload(),
+        }
+        tree_receipt = _issue_receipt(
+            VerifiedContentTreeV1,
+            (
+                ("_owner_key", (tree.owner_kind, tree.owner_name)),
+                ("_tree_hash", hash_canonical_payload(payload)),
+            ),
+        )
+        if type(tree_receipt) is not VerifiedContentTreeV1:
+            raise AssertionError("receipt authority returned the wrong tree type")
+        tree_receipts_list.append(tree_receipt)
+    tree_receipts = tuple(tree_receipts_list)
+    receipt = _issue_receipt(
+        VerifiedDependencyContentV1,
+        (
+            ("_content_lock_hash", dependency_content_lock_hash(lock)),
+            ("_trees", tree_receipts),
+        ),
     )
-    object.__setattr__(receipt, "_trees", tree_receipts)
+    if type(receipt) is not VerifiedDependencyContentV1:
+        raise AssertionError("receipt authority returned the wrong dependency type")
     return receipt
+
+
+del _issue_verified_receipt
+
 
 
 def _default_environment() -> _ScanEnvironmentV1:
@@ -1121,8 +1356,8 @@ def _default_environment() -> _ScanEnvironmentV1:
         prefix=prefix,
         stdlib_root=stdlib,
         site_packages_roots=tuple(site_roots),
-        implementation=semantic["python"]["implementation"],
-        python_version=semantic["python"]["version"],
+        implementation=platform.python_implementation(),
+        python_version=platform.python_version(),
         distributions=tuple(distributions),
     )
 
@@ -1148,6 +1383,8 @@ def generate_dependency_content_lock(
         raise DependencyContentLockError(
             "dependency content generation requires a nonexistent output"
         )
+    semantic = load_semantic_dependency_lock()
+    verify_current_runtime(semantic)
     lock = _build_dependency_content_lock(_default_environment())
     payload = json.dumps(
         lock.to_payload(),
