@@ -1,5 +1,17 @@
 """Deterministic identity and runtime-evidence interfaces."""
 
+from .dependency_contents_v1 import (
+    ContentFileV1,
+    ContentTreeV1,
+    DependencyContentLockError,
+    DependencyContentLockV1,
+    VerifiedContentTreeV1,
+    VerifiedDependencyContentV1,
+    dependency_content_lock_hash,
+    load_dependency_content_lock,
+    verify_current_dependency_contents,
+)
+
 from .dependency_lock_v1 import (
     DependencyLockError,
     load_semantic_dependency_lock,
@@ -28,6 +40,15 @@ from .manifests_v1 import (
 )
 
 __all__ = (
+    "ContentFileV1",
+    "ContentTreeV1",
+    "DependencyContentLockError",
+    "DependencyContentLockV1",
+    "VerifiedContentTreeV1",
+    "VerifiedDependencyContentV1",
+    "dependency_content_lock_hash",
+    "load_dependency_content_lock",
+    "verify_current_dependency_contents",
     "CandidateManifestV1",
     "ContractDigest",
     "DependencyLockError",
