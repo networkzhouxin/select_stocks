@@ -6488,6 +6488,124 @@ def test_halt_recovery_merges_resumed_scores_without_second_portfolio_pass(monke
     assert pt.g.paused_pool_codes == set()
 
 
+def test_halt_recovery_logs_complete_resumed_score_diagnostics(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    signal_date = date(2026, 7, 10)
+    score = make_buy_score(code)
+    score.update({
+        "buy_score": 37,
+        "reversal_score": 23,
+        "location_score": 17,
+        "trend_score": -15,
+        "volume_score": 12,
+        "sell_score": 0,
+        "cross_window": 3,
+        "rsi6": 59.21,
+        "rsi12": 54.77,
+        "rsi24": 50.01,
+        "rsi6_prev": 51.0,
+        "rsi12_prev": 52.0,
+        "rsi24_prev": 53.0,
+        "dif": -0.0101,
+        "dea": -0.0199,
+        "macd_hist": 0.0196,
+        "dif_prev": -0.0300,
+        "dea_prev": -0.0200,
+        "k": 64.21,
+        "d": 42.36,
+        "j": 107.91,
+        "k_prev": 30.0,
+        "d_prev": 35.0,
+        "j_prev": 20.0,
+        "rsi6_cross_rsi12_up": True,
+        "rsi6_cross_rsi12_up_age": 2,
+        "rsi6_cross_rsi24_up": False,
+        "macd_cross_up": True,
+        "macd_cross_up_age": 0,
+        "kdj_k_cross_up": True,
+        "kdj_k_cross_up_age": 1,
+        "kdj_j_cross_up": False,
+        "rsi6_cross_rsi12_down": False,
+        "rsi6_cross_rsi24_down": False,
+        "macd_cross_down": False,
+        "kdj_k_cross_down": False,
+        "kdj_j_cross_down": False,
+    })
+    pt.g = make_g(
+        paused_pool_codes={code},
+        execution_date=today,
+        deferred_signal_date=signal_date,
+        deferred_scores=[],
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    info_messages = []
+    debug_messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: info_messages.append(
+                message % args if args else str(message)),
+            debug=lambda message, *args: debug_messages.append(
+                message % args if args else str(message)),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: signal_date)
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(
+        pt, "reconcile_recent_fills_and_resume_buys", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pt, "current_hold_codes", lambda context: [])
+    monkeypatch.setattr(pt, "check_atr_stops", lambda context, codes=None: [])
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda candidate, end_date, return_reason=False: (dict(score), None),
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert any(
+        message.startswith("[复牌评分]")
+        and "来源=10:35复牌/卖单补偿" in message
+        and "信号日期=2026-07-10" in message
+        and "代码=513100.SS" in message
+        and "买入评分=37" in message
+        and "反转评分=23" in message
+        and "位置评分=17" in message
+        and "趋势评分=-15" in message
+        and "量能评分=12" in message
+        and "卖出评分=0" in message
+        and "买入筛选=拒绝:评分不足(37<60)" in message
+        for message in info_messages
+    )
+    assert any(
+        message.startswith("[复牌交叉]")
+        and "信号日期=2026-07-10" in message
+        and "RSI6上穿RSI12(近3日有效,距发生2个交易日)" in message
+        and "DIF上穿DEA(近3日有效,当日新发生)" in message
+        and "K上穿D(近3日有效,距发生1个交易日)" in message
+        for message in info_messages
+    )
+    assert any(
+        message.startswith("[指标明细][复牌评分][513100.SS]")
+        and "RSI6上穿RSI12=是" in message
+        and "RSI[6/12/24]=59.2/54.8/50.0" in message
+        and "MACD[DIF/DEA/HIST]=-0.0101/-0.0199/0.0196" in message
+        for message in debug_messages
+    )
+
+
 def test_halt_recovery_runs_atr_stop_for_resumed_holding(monkeypatch):
     code = "513100.SS"
     today = date(2026, 7, 13)

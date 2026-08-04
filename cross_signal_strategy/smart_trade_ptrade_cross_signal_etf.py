@@ -1983,6 +1983,67 @@ def _log_buy_candidate_rejection_diagnostics(
                 source, code, buy_score, sell_score, reasons))
 
 
+def _log_resumed_score_diagnostics(
+        scores, review_codes, signal_date, held_codes, params, source,
+        sold_codes=None, failed_codes=None):
+    """记录10:35重评分证据，不参与候选筛选或交易决策。"""
+    by_code = {
+        normalize_code(item.get("code")): item
+        for item in scores
+        if normalize_code(item.get("code"))
+    }
+    held = set(normalize_code(code) for code in held_codes)
+    signal_date_text = _date_key(signal_date)
+    for code in sorted(set(normalize_code(code) for code in review_codes)):
+        score = by_code.get(code)
+        if score is None:
+            continue
+        rejection_items = _buy_candidate_rejection_items(
+            score,
+            held,
+            params,
+            sold_codes=sold_codes,
+            failed_codes=failed_codes,
+        )
+        if rejection_items:
+            filter_result = "拒绝:%s" % ",".join(
+                detail for _label, detail in rejection_items)
+        else:
+            filter_result = "通过"
+        log.info(
+            "[复牌评分] 来源=%s 信号日期=%s 代码=%s "
+            "买入评分=%.0f 反转评分=%.0f 位置评分=%.0f "
+            "趋势评分=%.0f 量能评分=%.0f 卖出评分=%.0f "
+            "买入筛选=%s" % (
+                source,
+                signal_date_text,
+                code,
+                _numeric_score(score.get("buy_score")),
+                _numeric_score(score.get("reversal_score")),
+                _numeric_score(score.get("location_score")),
+                _numeric_score(score.get("trend_score")),
+                _numeric_score(score.get("volume_score")),
+                _numeric_score(score.get("sell_score")),
+                filter_result,
+            )
+        )
+        log.info(
+            "[复牌交叉] 来源=%s 信号日期=%s 代码=%s %s" % (
+                source,
+                signal_date_text,
+                code,
+                _format_active_crosses_for_log(score),
+            )
+        )
+        _log_debug_detail(
+            "[指标明细][复牌评分][%s] 信号日期=%s %s %s",
+            code,
+            signal_date_text,
+            _format_cross_flags_for_log(score),
+            _format_indicator_values_for_log(score),
+        )
+
+
 def is_blocked_entry_combo(score):
     rsi_up = score.get("rsi6_cross_rsi12_up") or score.get("rsi6_cross_rsi24_up")
     kdj_up = score.get("kdj_k_cross_up") or score.get("kdj_j_cross_up")
@@ -4192,6 +4253,27 @@ def halt_recover(context):
                     code, _format_reason_for_log(reason)))
         scores = sort_candidates(list(by_code.values()))
         g.deferred_scores = scores
+        pending_buy_codes = set(
+            getattr(g, "__pending_orders", {}).keys())
+        sold_codes = set(
+            normalize_code(code)
+            for code, sold in getattr(g, "sold_today", {}).items()
+            if sold
+        )
+        failed_codes = set(
+            normalize_code(code)
+            for code in getattr(g, "failed_buy_codes", set())
+        )
+        _log_resumed_score_diagnostics(
+            scores,
+            score_review_codes,
+            prev_date,
+            held_now | pending_buy_codes,
+            g.params,
+            "10:35复牌/卖单补偿",
+            sold_codes=sold_codes,
+            failed_codes=failed_codes,
+        )
         signal_review_holds = held_now & score_review_codes
         signal_hold_days = _get_signal_hold_days(today, g.params) if signal_review_holds else None
         for code in sorted(signal_review_holds - atr_stopped):
