@@ -8,6 +8,7 @@ import csv
 import ctypes
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import lru_cache
 from hashlib import sha256
 from importlib import metadata
 import io
@@ -444,47 +445,6 @@ class VerifiedDependencyContentV1(_OpaqueVerified):
         raise TypeError("verified content values cannot be subclassed")
 
 
-def _create_receipt_authority():
-    registry: weakref.WeakKeyDictionary[object, int] = weakref.WeakKeyDictionary()
-
-    def issue(
-        receipt_type: type[VerifiedContentTreeV1] | type[VerifiedDependencyContentV1],
-        attributes: tuple[tuple[str, object], ...],
-    ) -> VerifiedContentTreeV1 | VerifiedDependencyContentV1:
-        if receipt_type not in (VerifiedContentTreeV1, VerifiedDependencyContentV1):
-            raise TypeError("unsupported verified receipt type")
-        receipt = object.__new__(receipt_type)
-        for name, value in attributes:
-            object.__setattr__(receipt, name, value)
-        registry[receipt] = os.getpid()
-        return receipt
-
-    def require_dependency(
-        value: object,
-    ) -> VerifiedDependencyContentV1:
-        if type(value) is not VerifiedDependencyContentV1:
-            raise DependencyContentLockError(
-                "untrusted verified dependency content receipt"
-            )
-        try:
-            issuer_pid = registry[value]
-        except (KeyError, TypeError) as exc:
-            raise DependencyContentLockError(
-                "untrusted verified dependency content receipt"
-            ) from exc
-        if issuer_pid != os.getpid():
-            raise DependencyContentLockError(
-                "foreign-process verified dependency content receipt"
-            )
-        return value
-
-    return issue, require_dependency
-
-
-_issue_verified_receipt, _require_verified_dependency_content = (
-    _create_receipt_authority()
-)
-del _create_receipt_authority
 
 @dataclass(frozen=True, slots=True)
 class _DistributionInputV1:
@@ -1246,64 +1206,97 @@ def _build_dependency_content_lock(
     return _scan_environment(environment)
 
 
-def _verify_dependency_contents_in_environment(
-    lock: DependencyContentLockV1,
-    environment: _ScanEnvironmentV1,
-    _issue_receipt=_issue_verified_receipt,
-) -> VerifiedDependencyContentV1:
-    if type(lock) is not DependencyContentLockV1:
-        _error("$", "must be an exact DependencyContentLockV1")
-    actual = _scan_environment(environment)
-    if lock != actual:
-        expected_by_path = {
-            item.logical_path: item
-            for tree in lock.trees
-            for item in tree.files
-        }
-        actual_by_path = {
-            item.logical_path: item
-            for tree in actual.trees
-            for item in tree.files
-        }
-        paths = sorted(set(expected_by_path) | set(actual_by_path))
-        drift = [
-            path
-            for path in paths
-            if expected_by_path.get(path) != actual_by_path.get(path)
-        ]
-        detail = drift[0] if drift else "owner metadata"
-        raise DependencyContentLockError(f"dependency content drift: {detail}")
-    tree_receipts_list: list[VerifiedContentTreeV1] = []
-    for tree in actual.trees:
-        payload = {
-            "schema_version": "verified_content_tree_v1",
-            "numeric_protocol_version": "numeric_protocol_v1",
-            "tree": tree.to_payload(),
-        }
-        tree_receipt = _issue_receipt(
-            VerifiedContentTreeV1,
-            (
-                ("_owner_key", (tree.owner_kind, tree.owner_name)),
-                ("_tree_hash", hash_canonical_payload(payload)),
-            ),
+def _create_receipt_endpoints():
+    registry: weakref.WeakKeyDictionary[object, int] = weakref.WeakKeyDictionary()
+
+    def verify(
+        lock: DependencyContentLockV1,
+        environment: _ScanEnvironmentV1,
+    ) -> VerifiedDependencyContentV1:
+        if type(lock) is not DependencyContentLockV1:
+            _error("$", "must be an exact DependencyContentLockV1")
+        actual = _scan_environment(environment)
+        if lock != actual:
+            expected_by_path = {
+                item.logical_path: item
+                for tree in lock.trees
+                for item in tree.files
+            }
+            actual_by_path = {
+                item.logical_path: item
+                for tree in actual.trees
+                for item in tree.files
+            }
+            paths = sorted(set(expected_by_path) | set(actual_by_path))
+            drift = [
+                path
+                for path in paths
+                if expected_by_path.get(path) != actual_by_path.get(path)
+            ]
+            detail = drift[0] if drift else "owner metadata"
+            raise DependencyContentLockError(f"dependency content drift: {detail}")
+        issuer_pid = os.getpid()
+        tree_receipts_list: list[VerifiedContentTreeV1] = []
+        for tree in actual.trees:
+            payload = {
+                "schema_version": "verified_content_tree_v1",
+                "numeric_protocol_version": "numeric_protocol_v1",
+                "tree": tree.to_payload(),
+            }
+            tree_receipt = object.__new__(VerifiedContentTreeV1)
+            object.__setattr__(
+                tree_receipt,
+                "_owner_key",
+                (tree.owner_kind, tree.owner_name),
+            )
+            object.__setattr__(
+                tree_receipt,
+                "_tree_hash",
+                hash_canonical_payload(payload),
+            )
+            registry[tree_receipt] = issuer_pid
+            tree_receipts_list.append(tree_receipt)
+        receipt = object.__new__(VerifiedDependencyContentV1)
+        object.__setattr__(
+            receipt,
+            "_content_lock_hash",
+            dependency_content_lock_hash(lock),
         )
-        if type(tree_receipt) is not VerifiedContentTreeV1:
-            raise AssertionError("receipt authority returned the wrong tree type")
-        tree_receipts_list.append(tree_receipt)
-    tree_receipts = tuple(tree_receipts_list)
-    receipt = _issue_receipt(
-        VerifiedDependencyContentV1,
-        (
-            ("_content_lock_hash", dependency_content_lock_hash(lock)),
-            ("_trees", tree_receipts),
-        ),
-    )
-    if type(receipt) is not VerifiedDependencyContentV1:
-        raise AssertionError("receipt authority returned the wrong dependency type")
-    return receipt
+        object.__setattr__(receipt, "_trees", tuple(tree_receipts_list))
+        registry[receipt] = issuer_pid
+        return receipt
+
+    def require_dependency(
+        value: object,
+    ) -> VerifiedDependencyContentV1:
+        if type(value) is not VerifiedDependencyContentV1:
+            raise DependencyContentLockError(
+                "untrusted verified dependency content receipt"
+            )
+        try:
+            issuer_pid = registry[value]
+        except (KeyError, TypeError) as exc:
+            raise DependencyContentLockError(
+                "untrusted verified dependency content receipt"
+            ) from exc
+        if issuer_pid != os.getpid():
+            raise DependencyContentLockError(
+                "foreign-process verified dependency content receipt"
+            )
+        return value
+
+    verify_endpoint = lru_cache(maxsize=0)(verify)
+    require_endpoint = lru_cache(maxsize=0)(require_dependency)
+    del verify_endpoint.__wrapped__
+    del require_endpoint.__wrapped__
+    return verify_endpoint, require_endpoint
 
 
-del _issue_verified_receipt
+(
+    _verify_dependency_contents_in_environment,
+    _require_verified_dependency_content,
+) = _create_receipt_endpoints()
+del _create_receipt_endpoints
 
 
 

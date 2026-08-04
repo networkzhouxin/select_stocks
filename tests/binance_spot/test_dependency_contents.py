@@ -854,5 +854,86 @@ print(json.dumps({"pid": os.getpid(), "content_lock_hash": receipt._content_lock
             self.assertFalse(output.exists())
 
 
+class DependencyContentFixRoundTwoTests(unittest.TestCase):
+    def test_module_reachable_introspection_cannot_mint_or_register_receipt(self) -> None:
+        import weakref
+        from binance_spot_strategy.identity import dependency_contents_v1 as module
+
+        endpoints = (
+            ("verifier", module._verify_dependency_contents_in_environment),
+            ("require", module._require_verified_dependency_content),
+        )
+        exposed: list[tuple[str, object]] = []
+        for endpoint_name, endpoint in endpoints:
+            defaults = getattr(endpoint, "__defaults__", None)
+            if defaults:
+                exposed.extend(
+                    (f"{endpoint_name}.__defaults__[{index}]", value)
+                    for index, value in enumerate(defaults)
+                )
+            kwdefaults = getattr(endpoint, "__kwdefaults__", None)
+            if kwdefaults:
+                exposed.extend(
+                    (f"{endpoint_name}.__kwdefaults__[{name!r}]", value)
+                    for name, value in kwdefaults.items()
+                )
+            closure = getattr(endpoint, "__closure__", None)
+            if closure:
+                exposed.extend(
+                    (f"{endpoint_name}.__closure__[{index}]", cell.cell_contents)
+                    for index, cell in enumerate(closure)
+                )
+
+        for name, value in vars(module).items():
+            if isinstance(value, weakref.WeakKeyDictionary) or (
+                callable(value)
+                and any(marker in name.casefold() for marker in ("issue", "mint"))
+            ):
+                exposed.append((f"module.{name}", value))
+
+        forged = object.__new__(VerifiedDependencyContentV1)
+        object.__setattr__(forged, "_content_lock_hash", "0" * 64)
+        object.__setattr__(forged, "_trees", ())
+        attributes = (
+            ("_content_lock_hash", "0" * 64),
+            ("_trees", ()),
+        )
+        successful_exploits: list[str] = []
+        for label, value in exposed:
+            if isinstance(value, weakref.WeakKeyDictionary):
+                try:
+                    value[forged] = os.getpid()
+                    module._require_verified_dependency_content(forged)
+                except (DependencyContentLockError, TypeError):
+                    pass
+                else:
+                    successful_exploits.append(f"{label} mutated receipt registry")
+                finally:
+                    value.pop(forged, None)
+                continue
+            if not callable(value):
+                continue
+            try:
+                minted = value(VerifiedDependencyContentV1, attributes)
+            except (TypeError, ValueError):
+                continue
+            if type(minted) is not VerifiedDependencyContentV1:
+                continue
+            try:
+                module._require_verified_dependency_content(minted)
+            except DependencyContentLockError:
+                pass
+            else:
+                successful_exploits.append(f"{label} minted accepted receipt")
+
+        self.assertEqual([], successful_exploits)
+        for endpoint_name, endpoint in endpoints:
+            self.assertIsNone(getattr(endpoint, "__defaults__", None), endpoint_name)
+            self.assertIsNone(getattr(endpoint, "__kwdefaults__", None), endpoint_name)
+            self.assertIsNone(getattr(endpoint, "__closure__", None), endpoint_name)
+            self.assertIsNone(getattr(endpoint, "__globals__", None), endpoint_name)
+            self.assertFalse(hasattr(endpoint, "__wrapped__"), endpoint_name)
+
+
 if __name__ == "__main__":
     unittest.main()
