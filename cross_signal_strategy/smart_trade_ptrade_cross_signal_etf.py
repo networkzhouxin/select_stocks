@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260730.1"
+DEPLOYMENT_BUILD_ID = "20260804.1"
 LIVE_STATE_SCHEMA_VERSION = 6
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3249,6 +3249,31 @@ def _confirm_previous_session_highs(context, session_date):
                         code, exc))
                 continue
             if pending["session_date"] > session_date:
+                current_dt = _order_lifecycle_now(context)
+                position = _get_position(context, code)
+                same_session_after_close = (
+                    current_dt is not None and
+                    current_dt.date() == pending["session_date"] and
+                    (current_dt.hour, current_dt.minute) >= (15, 0)
+                )
+                risk_baseline_complete = (
+                    position is not None and
+                    _is_positive_finite(_pos_cost(position)) and
+                    _is_positive_finite(g.entry_atr.get(code))
+                )
+                if same_session_after_close and risk_baseline_complete:
+                    g.unverified_positions.discard(code)
+                    _repair_verified_position_source(code, source_map)
+                    log.info(
+                        "[盘前收盘确认] %s待确认日期=%s属于当日盘后观察，"
+                        "T-1=%s尚未覆盖；保留已验证风险基线，"
+                        "延至下一交易日盘前确认" % (
+                            code,
+                            pending["session_date"].isoformat(),
+                            session_date.isoformat(),
+                        )
+                    )
+                    continue
                 failures.append(code)
                 g.unverified_positions.add(code)
                 log.error(
