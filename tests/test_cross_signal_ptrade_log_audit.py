@@ -118,6 +118,20 @@ def test_complete_runtime_day_passes_all_triggered_checks(audit):
     assert report.get_check("errors").status == audit.STATUS_PASS
 
 
+def test_current_trading_day_start_marker_passes_main_0935_check(audit):
+    lines = normal_day_lines()
+    lines[5] = line(
+        "2026-07-20 09:35:00",
+        "INFO",
+        "[交易日开始] 执行日期=2026-07-20 信号日期=2026-07-17 "
+        "策略=cross-v0.3.2 是否调仓=是",
+    )
+
+    report = audit.audit_runtime_log("\n".join(lines))
+
+    assert report.get_check("main_0935").status == audit.STATUS_PASS
+
+
 def test_no_halt_and_no_order_are_conditional_not_failures(audit):
     report = audit.audit_runtime_log(
         "\n".join(normal_day_lines(include_conditional_events=False))

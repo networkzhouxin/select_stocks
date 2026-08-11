@@ -216,7 +216,10 @@ def _check_main_0935(events):
     matched = [
         event
         for event in events
-        if event.message.startswith("[cross-v0.3.2] 执行日期=")
+        if event.message.startswith((
+            "[cross-v0.3.2] 执行日期=",
+            "[交易日开始] 执行日期=",
+        ))
     ]
     if not matched:
         return _result("main_0935", "09:35主流程", STATUS_INSUFFICIENT, "未找到执行日期日志")
