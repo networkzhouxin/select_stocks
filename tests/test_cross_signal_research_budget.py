@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 54
-    assert report.expected_failed_experiment_count == 54
+    assert report.failed_experiment_count == 55
+    assert report.expected_failed_experiment_count == 55
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -549,6 +549,34 @@ def test_user_authorized_macd_budget_is_consumed_after_one_fixed_variant():
         budget,
         family_key=family.key,
         planned_variants=2,
+    ).allowed is False
+
+
+def test_user_authorized_entry_atr_breakeven_budget_is_consumed_and_rejected():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["entry_atr_breakeven_user_authorized"]
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(item for item in payload["families"] if item["key"] == family.key)
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["activation_atr"] == pytest.approx(1.0)
+    assert raw["floor_return"] == pytest.approx(0.0)
+    assert raw["candidate_gate_passed"] is False
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
     ).allowed is False
 
 

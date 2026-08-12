@@ -2620,6 +2620,37 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-08-12 Profit Giveback And Fixed One-ATR Break-Even Candidate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` baseline versus one isolated local candidate
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Observation-only diagnostic:
+- 89 closed baseline trades were measured from actual local fills.
+- 67 trades reached at least one entry ATR of closing-price profit; 19 later
+  finished at or below zero, for a 28.36% conditional round-trip rate.
+- Annual conditional rates were 10.53%, 33.33%, and 37.50% for 2019, 2020,
+  and 2021. Forward path values were labels only and never entered orders.
+
+Fixed candidate:
+- Activation: stored highest close reaches `entry cost + 1.0 * entry ATR`.
+- Floor after activation: entry cost, applied from a later decision only.
+- Baseline: +120.61% total, +30.27% annualized, 7.47% drawdown, 2.172
+  Sharpe, 3.415 Sortino, 56.18% win rate, 4.440 profit/loss ratio.
+- Candidate: +114.28% total, +29.01% annualized, 7.57% drawdown, 2.096
+  Sharpe, 3.292 Sortino, 48.94% win rate, 4.148 profit/loss ratio.
+- Candidate annual returns: +36.55%/+45.91%/+7.55%, versus baseline
+  +35.84%/+49.74%/+8.46% in 2019/2020/2021.
+- The path changed on 47 filled-order days across all three years (2/27/18).
+
+Decision:
+- Reject the candidate before JoinQuant and validation.
+- The giveback problem is real, but a mechanical break-even floor lowers both
+  return and trade quality by forcing too many early exits.
+- Keep the official ATR trailing stop and no-profit-floor policy unchanged.
+
 ## 2026-07-18 Ordinary-Buy Minute Execution Overlay Gate
 
 Period: 2019-01-01 to 2021-12-31

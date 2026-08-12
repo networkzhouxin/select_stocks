@@ -23,8 +23,8 @@ def test_parser_excludes_template_and_preserves_all_real_ledger_entries():
 
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
 
-    assert len(records) == 54
-    assert len({record.record_id for record in records}) == 54
+    assert len(records) == 55
+    assert len({record.record_id for record in records}) == 55
     assert all(record.date.startswith("2026-") for record in records)
     assert all(record.experiment for record in records)
 
@@ -59,7 +59,7 @@ def test_atlas_counts_only_explicit_annual_contradictions():
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
     atlas = build_failure_year_atlas(records, load_annotations(ANNOTATIONS_PATH))
 
-    assert atlas.total_experiments == 54
+    assert atlas.total_experiments == 55
     assert atlas.annotated_experiments < atlas.total_experiments
     assert atlas.unreported_annual_experiments == (
         atlas.total_experiments - atlas.annotated_experiments
@@ -77,6 +77,12 @@ def test_atlas_counts_only_explicit_annual_contradictions():
     )
     assert reexpansion.annotation.failed_years == (2021,)
     assert reexpansion.annotation.mechanism == "regime_reversal"
+    breakeven = next(
+        item for item in atlas.annotated_records
+        if "entry-atr-breakeven-candidate" in item.record.version
+    )
+    assert breakeven.annotation.failed_years == (2020, 2021)
+    assert breakeven.annotation.mechanism == "premature_exit"
 
 
 def test_2020_minute_overlay_is_tail_execution_not_mainline_weakness():

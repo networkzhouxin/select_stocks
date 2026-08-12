@@ -43,6 +43,7 @@ class TradeQualityRow:
     first_profitable_close_offset: int | None
     first_atr_barrier: str
     post_sell_returns: Mapping[int, float | None]
+    entry_atr_pct: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,7 @@ def build_trade_quality_ledger(
             first_profitable_close_offset=first_profitable,
             first_atr_barrier=_first_atr_barrier(barrier_closes, entry_price, atr),
             post_sell_returns=post_sell_returns,
+            entry_atr_pct=atr / entry_price if atr > 0 else 0.0,
         ))
     return ledger
 

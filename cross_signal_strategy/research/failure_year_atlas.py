@@ -212,6 +212,7 @@ def build_failure_year_atlas(
 MECHANISM_LABELS = {
     "parameter_instability": "参数变化的跨年不稳定",
     "regime_reversal": "市场状态反转",
+    "premature_exit": "过早退出",
     "sample_concentration": "样本不足或年度集中",
     "execution_inconsistency": "执行机制跨年不一致",
     "tail_execution": "少数极端成交尾部",

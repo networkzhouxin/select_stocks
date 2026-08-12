@@ -1282,3 +1282,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Execution contract: After obtaining a fresh current price, the sell path checks the cached snapshot produced by that quote request. Any state other than fresh `TRADE` fails closed before order submission, leaves `sold_today` and pending-order guards untouched, and preserves the original ATR or signal-sell reason for the existing bounded 10:35 re-evaluation. If the second attempt is still not orderable, the retry reason remains and logs do not falsely claim that the risk condition disappeared.
 - Test-first evidence: Five non-continuous or missing-status cases and one unavailable-price case first proved that the old path either submitted an order or lost the retry reason. A separate 10:35 test first proved the old log incorrectly reported that the risk had cleared. The implementation followed those red tests; the complete PTrade test file then passed (`259 passed`).
 - Business boundary: JoinQuant changed only its deployment build identity. Signals, indicators, crosses, parameters, thresholds, ETF pool, ranking, target sizing, minimum hold, ATR formula, execution times, and the T-1 signal boundary are unchanged. Business fingerprint remains `1506a0e834fe`; state schema remains `6`; no market or validation-period data was read, and the production multi-factor strategy is untouched.
+
+### Reject Fixed One-Entry-ATR Break-Even Floor
+
+- Date: 2026-08-12.
+- Decision: Preserve official `cross-v0.3.2` unchanged. Retain the new profit-giveback module as observation-only research infrastructure and archive the isolated candidate as rejected evidence.
+- Reason: Profit giveback exists in training, but the fixed candidate reduced total and annualized return, worsened maximum drawdown, Sharpe, Sortino, win rate, profit/loss ratio, and both 2020 and 2021 annual returns.
+- Causal boundary: Activation uses only the stored highest close from completed sessions and entry ATR frozen at the buy signal. The T-day current price is used only for execution, so the candidate contains no future function.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read. No validation-period result was inspected. Nearby ATR activations, floor offsets, staged stops, and ETF/year exceptions are closed as post-hoc searches.
+- Business boundary: No JoinQuant, PTrade, or local formal strategy file changed. The production multi-factor strategy is untouched.

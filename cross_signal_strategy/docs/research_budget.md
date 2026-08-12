@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 53 real ledger entries.
+- Recorded failed or non-adopted experiments: 55 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -18,6 +18,8 @@ it does not change any score, order, position, or risk rule.
 - The completed fixed `09:35/10:00` execution-time comparison remains closed; `09:35` is retained.
 - The completed fixed ordinary-buy minute execution overlay remains closed; its
   aggregate fill improvement did not remain positive in 2020.
+- The completed fixed one-entry-ATR break-even candidate remains closed; it
+  worsened return, drawdown, risk-adjusted metrics, win rate, and 2020/2021.
 - One independent QDII underlying-index direction observation is pre-registered.
   Four raw 2018-2021 value series are staged and hashed, but the observation
   remains blocked because `SPX` and `H30533` lack approved historical
@@ -55,6 +57,7 @@ it does not change any score, order, position, or risk rule.
 | `controlled_breakout_anti_chase` | exhausted | The fixed 20-day T-2-safe observation found only 2 extended breakouts, failed total and annual sample gates, and did not permit a candidate. Do not search another `RSI6 >= 75`, MA20 10%, window, AND rule, breakout reward, or sell change. |
 | `etf_share_flow_shadow` | exhausted | The fixed five-observation sign-only attribution covered all 52 eligible domestic buys, but non-positive flow led average return in 2019/2020 while positive flow led both metrics in 2021. No candidate was permitted. |
 | `intraday_execution_overlay_v1` | exhausted | The fixed 09:35 arrival-price limit with six five-minute cycles and a 10:05 fallback matched 92/92 ordinary buys, but average execution worsened in 2020. No full portfolio candidate was permitted. |
+| `entry_atr_breakeven_user_authorized` | exhausted | The fixed 1-entry-ATR activation and cost floor reduced return and trade quality. Do not search nearby ATR activations, profit floors, staged stops, or ETF/year exceptions. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better

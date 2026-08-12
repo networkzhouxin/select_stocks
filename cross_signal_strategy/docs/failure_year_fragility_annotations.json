@@ -99,6 +99,13 @@
       "mechanism": "regime_reversal",
       "evidence": "Bullish novel re-expansion averaged -0.36% with a 51.35% directional win rate in 2021, versus +0.28% and 58.27% for active true crosses.",
       "interpretation": "Same-side renewed divergence weakened across the training years and did not provide a stable substitute for a mathematical cross."
+    },
+    {
+      "record_id": "6e6c7bd2fc80010d",
+      "failed_years": [2020, 2021],
+      "mechanism": "premature_exit",
+      "evidence": "One-entry-ATR break-even reduced annual return from 49.74% to 45.91% in 2020 and from 8.46% to 7.55% in 2021; aggregate win rate fell from 56.18% to 48.94%.",
+      "interpretation": "The cost floor forced premature exits and disrupted later portfolio allocation more than it protected recovered initial risk."
     }
   ]
 }

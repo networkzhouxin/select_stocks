@@ -170,9 +170,9 @@ def test_repository_records_audit_result_and_evidence_limits():
     audit_text = AUDIT_DOC.read_text(encoding="utf-8")
     decisions_text = DECISIONS_DOC.read_text(encoding="utf-8")
 
-    assert "minimum trial count: 54" in audit_text
-    assert "0.00669537" in audit_text
-    assert "0.00335884" in audit_text
+    assert "minimum trial count: 56" in audit_text
+    assert "0.00694335" in audit_text
+    assert "0.00348324" in audit_text
     assert "maximum trials passing the 5% PSR/Bonferroni approximation: 403" in audit_text
     assert "Canonical DSR: unavailable" in audit_text
     assert "PBO: unavailable" in audit_text

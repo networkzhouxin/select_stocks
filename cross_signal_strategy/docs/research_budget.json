@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 54,
+  "expected_failed_experiment_count": 55,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -300,6 +300,19 @@
       "bearish_cross_5d_directional_win_rate": 0.4143,
       "gate_passed": false,
       "candidate_created": false
+    },
+    {
+      "key": "entry_atr_breakeven_user_authorized",
+      "label": "User-authorized fixed one-entry-ATR break-even candidate",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The single fixed candidate activated a cost floor only after the stored closing-price peak reached one entry ATR. It reduced local training return from 120.61% to 114.28%, worsened drawdown, Sharpe, Sortino, win rate, profit/loss ratio, 2020, and 2021, so it was rejected before JoinQuant or validation. Nearby activation levels, profit floors, staged stops, or ETF/year exceptions are prohibited post hoc.",
+      "activation_atr": 1.0,
+      "floor_return": 0.0,
+      "candidate_gate_passed": false,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
     }
   ]
 }
