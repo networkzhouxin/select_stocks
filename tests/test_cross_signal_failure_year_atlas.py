@@ -23,8 +23,8 @@ def test_parser_excludes_template_and_preserves_all_real_ledger_entries():
 
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
 
-    assert len(records) == 55
-    assert len({record.record_id for record in records}) == 55
+    assert len(records) == 56
+    assert len({record.record_id for record in records}) == 56
     assert all(record.date.startswith("2026-") for record in records)
     assert all(record.experiment for record in records)
 
@@ -59,7 +59,7 @@ def test_atlas_counts_only_explicit_annual_contradictions():
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
     atlas = build_failure_year_atlas(records, load_annotations(ANNOTATIONS_PATH))
 
-    assert atlas.total_experiments == 55
+    assert atlas.total_experiments == 56
     assert atlas.annotated_experiments < atlas.total_experiments
     assert atlas.unreported_annual_experiments == (
         atlas.total_experiments - atlas.annotated_experiments
@@ -83,6 +83,12 @@ def test_atlas_counts_only_explicit_annual_contradictions():
     )
     assert breakeven.annotation.failed_years == (2020, 2021)
     assert breakeven.annotation.mechanism == "premature_exit"
+    macd_free_kdj = next(
+        item for item in atlas.annotated_records
+        if "macd-free-kdj-exit-candidate" in item.record.version
+    )
+    assert macd_free_kdj.annotation.failed_years == (2019, 2020, 2021)
+    assert macd_free_kdj.annotation.mechanism == "premature_exit"
 
 
 def test_2020_minute_overlay_is_tail_execution_not_mainline_weakness():

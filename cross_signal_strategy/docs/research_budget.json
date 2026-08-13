@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 55,
+  "expected_failed_experiment_count": 56,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -310,6 +310,26 @@
       "activation_atr": 1.0,
       "floor_return": 0.0,
       "candidate_gate_passed": false,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
+    {
+      "key": "macd_free_kdj_exit_user_authorized",
+      "label": "User-authorized fixed MACD-free and KDJ-only exit candidate",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The single fixed candidate retained MACD only for observation, removed its score points, and used the standard K/D death cross as the sole ordinary exit after the frozen five-trading-day minimum hold. It cut local training return from 120.61% to 41.87%, worsened every aggregate metric and every annual return, and increased buys from 92 to 170. The candidate was rejected before JoinQuant or validation; nearby decompositions and parameter variants are prohibited post hoc.",
+      "macd_decision_role": "observation_only",
+      "ordinary_exit_trigger": "recent_kdj_k_cross_down",
+      "minimum_signal_hold_days": 5,
+      "candidate_gate_passed": false,
+      "changed_order_days": 256,
+      "changed_days_by_year": {
+        "2019": 79,
+        "2020": 88,
+        "2021": 89
+      },
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true

@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 55 real ledger entries.
+- Recorded failed or non-adopted experiments: 56 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -20,6 +20,8 @@ it does not change any score, order, position, or risk rule.
   aggregate fill improvement did not remain positive in 2020.
 - The completed fixed one-entry-ATR break-even candidate remains closed; it
   worsened return, drawdown, risk-adjusted metrics, win rate, and 2020/2021.
+- The completed fixed MACD-free/KDJ-only candidate remains closed; it nearly
+  doubled trading activity and worsened every aggregate gate and every training year.
 - One independent QDII underlying-index direction observation is pre-registered.
   Four raw 2018-2021 value series are staged and hashed, but the observation
   remains blocked because `SPX` and `H30533` lack approved historical
@@ -58,6 +60,7 @@ it does not change any score, order, position, or risk rule.
 | `etf_share_flow_shadow` | exhausted | The fixed five-observation sign-only attribution covered all 52 eligible domestic buys, but non-positive flow led average return in 2019/2020 while positive flow led both metrics in 2021. No candidate was permitted. |
 | `intraday_execution_overlay_v1` | exhausted | The fixed 09:35 arrival-price limit with six five-minute cycles and a 10:05 fallback matched 92/92 ordinary buys, but average execution worsened in 2020. No full portfolio candidate was permitted. |
 | `entry_atr_breakeven_user_authorized` | exhausted | The fixed 1-entry-ATR activation and cost floor reduced return and trade quality. Do not search nearby ATR activations, profit floors, staged stops, or ETF/year exceptions. |
+| `macd_free_kdj_exit_user_authorized` | exhausted | The fixed MACD-observation-only buy score plus K/D-only ordinary exit reduced return from 120.61% to 41.87%, worsened every major metric and every training year, and increased buys from 92 to 170. Do not decompose or search nearby KDJ/MACD/hold/threshold variants post hoc. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
