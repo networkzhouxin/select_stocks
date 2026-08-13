@@ -12,9 +12,9 @@ not out-of-sample validation, and it does not authorize any strategy change.
 
 ## Evidence Boundary
 
-- `docs/failed_experiments.md` retains 57 failed or non-adopted experiments.
+- `docs/failed_experiments.md` retains 58 failed or non-adopted experiments.
 - The selected frozen mainline contributes one additional selection.
-- minimum trial count: 58
+- minimum trial count: 59
 - The count is a lower bound. Early or adopted variants may not all have a
   retained candidate return series or a failed-experiment record.
 - Validation-period data was not read, inspected, or used.
@@ -40,14 +40,14 @@ the strategy will remain profitable.
 - Annual returns: 2019 35.84%, 2020 49.74%, 2021 8.46%
 - Single-trial PSR: 0.999876
 - Single-trial PSR p-value: 0.000123988
-- Minimum-58 Bonferroni PSR p-value: 0.00719132
+- Minimum-59 Bonferroni PSR p-value: 0.00731531
 - maximum trials passing the 5% PSR/Bonferroni approximation: 403
 - Newey-West/HAC automatic lag: 6
 - Newey-West/HAC t-statistic: 3.837
 - Single-trial HAC p-value: 0.0000622008
-- Minimum-58 Bonferroni HAC p-value: 0.00360765
+- Minimum-59 Bonferroni HAC p-value: 0.00366985
 
-At the provable lower bound of 58 trials, both approximations remain below the
+At the provable lower bound of 59 trials, both approximations remain below the
 5% family-wise threshold. This is evidence that the frozen training result is
 not merely a marginal winner among the retained experiments. Because the true
 trial count may be higher, the corrected confidence values are optimistic upper

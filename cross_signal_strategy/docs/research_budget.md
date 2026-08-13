@@ -62,6 +62,7 @@ it does not change any score, order, position, or risk rule.
 | `entry_atr_breakeven_user_authorized` | exhausted | The fixed 1-entry-ATR activation and cost floor reduced return and trade quality. Do not search nearby ATR activations, profit floors, staged stops, or ETF/year exceptions. |
 | `macd_free_kdj_exit_user_authorized` | exhausted | The fixed MACD-observation-only buy score plus K/D-only ordinary exit reduced return from 120.61% to 41.87%, worsened every major metric and every training year, and increased buys from 92 to 170. Do not decompose or search nearby KDJ/MACD/hold/threshold variants post hoc. |
 | `macd_fast_exit_user_authorized` | exhausted | The fixed recent MACD death-cross OR exit after the five-day hold reduced return from 120.61% to 81.75%, worsened every major metric and every training year, and increased buys from 92 to 128. Keep the official sell-score, price-structure, and ADX protections; do not search nearby MACD/hold/window variants post hoc. |
+| `kdj_only_exit_user_authorized` | exhausted | The fixed K/D-death-cross-only ordinary exit retained official MACD buy scoring but reduced return from 120.61% to 42.64%, worsened every major metric and every training year, and increased buys from 92 to 170. Keep the official sell-score, price-structure, and ADX protections; do not search nearby KDJ/hold/window variants post hoc. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -106,6 +107,14 @@ but it still changed 156 filled-order days and worsened every aggregate metric
 and all three annual returns. Do not search MACD periods, cross windows, hold
 days, delayed confirmations, profit conditions, or ETF/year exceptions from
 this result.
+
+`kdj_only_exit_user_authorized` consumed its one fixed candidate. It retained
+the complete official buy path, including MACD scoring, and changed only the
+ordinary exit to a recent K/D death cross after five trading days. It worsened
+every aggregate metric and every annual return while increasing buys from 92
+to 170. Do not search K/D versus J/D, KDJ periods, hold days, cross windows,
+profit conditions, delayed confirmations, or ETF/year exceptions from this
+result.
 
 ## Mandatory Sequence
 

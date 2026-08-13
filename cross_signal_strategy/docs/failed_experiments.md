@@ -637,3 +637,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: A recent-window MACD death cross by itself is too noisy as a mandatory exit. It exits recoverable pullbacks, increases portfolio recycling, and truncates profitable trends; the official price-structure, sell-score, and ADX filters prevent these premature exits.
 Can it be revisited? no as a MACD-only fast-exit OR channel
 Conditions for revisiting: Do not search MACD periods, cross windows, hold days, delayed confirmations, ETF/year exceptions, profit conditions, or threshold combinations from this result. Reopening requires a genuinely new externally justified exit mechanism and explicit authorization.
+
+Date: 2026-08-14
+Version: `cross-v0.3.2-kdj-only-exit-candidate`
+Experiment: Keep the complete official buy path, including MACD cross scoring, unchanged. After the frozen five-trading-day minimum hold, replace the ordinary signal-sell path with the recent KDJ K/D death cross alone, bypassing sell-score, price-structure confirmation, and ADX protection. Preserve the official ATR stop, ETF pool, cross window, sizing, fees, and 09:35 execution.
+Hypothesis: K/D death cross may preserve accrued profit earlier than the slower multi-condition ordinary sell path while the unchanged official buy logic maintains entry quality.
+Training diagnostic result: The candidate changed 256 filled-order days across 2019/2020/2021, split 80/84/92. The baseline returned +120.61% annualized at +30.27%, with 7.47% maximum drawdown, 2.172 Sharpe, 3.415 Sortino, 56.18% win rate, 4.440 profit/loss ratio, 92 buys, and 89 sells. The candidate returned +42.64% annualized at +12.60%, with 8.61% drawdown, 1.309 Sharpe, 1.969 Sortino, 54.44% win rate, 1.691 profit/loss ratio, 170 buys, and 169 sells. Baseline annual returns were +35.84%/+49.74%/+8.46%, while candidate annual returns were +10.06%/+30.30%/-0.53% in 2019/2020/2021.
+Candidate result: Rejected by the pre-registered gate. Every aggregate quality/risk metric and every annual return worsened.
+JoinQuant training result: Not run because the local gate failed. No JoinQuant candidate was generated and the official JoinQuant/PTrade strategies remain unchanged.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The K/D oscillator is faster but too noisy as the sole ordinary exit. It repeatedly treats recoverable pullbacks as trend endings, nearly doubles portfolio turnover, truncates profitable trends, and leaves the strategy worse in all three training regimes. Preserving MACD on the buy side does not repair the premature-exit mechanism.
+Can it be revisited? no as a K/D-death-cross-only ordinary exit
+Conditions for revisiting: Retain the official sell-score, price-structure, and ADX protections. Do not search K/D versus J/D, nearby hold days, cross windows, KDJ periods, profit conditions, delayed confirmations, ETF/year exceptions, or threshold hybrids from this result. Reopening requires a genuinely independent exit mechanism and explicit authorization.

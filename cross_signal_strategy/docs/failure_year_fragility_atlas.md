@@ -20,15 +20,15 @@
 
 ## 年度反例覆盖
 
-- 台账实验总数：57
-- 具有明确逐年反例并完成审计标注：17
+- 台账实验总数：58
+- 具有明确逐年反例并完成审计标注：18
 - 未保留足够逐年证据、因此不归因：40
 
 | 年份 | 明确年度反例次数 |
 | --- | ---: |
-| 2019 | 9 |
-| 2020 | 9 |
-| 2021 | 14 |
+| 2019 | 10 |
+| 2020 | 10 |
+| 2021 | 15 |
 
 同一个实验可以在多个年份触发门槛失败，因此次数不是实验数量，也不是年度优劣评分。
 从现有明确证据看，2021 出现反例最频繁，主要表现为低广度反转、波动扩张、
@@ -40,7 +40,7 @@
 | --- | ---: |
 | 执行机制跨年不一致 | 1 |
 | 参数变化的跨年不稳定 | 2 |
-| 过早退出 | 3 |
+| 过早退出 | 4 |
 | 市场状态反转 | 7 |
 | 样本不足或年度集中 | 3 |
 | 少数极端成交尾部 | 1 |
@@ -66,6 +66,7 @@
 | 2026-08-12 | `cross-v0.3.2-entry-atr-breakeven-candidate` | 2020, 2021 | 过早退出 | One-entry-ATR break-even reduced annual return from 49.74% to 45.91% in 2020 and from 8.46% to 7.55% in 2021; aggregate win rate fell from 56.18% to 48.94%. |
 | 2026-08-13 | `cross-v0.3.2-macd-free-kdj-exit-candidate` | 2019, 2020, 2021 | 过早退出 | The MACD-free/KDJ-only candidate reduced annual return from 35.84%/49.74%/8.46% to 10.21%/33.63%/-3.67% in 2019/2020/2021 and increased buys from 92 to 170. |
 | 2026-08-13 | `cross-v0.3.2-macd-fast-exit-candidate` | 2019, 2020, 2021 | 过早退出 | The MACD-fast-exit candidate reduced annual return from 35.84%/49.74%/8.46% to 23.68%/39.88%/5.05% in 2019/2020/2021; total return, drawdown, Sharpe, Sortino, win rate, and profit/loss ratio also worsened. |
+| 2026-08-14 | `cross-v0.3.2-kdj-only-exit-candidate` | 2019, 2020, 2021 | 过早退出 | The KDJ-only ordinary-exit candidate reduced annual return from 35.84%/49.74%/8.46% to 10.06%/30.30%/-0.53% in 2019/2020/2021 and increased buys from 92 to 170. |
 
 ## 结论与下一研究方向
 
