@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 56
-    assert report.expected_failed_experiment_count == 56
+    assert report.failed_experiment_count == 57
+    assert report.expected_failed_experiment_count == 57
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 

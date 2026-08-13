@@ -61,6 +61,7 @@ it does not change any score, order, position, or risk rule.
 | `intraday_execution_overlay_v1` | exhausted | The fixed 09:35 arrival-price limit with six five-minute cycles and a 10:05 fallback matched 92/92 ordinary buys, but average execution worsened in 2020. No full portfolio candidate was permitted. |
 | `entry_atr_breakeven_user_authorized` | exhausted | The fixed 1-entry-ATR activation and cost floor reduced return and trade quality. Do not search nearby ATR activations, profit floors, staged stops, or ETF/year exceptions. |
 | `macd_free_kdj_exit_user_authorized` | exhausted | The fixed MACD-observation-only buy score plus K/D-only ordinary exit reduced return from 120.61% to 41.87%, worsened every major metric and every training year, and increased buys from 92 to 170. Do not decompose or search nearby KDJ/MACD/hold/threshold variants post hoc. |
+| `macd_fast_exit_user_authorized` | exhausted | The fixed recent MACD death-cross OR exit after the five-day hold reduced return from 120.61% to 81.75%, worsened every major metric and every training year, and increased buys from 92 to 128. Keep the official sell-score, price-structure, and ADX protections; do not search nearby MACD/hold/window variants post hoc. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -98,6 +99,13 @@ annual averages were +1.02/-0.78/+6.73 basis points in 2019/2020/2021. The
 pre-registered every-year gate therefore failed before a full portfolio
 candidate could exist. Do not search nearby times, cycle counts, limit prices,
 fallbacks, ETF exceptions, or sell-side overlays from this result.
+
+`macd_fast_exit_user_authorized` consumed its one fixed candidate. The recent
+MACD death-cross OR exit was activated only after the official five-day hold,
+but it still changed 156 filled-order days and worsened every aggregate metric
+and all three annual returns. Do not search MACD periods, cross windows, hold
+days, delayed confirmations, profit conditions, or ETF/year exceptions from
+this result.
 
 ## Mandatory Sequence
 

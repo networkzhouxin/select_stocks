@@ -113,6 +113,13 @@
       "mechanism": "premature_exit",
       "evidence": "The MACD-free/KDJ-only candidate reduced annual return from 35.84%/49.74%/8.46% to 10.21%/33.63%/-3.67% in 2019/2020/2021 and increased buys from 92 to 170.",
       "interpretation": "K/D-only ordinary exits reacted too quickly, while removing MACD score support weakened entry coherence; the combined path overtraded and cut trend persistence."
+    },
+    {
+      "record_id": "bb149e10ba486601",
+      "failed_years": [2019, 2020, 2021],
+      "mechanism": "premature_exit",
+      "evidence": "The MACD-fast-exit candidate reduced annual return from 35.84%/49.74%/8.46% to 23.68%/39.88%/5.05% in 2019/2020/2021; total return, drawdown, Sharpe, Sortino, win rate, and profit/loss ratio also worsened.",
+      "interpretation": "A recent-window MACD death cross without structure or ADX confirmation exits recoverable pullbacks and truncates trends in every training regime."
     }
   ]
 }

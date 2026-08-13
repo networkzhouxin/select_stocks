@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 56,
+  "expected_failed_experiment_count": 57,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -329,6 +329,25 @@
         "2019": 79,
         "2020": 88,
         "2021": 89
+      },
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
+    {
+      "key": "macd_fast_exit_user_authorized",
+      "label": "User-authorized fixed MACD death-cross fast-exit candidate",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The single fixed candidate kept all official buy and sell paths but added a recent MACD death-cross OR exit after the five-day hold. It cut local training return from 120.61% to 81.75%, worsened every aggregate metric and all three annual returns, and increased buys from 92 to 128. It was rejected before JoinQuant or validation; nearby variants are prohibited post hoc.",
+      "ordinary_exit_trigger": "recent_macd_cross_down_or_official_signal_sell",
+      "minimum_signal_hold_days": 5,
+      "candidate_gate_passed": false,
+      "changed_order_days": 156,
+      "changed_days_by_year": {
+        "2019": 51,
+        "2020": 43,
+        "2021": 62
       },
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
