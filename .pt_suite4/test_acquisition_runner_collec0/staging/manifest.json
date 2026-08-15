@@ -1,0 +1,94 @@
+{
+  "acquired_at": "2026-07-18T10:00:00+08:00",
+  "acquired_at_is_not_available_at": true,
+  "data_scope": "2018_warmup_plus_2019_2021_training_only",
+  "formal_publishable": false,
+  "blocked_codes": [
+    "513050",
+    "513500"
+  ],
+  "files": {
+    "513050": {
+      "path": "raw/513050.csv",
+      "rows": 2,
+      "first_session": "2019-01-02",
+      "last_session": "2019-01-03",
+      "sha256": "59e7eaa1085ce88b77e5ec3168e45981459d2d48cd77a39cdd7a347f7669126c",
+      "source": {
+        "etf_code": "513050",
+        "source_id": "H30533",
+        "provider": "CSI",
+        "locator": "H30533",
+        "value_source_url": "https://www.csindex.com.cn/csindex-home/perf/index-perf",
+        "request_start": "2018-01-01",
+        "request_end": "2021-12-31"
+      },
+      "availability_policy": null
+    },
+    "513100": {
+      "path": "raw/513100.csv",
+      "rows": 2,
+      "first_session": "2019-01-02",
+      "last_session": "2019-01-03",
+      "sha256": "665df2f27f485453bde7061d0a98458f9919f3150e748e8ced3a57942bb2fb4b",
+      "source": {
+        "etf_code": "513100",
+        "source_id": "NDX",
+        "provider": "FRED",
+        "locator": "NASDAQ100",
+        "value_source_url": "https://fred.stlouisfed.org/series/NASDAQ100",
+        "request_start": "2018-01-01",
+        "request_end": "2021-12-31"
+      },
+      "availability_policy": {
+        "policy_id": "nasdaq_final_correction_cutoff_1715_et",
+        "timezone": "America/New_York",
+        "hour": 17,
+        "minute": 15,
+        "evidence_url": "https://indexes.nasdaq.com/docs/Nasdaq_Index_Methodology_Guide.pdf",
+        "evidence_note": "Use the end-of-day correction cutoff, not the ordinary market close, as the conservative final-value availability boundary."
+      }
+    },
+    "513500": {
+      "path": "raw/513500.csv",
+      "rows": 2,
+      "first_session": "2019-01-02",
+      "last_session": "2019-01-03",
+      "sha256": "665df2f27f485453bde7061d0a98458f9919f3150e748e8ced3a57942bb2fb4b",
+      "source": {
+        "etf_code": "513500",
+        "source_id": "SPX",
+        "provider": "FRED",
+        "locator": "SP500",
+        "value_source_url": "https://fred.stlouisfed.org/series/SP500",
+        "request_start": "2018-01-01",
+        "request_end": "2021-12-31"
+      },
+      "availability_policy": null
+    },
+    "513880": {
+      "path": "raw/513880.csv",
+      "rows": 2,
+      "first_session": "2019-01-02",
+      "last_session": "2019-01-03",
+      "sha256": "665df2f27f485453bde7061d0a98458f9919f3150e748e8ced3a57942bb2fb4b",
+      "source": {
+        "etf_code": "513880",
+        "source_id": "N225",
+        "provider": "FRED",
+        "locator": "NIKKEI225",
+        "value_source_url": "https://fred.stlouisfed.org/series/NIKKEI225",
+        "request_start": "2018-01-01",
+        "request_end": "2021-12-31"
+      },
+      "availability_policy": {
+        "policy_id": "nikkei_daily_value_after_close_1600_jst",
+        "timezone": "Asia/Tokyo",
+        "hour": 16,
+        "minute": 0,
+        "evidence_url": "https://indexes.nikkei.co.jp/nkave/archives/file/update_schedule_en.pdf",
+        "evidence_note": "Official schedule states daily Nikkei 225 values are updated after the TSE close, at approximately 16:00 JST."
+      }
+    }
+  }
+}

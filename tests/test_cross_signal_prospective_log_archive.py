@@ -16,9 +16,9 @@ from cross_signal_strategy.research.prospective_log_archive import (
 )
 
 
-EXPECTED_VERSION = "cross-v0.3.2"
-EXPECTED_BUILD = "20260804.1"
-EXPECTED_FINGERPRINT = "1506a0e834fe"
+EXPECTED_VERSION = "cross-v0.3.3"
+EXPECTED_BUILD = "20260816.1"
+EXPECTED_FINGERPRINT = "77e44d93d255"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_DOC = (
     REPO_ROOT
@@ -36,7 +36,7 @@ RESEARCH_BUDGET = (
 
 def _valid_log(day="2026-07-18", build=EXPECTED_BUILD, fingerprint=EXPECTED_FINGERPRINT):
     return (
-        "%s 09:30:00 - INFO - [发布指纹] 构建=%s 业务配置=%s 状态结构=6\n"
+        "%s 09:30:00 - INFO - [发布指纹] 构建=%s 业务配置=%s 状态结构=7\n"
         "%s 09:35:00 - INFO - [%s] 执行日期=%s 信号日期=2026-07-17 是否调仓=是\n"
         "%s 09:35:01 - INFO - [IOPV观察] 事件=买入 时间=%s 09:35:01 "
         "代码=513100.SS 有效=True 市价=1.234 IOPV=1.230 溢价率百分比=0.32\n"
@@ -107,7 +107,7 @@ def test_inspect_log_extracts_only_forward_evidence_metadata():
         ),
         (
             (
-                "2026-07-18 09:35:00 - INFO - [cross-v0.3.2] "
+                "2026-07-18 09:35:00 - INFO - [cross-v0.3.3] "
                 "执行日期=2026-07-18 信号日期=2026-07-17 是否调仓=是\n"
             ).encode("utf-8"),
             LogIdentityError,
@@ -285,8 +285,8 @@ def test_forward_log_protocol_freezes_collection_without_opening_research():
 
     required_terms = (
         "2026-07-18",
-        "20260804.1",
-        "1506a0e834fe",
+        "20260816.1",
+        "77e44d93d255",
         "不改变交易逻辑",
         "09:36",
         "不重新计算信号",

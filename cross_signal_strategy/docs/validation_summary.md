@@ -1,17 +1,39 @@
 # Cross-Signal Frozen Validation Summary
 
 Date: 2026-07-09
-Updated: 2026-07-10
+Updated: 2026-08-16
 
-This file summarizes the frozen validation evidence for the official cross-signal mainline and the ATR-stress candidate. It is a decision record, not a parameter-search notebook. Do not use these reserved-period results to tune thresholds, add indicators, remove ETFs, or choose a new validation-fitting variant.
+This file summarizes the frozen validation evidence for the official cross-signal mainline and its candidates. It is a decision record, not a parameter-search notebook. Do not use these reserved-period results to tune thresholds, add indicators, remove ETFs, or choose a new validation-fitting variant.
+
+## 2026-08-16 ATR-Stress Adoption (cross-v0.3.3)
+
+The frozen portfolio ATR-stress rule (15 trading days, 3 ATR stops, 0.50 buy
+scale) was staged on the `cross-v0.3.3` mainline and adopted after local
+pre-check plus five JoinQuant windows:
+
+| Period | Role | v0.3.2 Return | v0.3.3 Return | v0.3.2 Max DD | v0.3.3 Max DD | Stress Trigger | Judgment |
+|---|---|---:|---:|---:|---:|---|---|
+| 2019-2021 | training | +125.82% | +129.25% | 6.70% | 6.28% | 6 half-size buys | improved return and drawdown, identical 53/42 path |
+| 2022-2023 | first validation | +17.36% | +17.90% | 11.63% | 11.17% | triggered | improved on every metric, identical 25/40 path |
+| 2024-2026 | recent validation | +58.17% | +58.17% | 9.98% | 9.98% | none | identical path, harmless |
+| 2015-2018 | stress validation | +23.21% | +23.21% | 7.38% | 7.38% | none | identical path, harmless |
+| 2010-2014 | early supplement | +1.20% | +1.20% | 5.23% | 5.23% | none | identical path, harmless |
+
+The JoinQuant and PTrade formal files were synchronized to `cross-v0.3.3` /
+build `20260816.1` / fingerprint `77e44d93d255` / PTrade state schema 7 on
+2026-08-16. The rule is positioned as drawdown insurance, not an alpha source:
+it only scales new buys and never changes the trade path when inactive. Full
+evidence: `docs/backtest_notes.md` (sections "ATR-Stress Local Pre-Check",
+"JoinQuant v0.3.3 ATR-Stress Staging Runs", "ATR-Stress Half-Size Buy Trade
+Attribution").
 
 ## Current Adoption Update
 
 Current official mainline after frozen validation:
 - File: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
-- Version: `cross-v0.3.2`
-- Adopted rule: the validated entry-combo filter from `cross-v0.3.1-combo-candidate`.
-- Adoption reason: the candidate improved training and three reserved windows, while the 2015-2018 stress window was only slightly mixed and did not collapse.
+- Version: `cross-v0.3.3`
+- Adopted rules: the validated entry-combo filter from `cross-v0.3.1-combo-candidate` (v0.3.2) and the frozen portfolio ATR-stress rule (v0.3.3).
+- Adoption reason: the combo filter improved training and three reserved windows; the ATR-stress rule improved training and the 2022-2023 weak market while remaining byte-identical elsewhere.
 
 `cross-v0.3.1` remains the historical baseline for the tables below. Do not rewrite those historical results as `v0.3.2`; they are comparison evidence.
 

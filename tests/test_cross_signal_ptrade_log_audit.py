@@ -33,7 +33,7 @@ def normal_day_lines(include_conditional_events=True):
         line(
             "2026-07-20 08:00:00",
             "INFO",
-            "[cross-v0.3.2] 初始化完成: 最大持仓=3 基础仓位比例=0.95 普通信号最短持有=5",
+            "[cross-v0.3.3] 初始化完成: 最大持仓=3 基础仓位比例=0.95 普通信号最短持有=5",
         ),
         line(
             "2026-07-20 08:55:00",
@@ -58,7 +58,7 @@ def normal_day_lines(include_conditional_events=True):
         line(
             "2026-07-20 09:35:00",
             "INFO",
-            "[cross-v0.3.2] 执行日期=2026-07-20 信号日期=2026-07-17 是否调仓=是",
+            "[cross-v0.3.3] 执行日期=2026-07-20 信号日期=2026-07-17 是否调仓=是",
         ),
     ]
     if include_conditional_events:
@@ -91,14 +91,14 @@ def normal_day_lines(include_conditional_events=True):
             line(
                 "2026-07-20 09:35:04",
                 "INFO",
-                "[cross-v0.3.2] 没有达到阈值的买入候选",
+                "[cross-v0.3.3] 没有达到阈值的买入候选",
             )
         )
     lines.append(
         line(
             "2026-07-20 15:30:00",
             "INFO",
-            "[cross-v0.3.2 收盘] 总资产=21000.00 可用资金=5000.00 持仓数=2/3",
+            "[cross-v0.3.3 收盘] 总资产=21000.00 可用资金=5000.00 持仓数=2/3",
         )
     )
     return lines
@@ -124,7 +124,7 @@ def test_current_trading_day_start_marker_passes_main_0935_check(audit):
         "2026-07-20 09:35:00",
         "INFO",
         "[交易日开始] 执行日期=2026-07-20 信号日期=2026-07-17 "
-        "策略=cross-v0.3.2 是否调仓=是",
+        "策略=cross-v0.3.3 是否调仓=是",
     )
 
     report = audit.audit_runtime_log("\n".join(lines))
@@ -192,7 +192,7 @@ def test_qdii_buy_requires_preceding_iopv_observation(audit, iopv_position):
         line(
             "2026-07-20 15:30:00",
             "INFO",
-            "[cross-v0.3.2 收盘] 总资产=21000.00 可用资金=5000.00 持仓数=2/3",
+            "[cross-v0.3.3 收盘] 总资产=21000.00 可用资金=5000.00 持仓数=2/3",
         )
     )
 
@@ -214,7 +214,7 @@ def test_submitted_order_without_later_callback_requires_review(audit):
             line(
                 "2026-07-20 15:30:00",
                 "INFO",
-                "[cross-v0.3.2 收盘] 总资产=21000.00 可用资金=5000.00 持仓数=2/3",
+                "[cross-v0.3.3 收盘] 总资产=21000.00 可用资金=5000.00 持仓数=2/3",
             ),
         ]
     )
@@ -247,7 +247,7 @@ def test_multiple_dates_without_explicit_date_require_review(audit):
         line(
             "2026-07-19 15:30:00",
             "INFO",
-            "[cross-v0.3.2 收盘] 总资产=20000.00 可用资金=5000.00 持仓数=2/3",
+            "[cross-v0.3.3 收盘] 总资产=20000.00 可用资金=5000.00 持仓数=2/3",
         )
     )
 

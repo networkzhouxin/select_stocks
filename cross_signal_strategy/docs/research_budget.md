@@ -63,6 +63,10 @@ it does not change any score, order, position, or risk rule.
 | `macd_free_kdj_exit_user_authorized` | exhausted | The fixed MACD-observation-only buy score plus K/D-only ordinary exit reduced return from 120.61% to 41.87%, worsened every major metric and every training year, and increased buys from 92 to 170. Do not decompose or search nearby KDJ/MACD/hold/threshold variants post hoc. |
 | `macd_fast_exit_user_authorized` | exhausted | The fixed recent MACD death-cross OR exit after the five-day hold reduced return from 120.61% to 81.75%, worsened every major metric and every training year, and increased buys from 92 to 128. Keep the official sell-score, price-structure, and ADX protections; do not search nearby MACD/hold/window variants post hoc. |
 | `kdj_only_exit_user_authorized` | exhausted | The fixed K/D-death-cross-only ordinary exit retained official MACD buy scoring but reduced return from 120.61% to 42.64%, worsened every major metric and every training year, and increased buys from 92 to 170. Keep the official sell-score, price-structure, and ADX protections; do not search nearby KDJ/hold/window variants post hoc. |
+| `profit_tiered_atr_user_authorized` | exhausted | The fixed profit-tiered ATR tightening (×0.8 above 5% profit, ×0.6 above 15% profit) found 36 binding stop checks but 0 days where the tightened stop triggered while the baseline stop did not. The local A/B changed 0 filled orders and every metric matched the cross-v0.3.3 baseline, so the candidate was rejected before JoinQuant or validation. The 5% stop floor plus frozen entry ATR makes the multi-factor V2.6 mechanism a no-op in cross-signal; no tier/multiplier/measurement/floor/per-ETF search is allowed. |
+| `gold_specific_stop_user_authorized` | exhausted | The fixed gold-only stop (518880: floor 0.03, multiplier 2.0×) bound on 223 check days with 6 extra triggers, but the local A/B failed the gates: return +125.00%→+120.96%, drawdown 6.03%→6.08%, Sharpe/Sortino worse, 2019 and 2021 annual returns worse. The first extra stop clipped a 2019 winner (+4.7% exit versus +9.0% baseline exit) and cascaded into 162 changed fills. The multi-factor V2.8 gold stop does not transfer to this reversal-entry framework; no nearby gold floor/multiplier values and no per-ETF extension are allowed. |
+| `profit_giveback_exit_user_authorized` | exhausted | The fixed profit-giveback direct exit (peak profit ≥5%, giveback 3pp → sell at the 09:35 stop check) fired 79 times across 21 affected closed trades, but the total per-share delta was -0.352 with annual deltas -0.380/-0.101/+0.129, failing the total and annual gates. It would have clipped two major winners (2019-02-11 159928 and 2020-04-17 513050) while saving small amounts elsewhere. Large trend winners routinely give back more than 3pp mid-hold, so the mechanism kills this framework's payoff source. No candidate was created; no threshold or mechanism search is allowed. |
+| `intraday_high_anchor_user_authorized` | exhausted | The fixed intraday-high trailing anchor (multiplier 2.5, floor 5%, cap 15% unchanged) bound on 1604 check days with 38 extra triggers, but the local A/B failed the gates: return +125.00%→+119.40%, drawdown 6.03%→6.06%, 2019 annual +35.84%→+30.55%. The dominant clip was 2019-02-11 159928 (exit 2.232 versus official 2.666 on an +18.8% winner); seven small saves could not offset it. The peak-day upper wick raises the anchor into the winner's normal pullback band, turning the noise the close anchor was designed to filter back into stop triggers. No anchor blends or re-calibrations are allowed. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -70,7 +74,38 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. `underlying_market_direction` is blocked rather than open. Raw values in
+None. The user-authorized `intraday_high_anchor_user_authorized` family was
+consumed on 2026-08-16: the Step 0 binding observation passed (1604 binding
+days, 38 extra triggers) but the Step 1 local A/B failed the gates
+(+125.00%→+119.40% return, 6.03%→6.06% drawdown, worse 2019), because the
+high anchor clipped the 2019-02-11 159928 winner (2.232 vs 2.666), so the
+family closed without adoption. Its design is documented in
+`docs/superpowers/specs/2026-08-16-intraday-high-anchor-design.md`.
+
+The user-authorized `profit_giveback_exit_user_authorized` family was
+consumed on 2026-08-16: the Step 0 trade-level counterfactual fired 79 times
+across 21 affected closed trades but the total per-share delta was negative
+(-0.352, annual -0.380/-0.101/+0.129), because it clipped two major winners
+(2019-02-11 159928, 2020-04-17 513050) while saving small amounts elsewhere,
+so the family closed without a candidate. Its design is documented in
+`docs/superpowers/specs/2026-08-16-profit-giveback-exit-design.md`.
+
+The user-authorized `gold_specific_stop_user_authorized` family was
+consumed on 2026-08-16: the Step 0 binding observation passed (223 binding
+days, 6 extra triggers) but the Step 1 local A/B failed every quality gate
+(+125.00%→+120.96% return, 6.03%→6.08% drawdown, worse 2019/2021), so the
+candidate was rejected and the family is exhausted. Its design is documented
+in `docs/superpowers/specs/2026-08-16-gold-specific-stop-design.md`.
+
+The user-authorized `profit_tiered_atr_user_authorized` family was consumed on
+2026-08-16: the Step 0 binding observation passed its 10-event gate (36 events)
+but recorded zero same-day extra triggers, and the Step 1 local A/B confirmed
+an exact no-op (0 changed filled orders, all metrics identical to
+`cross-v0.3.3`), so the candidate was rejected and the family is exhausted. Its
+design is documented in
+`docs/superpowers/specs/2026-08-16-profit-tiered-atr-design.md`.
+
+`underlying_market_direction` is blocked rather than open. Raw values in
 `G:\financial\history_data\cross_signal_underlying_staging_2018_2021` are not
 formal point-in-time data and cannot run the observation. The approved root
 must remain absent until all four publication-time policies pass. Its exact

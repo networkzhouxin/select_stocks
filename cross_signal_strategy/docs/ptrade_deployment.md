@@ -2,18 +2,25 @@
 
 ## Frozen Scope
 
-- Strategy version: `cross-v0.3.2`.
+- Strategy version: `cross-v0.3.3`.
 - JoinQuant source of truth: `smart_trade_joinquant_cross_signal_etf.py`.
 - PTrade deployment file: `smart_trade_ptrade_cross_signal_etf.py`.
 - JoinQuant remains the authority for performance. The PTrade backtest is a
   runtime smoke test only.
 - This port contains no multi-factor weights, Tuesday/Thursday rotation,
   switch threshold, or multi-factor bear-market rules.
+- The frozen portfolio ATR-stress rule (15 trading days, 3 ATR stops, 0.50 buy
+  scale) is part of the business configuration: `g.atr_stop_history` records
+  the trigger date of every fully filled ATR-stop sell, and new buys are
+  half-sized while three or more stops fall inside the lookback window. The
+  stress state is persisted in the state journal and restored on restart;
+  after a first start on the new journal it cold-starts empty, so deploy
+  during a non-stressed period (no ATR stops in the last 15 trading days).
 
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260804.1 业务配置=1506a0e834fe 状态结构=6
+[发布指纹] 构建=20260816.1 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -23,18 +30,17 @@ The state schema is PTrade-only and does not participate in trading decisions.
 Any mismatch from this documented identity requires a fresh local release
 check before simulation or live trading continues.
 
-State schema 6 deliberately rejects schema 5 risk state because schema 5 cannot
-represent a completed session whose 15:30 observation was unavailable while
-still preserving the earliest unconfirmed-session cursor. On the first start
-after this upgrade, held-position risk facts are rebuilt from broker delivery
-history and finalized historical daily bars. Subsequent starts use the normal
-bounded schema-6 journal. It persists the earliest unconfirmed session, the
-prior confirmed baseline, and an optional provisional observation until the
-full missing interval is confirmed.
+State schema 7 deliberately rejects schema 6 risk state because schema 6 cannot
+represent the portfolio ATR-stop history used by the stress rule. On the first
+start after this upgrade, held-position risk facts are rebuilt from broker
+delivery history and finalized historical daily bars, and the stress history
+cold-starts empty. Subsequent starts use the normal bounded schema-7 journal.
+It persists the earliest unconfirmed session, the prior confirmed baseline, an
+optional provisional observation, and the stress stop history.
 
 The indicator calculations, cross detection, buy/sell scoring, candidate
 filtering, position sizing, minimum signal hold, and ATR stop formula are
-frozen to the JoinQuant `cross-v0.3.2` mainline. Only platform access and live
+frozen to the JoinQuant `cross-v0.3.3` mainline. Only platform access and live
 order lifecycle handling differ.
 
 Live buy orders use the fresh snapshot already accepted by the execution-price
@@ -57,7 +63,7 @@ selection.
 After PTrade restores its persisted `g` object, a configuration lock rebuilds
 `g.params` and `g.etf_pool` from the frozen source code and calls
 `set_universe()` again. Old persisted configuration therefore cannot replace
-the formal `cross-v0.3.2` parameters or nine-ETF pool after an upgrade or
+the formal `cross-v0.3.3` parameters or nine-ETF pool after an upgrade or
 server restart.
 
 ## Live Schedule
@@ -186,7 +192,7 @@ matching, fill accumulation, retries, cash, positions, signals, or orders.
 ## Buy Filter Diagnostics
 
 When no ETF survives the frozen buy filter, PTrade keeps the existing
-`[cross-v0.3.2] 没有达到阈值的买入候选` line and adds:
+`[cross-v0.3.3] 没有达到阈值的买入候选` line and adds:
 
 - `[买入筛选汇总]`: the evaluation source, score count, pass count, and totals
   for score below threshold, existing/pending holdings, sell risk, missing
@@ -427,7 +433,7 @@ official authority for this port.
 `log.debug` 和 `log.critical` 输出的内容完整镜像到研究根目录下的单一文件：
 
 ```text
-cross_signal_logs/cross_signal_v032_audit.log
+cross_signal_logs/cross_signal_v033_audit.log
 ```
 
 平台控制台按用途分层：`INFO` 保留 `[交易日开始]`、五个处理阶段、候选与
@@ -515,5 +521,5 @@ python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --
    next root-cause decision, not permission to trade.
 7. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
-8. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
+8. Keep the JoinQuant `cross-v0.3.3` file unchanged as the business-logic
    reference for future parity reviews.

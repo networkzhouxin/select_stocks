@@ -22,7 +22,9 @@ def test_sell35_candidate_only_raises_normal_signal_sell_threshold():
     assert main_params["sell_threshold"] == 30
     assert candidate_params["sell_threshold"] == 35
 
-    unchanged = set(main_params) - {"sell_threshold"}
+    # 候选冻结于 v0.3.2 时代, 主线此后新增了冻结参数(如 ATR-stress);
+    # 候选声明过的键必须与主线一致, 但允许主线携带更新参数。
+    unchanged = set(candidate_params) - {"sell_threshold"}
     assert {key: candidate_params[key] for key in unchanged} == {
         key: main_params[key] for key in unchanged
     }

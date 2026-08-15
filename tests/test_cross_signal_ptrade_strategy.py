@@ -55,6 +55,7 @@ def make_g(**overrides):
         "execution_date": None,
         "deferred_scores": [],
         "deferred_signal_date": None,
+        "atr_stop_history": [],
         "failed_buy_codes": set(),
         "buy_backfill_pending": False,
         "live_state_schema_version": None,
@@ -134,9 +135,9 @@ def make_sell_score(code="513100.SS"):
 
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
-    assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260804.1"
-    assert pt.LIVE_STATE_SCHEMA_VERSION == 6
+    assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260816.1"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -150,6 +151,7 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
         "159985.SZ",
     ]
     assert pt.business_config_fingerprint() == jq.business_config_fingerprint()
+    assert pt.business_config_fingerprint() == "77e44d93d255"
 
 
 def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
@@ -210,7 +212,7 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
 
 
 def test_audit_log_rolls_at_complete_utf8_lines_and_stays_bounded(tmp_path):
-    path = tmp_path / "cross_signal_v032_audit.log"
+    path = tmp_path / "cross_signal_v033_audit.log"
     old_lines = [
         ("旧明细%02d-" % index) + ("甲" * 20)
         for index in range(12)
@@ -232,7 +234,7 @@ def test_audit_log_rolls_at_complete_utf8_lines_and_stays_bounded(tmp_path):
 
 def test_audit_log_compaction_failure_preserves_original_file(
         tmp_path, monkeypatch):
-    path = tmp_path / "cross_signal_v032_audit.log"
+    path = tmp_path / "cross_signal_v033_audit.log"
     original = (("原始完整日志行\n" * 30).encode("utf-8"))
     path.write_bytes(original)
 
@@ -515,6 +517,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "calc_macd",
         "calc_rsi",
         "calc_stop_price",
+        "calc_stress_adjusted_buy_target_value",
         "can_sell_by_signal",
         "crossed_above_by_diff_recent",
         "crossed_above_recent",
@@ -533,6 +536,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "is_protected_by_strong_adx_uptrend",
         "is_strong_adx_uptrend",
         "latest_cross_direction_by_diff_recent",
+        "portfolio_atr_stress_buy_scale",
         "rsi_group_direction",
         "score_buy_snapshot",
         "score_sell_snapshot",
@@ -541,6 +545,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "sort_candidates",
         "summarize_cross_signal_candidates",
         "summarize_loose_reversal_candidates",
+        "trading_days_between",
     }
 
     def functions(path):
@@ -909,7 +914,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
 
     assert len({simulation_path, other_account_path, live_path}) == 3
     assert Path(simulation_path).name.startswith(
-        "cross_signal_v032_live_state_v6_")
+        "cross_signal_v033_live_state_v7_")
     assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
@@ -8044,7 +8049,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
         ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
     ).read_text(encoding="utf-8")
 
-    assert "cross-v0.3.2" in notes
+    assert "cross-v0.3.3" in notes
     assert "09:35" in notes
     assert "09:36" in notes
     assert "10:35" in notes
@@ -8063,14 +8068,14 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260804.1" in notes
-    assert "1506a0e834fe" in notes
-    assert "状态结构=6" in notes
+    assert "20260816.1" in notes
+    assert "77e44d93d255" in notes
+    assert "状态结构=7" in notes
     assert "provisional risk state" in notes
     assert "exact finalized T-1 daily bar" in notes
     assert "corrects the provisional high" in notes
     assert "volume is zero" in notes
-    assert "schema 6" in notes
+    assert "schema 7" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
     assert "`INFO`" in notes
@@ -8104,7 +8109,7 @@ def test_ptrade_deployment_notes_define_bounded_full_audit_log():
     ).read_text(encoding="utf-8")
 
     assert "cross_signal_logs" in notes
-    assert "cross_signal_v032_audit.log" in notes
+    assert "cross_signal_v033_audit.log" in notes
     assert "完整镜像" in notes
     assert "20 MB" in notes
     assert "16 MB" in notes
@@ -8141,3 +8146,110 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions
     assert "Replace A/B Checkpoints With Broker-First State Journal" in decisions
     assert "Prefer Broker-Validated PTrade G State On Restart" in decisions
+
+
+def test_live_state_validates_and_normalizes_atr_stop_history():
+    state = {
+        "highest_since_buy": {},
+        "entry_atr": {},
+        "buy_date": {},
+        "pending_close_confirmations": {},
+        "last_scores": {},
+        "sold_today": {},
+        "sell_retry_reasons": {},
+        "paused_pool_codes": set(),
+        "unverified_positions": set(),
+        "execution_date": date(2026, 8, 14),
+        "deferred_scores": [],
+        "deferred_signal_date": date(2026, 8, 13),
+        "atr_stop_history": ["2026-08-01", date(2026, 8, 2)],
+    }
+
+    validated = pt._validated_live_state(state)
+
+    assert validated["atr_stop_history"] == [date(2026, 8, 1), date(2026, 8, 2)]
+
+    with pytest.raises(ValueError):
+        pt._validated_live_state(dict(state, atr_stop_history="not-a-list"))
+
+    with pytest.raises(ValueError):
+        pt._validated_live_state(dict(state, atr_stop_history=["not-a-date"]))
+
+
+def test_execute_sell_backtest_branch_records_atr_stop_date(monkeypatch):
+    pt.g = make_g(__is_live=False, __mode_verified=True)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 8, 14, 9, 35),
+        portfolio=types.SimpleNamespace(
+            positions={
+                "513100.SS": types.SimpleNamespace(
+                    amount=100, cost_basis=1.0, last_sale_price=1.05
+                )
+            },
+        ),
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.05, raising=False)
+    monkeypatch.setattr(
+        pt, "get_sell_limit_price", lambda code, current: round(current, 3),
+        raising=False)
+    monkeypatch.setattr(
+        pt, "order_target", lambda code, amount, limit_price: "order-1",
+        raising=False)
+
+    assert pt.execute_sell("513100.SS", context, "atr_stop 1.000<=1.050") is True
+
+    assert pt.g.atr_stop_history == [date(2026, 8, 14)]
+
+
+def test_execute_sell_backtest_branch_does_not_record_signal_sell(monkeypatch):
+    pt.g = make_g(__is_live=False, __mode_verified=True)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 8, 14, 9, 35),
+        portfolio=types.SimpleNamespace(
+            positions={
+                "513100.SS": types.SimpleNamespace(
+                    amount=100, cost_basis=1.0, last_sale_price=1.05
+                )
+            },
+        ),
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.05, raising=False)
+    monkeypatch.setattr(
+        pt, "get_sell_limit_price", lambda code, current: round(current, 3),
+        raising=False)
+    monkeypatch.setattr(
+        pt, "order_target", lambda code, amount, limit_price: "order-1",
+        raising=False)
+
+    assert pt.execute_sell("513100.SS", context, "sell_score 32") is True
+
+    assert pt.g.atr_stop_history == []
+
+
+def test_finish_terminal_sell_records_atr_stop_on_full_fill():
+    pt.g = make_g(__is_live=True)
+    pending = {
+        "requested_qty": 100.0,
+        "filled_qty": 100.0,
+        "reason": "atr_stop 1.000<=1.050",
+        "trigger_date": date(2026, 8, 14),
+    }
+
+    assert pt._finish_terminal_sell("513100.SS", pending) is True
+
+    assert pt.g.atr_stop_history == [date(2026, 8, 14)]
+
+
+def test_finish_terminal_sell_does_not_record_partial_atr_stop():
+    pt.g = make_g(__is_live=True)
+    pending = {
+        "requested_qty": 100.0,
+        "filled_qty": 60.0,
+        "reason": "atr_stop 1.000<=1.050",
+        "trigger_date": date(2026, 8, 14),
+    }
+
+    # 部分成交不算完成: 函数返回 False, 不记账、不清仓。
+    assert pt._finish_terminal_sell("513100.SS", pending) is False
+
+    assert pt.g.atr_stop_history == []

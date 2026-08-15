@@ -53,8 +53,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 58
-    assert report.expected_failed_experiment_count == 58
+    assert report.failed_experiment_count == 62
+    assert report.expected_failed_experiment_count == 62
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -194,6 +194,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 1,
         "planned_experiment": "One fixed representative.",
     })
+    high_anchor = next(
+        item for item in payload["families"]
+        if item["key"] == "intraday_high_anchor_user_authorized"
+    )
+    high_anchor.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    high_anchor.pop("planned_experiment", None)
     synthetic_open = tmp_path / "open.json"
     synthetic_open.write_text(json.dumps(payload), encoding="utf-8")
     mined = evaluate_experiment_request(

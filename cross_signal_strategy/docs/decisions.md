@@ -1291,3 +1291,48 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Causal boundary: Activation uses only the stored highest close from completed sessions and entry ATR frozen at the buy signal. The T-day current price is used only for execution, so the candidate contains no future function.
 - Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read. No validation-period result was inspected. Nearby ATR activations, floor offsets, staged stops, and ETF/year exceptions are closed as post-hoc searches.
 - Business boundary: No JoinQuant, PTrade, or local formal strategy file changed. The production multi-factor strategy is untouched.
+
+### Prepare Frozen ATR-Stress Rule On cross-v0.3.3 Mainline
+
+- Date: 2026-08-16.
+- Decision: Raise the JoinQuant mainline to `cross-v0.3.3` / build `20260816.1` with the frozen portfolio ATR-stress rule (15 trading days, 3 ATR stops, 0.50 buy scale) added on top of the `cross-v0.3.2` rules. The PTrade adapter stays frozen at `cross-v0.3.2` until the JoinQuant training confirmation and all four reserved validation windows pass; the release verifier now correctly rejects this transitional parity state, and its tests encode that expectation.
+- Local pre-check evidence: A read-only 2019-2021 local replay (identical data and execution model, stress keys injected at planner level only) reproduced the recorded baseline exactly (44122.30, +120.61%, 7.47% max drawdown, 92 buys/89 sells) and returned +125.00% total, 6.03% max drawdown, Sharpe 2.262, Sortino 3.581 for the stress version. The trade path was unchanged (92/89); six half-size buys were filled (2020-03-03/03-05/03-06/03-23, 2020-09-15, 2020-09-22), improving the 2020 annual return from +49.74% to +52.68%.
+- Reason: The frozen candidate had already improved training and the 2022-2023 validation window on `cross-v0.3.1`; the local pre-check confirms the rule also helps on the current `cross-v0.3.2` path without changing any entry or exit decision. JoinQuant remains the performance authority, so the adoption is staged: JoinQuant confirmation first, then reserved validation windows, then PTrade sync.
+- Research boundary: No validation-period data was read locally. The local replay consumed only the approved 2018 warm-up and 2019-2021 training roots. The three stress parameters are the frozen candidate values; no parameter search was performed.
+- Business boundary: JoinQuant file changed (version, build, three frozen parameters, stress sizing, stop-history recording, `stress=` buy log field). PTrade file, ETF pool, signal scoring, ranking, sell rules, ATR stop math, and execution times are unchanged. The production multi-factor strategy is untouched.
+
+### Reject Fixed Profit-Tiered ATR Tightening
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized `cross-v0.3.3-profit-tier-candidate` before JoinQuant and validation, and close the `profit_tiered_atr_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: The Step 0 binding observation found 36 binding stop-check events (4/24/8 across 2019/2020/2021) but zero same-day extra triggers, and the Step 1 local A/B confirmed an exact no-op: 0 changed filled orders and every headline metric identical to the baseline (+125.00% return, 6.03% max drawdown, 2.262 Sharpe, 3.581 Sortino, 92/89 orders, 25 ATR stops). The pre-registered "at least 3 filled orders change" gate failed.
+- Causal boundary: The cross-signal stop uses a frozen entry ATR and a 5% floor; the median entry ATR is about 1.4% of price, so the floor dominates. On the 36 binding days the tightened stop only moved from 5.02%-7.74% to 5.00%-6.19% below the peak, and no 09:35 price ever fell into that gap. The multi-factor V2.6 profit-tier mechanism therefore does not transfer to this framework.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No tier threshold, multiplier factor, peak-profit measurement, profit floor, or per-ETF override search is allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.
+
+### Reject Fixed Gold-Specific Stop Tightening
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized `cross-v0.3.3-gold-stop-candidate` before JoinQuant and validation, and close the `gold_specific_stop_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: Step 0 passed (223 binding gold stop-check days, 6 same-day extra triggers), but the Step 1 local A/B failed the gates: total return +125.00%→+120.96%, max drawdown 6.03%→6.08%, Sharpe 2.262→2.210, Sortino 3.581→3.492, annual 2019 -1.50pp and 2021 -1.16pp. Gold ATR stops rose from 2 to 5 and the path diverged on 162 filled-order positions.
+- Causal boundary: Per-trade attribution shows the first extra stop (2019-07-01 at +4.7% profit) clipped a winner that the baseline exited at +9.0% on 2019-08-02; gold's winning reversal trades tolerate 3-4% pullbacks below the peak while the bounce develops, which the 5% band absorbs and the 3% floor does not. The multi-factor V2.8 gold-stop result does not transfer to this framework's reversal-entry path.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No nearby gold floor/multiplier values and no per-ETF stop extension are allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.
+
+### Reject Fixed Profit-Giveback Direct Exit
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized profit-giveback direct exit at the Step 0 observation stage, and close the `profit_giveback_exit_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: The read-only trade-level counterfactual (peak profit ≥5%, giveback 3pp → sell at the 09:35 stop check) fired 79 times across 21 affected closed trades, with a negative total per-share delta (-0.352) and negative 2019/2020 annual deltas. It clipped two major winners (2019-02-11 159928: 2.245 vs 2.666; 2020-04-17 513050: 1.523 vs 1.927) while salvaging only small amounts on other trades.
+- Causal boundary: Large trend winners routinely give back more than 3pp of profit mid-hold before resuming; the same giveback that the user observed in the live 159985 case is also the cost of the +18.8%/+34% winners. A profit-anchored giveback exit kills the payoff source of this framework, consistent with the earlier break-even floor and gold-stop failures.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No activation or giveback threshold search is allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The production multi-factor strategy is untouched.
+
+### Reject Fixed Intraday-High Trailing Anchor
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized `cross-v0.3.3-high-anchor-candidate` after the Step 1 local A/B, and close the `intraday_high_anchor_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: Step 0 passed (1604 binding stop-check days, 38 same-day extra triggers across all nine ETFs), but the local A/B failed the gates: total return +125.00%→+119.40%, max drawdown 6.03%→6.06%, 2019 annual +35.84%→+30.55% (2020/2021 slightly improved). The dominant clip was 2019-02-11 159928: the high anchor stopped it on 2019-02-26 at 2.232 versus the official close anchor's exit at 2.666 on 2019-04-12 (-0.434 per share on an +18.8% winner); seven small saves (+0.001 to +0.090 per share) could not offset it (total per-share delta -0.228).
+- Causal boundary: The peak-day upper wick raises the high anchor into the winner's normal pullback band. The 5% close-anchored band exists precisely to absorb intraday spikes; the swap turns the noise the close anchor was designed to filter back into stop triggers. This validates the original close-anchor design rule with data.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No anchor blends, multiplier re-calibrations, or threshold changes are allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.

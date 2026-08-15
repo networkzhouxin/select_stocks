@@ -9,7 +9,7 @@ modules live under `local/`, `research/`, and `tools/`.
 
 Key files:
 
-- `上穿下穿ETF策略详细说明.md`: 当前 `cross-v0.3.2` 的中文详细说明，覆盖完整策略逻辑、参数、交易时序、风险管理和正式 ETF 池。
+- `上穿下穿ETF策略详细说明.md`: 当前 `cross-v0.3.3` 的中文详细说明，覆盖完整策略逻辑、参数、交易时序、风险管理和正式 ETF 池。
 - `strategy_spec.md`: current strategy design and rule specification.
 - `backtest_notes.md`: training, candidate, and validation result records.
 - `validation_summary.md`: frozen cross-period validation summary and adoption recommendation.

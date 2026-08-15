@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Cross-Signal ETF Strategy v0.3.2 for JoinQuant.
+Cross-Signal ETF Strategy v0.3.3 for JoinQuant.
 
 Research protocol:
 - Develop first on 2019-01-01 to 2021-12-31 only.
@@ -15,8 +15,8 @@ import hashlib
 from jqdata import *
 
 
-STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260804.1"
+STRATEGY_VERSION = "cross-v0.3.3"
+DEPLOYMENT_BUILD_ID = "20260816.1"
 
 
 try:
@@ -63,6 +63,9 @@ def get_default_params():
         "stop_cap": 0.15,
         "overheat_rsi": 85,
         "a_share_zero_volume_buy_scale": 0.50,
+        "portfolio_atr_stress_lookback_days": 15,
+        "portfolio_atr_stress_min_stops": 3,
+        "portfolio_atr_stress_buy_scale": 0.50,
     }
 
 
@@ -114,6 +117,44 @@ def calc_buy_target_value(total_value, score, params=None):
     p = params or get_default_params()
     base_target = float(total_value) * float(p["base_ratio"]) / int(p["max_hold"])
     return base_target * buy_position_scale(score, p)
+
+
+def trading_days_between(start_date, end_date, trade_days):
+    days = [str(day) for day in trade_days]
+    try:
+        return days.index(str(end_date)) - days.index(str(start_date))
+    except ValueError:
+        return None
+
+
+def portfolio_atr_stress_buy_scale(params, current_date, atr_stop_history, trade_days):
+    lookback_days = int(params.get("portfolio_atr_stress_lookback_days", 0) or 0)
+    min_stops = int(params.get("portfolio_atr_stress_min_stops", 0) or 0)
+    if lookback_days <= 0 or min_stops <= 0:
+        return 1.0
+    recent = 0
+    for stop_date in atr_stop_history:
+        elapsed = trading_days_between(stop_date, current_date, trade_days)
+        if elapsed is not None and 0 <= elapsed <= lookback_days:
+            recent += 1
+    if recent < min_stops:
+        return 1.0
+    return float(params.get("portfolio_atr_stress_buy_scale", 1.0))
+
+
+def calc_stress_adjusted_buy_target_value(
+        total_value,
+        score,
+        params=None,
+        current_date=None,
+        atr_stop_history=None,
+        trade_days=None):
+    p = params or get_default_params()
+    target = calc_buy_target_value(total_value, score, p)
+    if current_date is None or atr_stop_history is None or trade_days is None:
+        return target
+    return target * portfolio_atr_stress_buy_scale(
+        p, current_date, atr_stop_history, trade_days)
 
 
 def format_indicator_params(params):
@@ -225,6 +266,7 @@ def initialize(context):
     g.last_scores = {}
     g.sold_today = set()
     g.sold_guard_date = None
+    g.atr_stop_history = []
 
     run_daily(do_trading, time="09:35")
     run_daily(after_close, time="15:30")
@@ -853,6 +895,10 @@ def execute_sell(code, context, reason):
     log.info("[sell] %s reason=%s amount=%s" % (code, reason, pos.total_amount))
     order_target(code, 0)
     sync_sell_state_after_order(code, context)
+    if str(reason).startswith("atr_stop") and not has_position(context, code):
+        if not hasattr(g, "atr_stop_history"):
+            g.atr_stop_history = []
+        g.atr_stop_history.append(context.current_dt.date())
 
 
 def check_atr_stops(context, current_data):
@@ -1028,10 +1074,23 @@ def do_trading(context):
         price = current_price(current_data, code)
         if price is None or price <= 0:
             continue
-        target_value = calc_buy_target_value(context.portfolio.total_value, score, p)
-        log.info("[buy] %s buy=%.0f rev=%.0f loc=%.0f trend=%.0f vol=%.0f target=%.0f" % (
+        stress_trade_days = get_trade_days(
+            end_date=today,
+            count=max(2, int(p.get("portfolio_atr_stress_lookback_days", 0)) + 1),
+        )
+        stress_scale = portfolio_atr_stress_buy_scale(
+            p, today, getattr(g, "atr_stop_history", []), stress_trade_days)
+        target_value = calc_stress_adjusted_buy_target_value(
+            context.portfolio.total_value,
+            score,
+            p,
+            current_date=today,
+            atr_stop_history=getattr(g, "atr_stop_history", []),
+            trade_days=stress_trade_days,
+        )
+        log.info("[buy] %s buy=%.0f rev=%.0f loc=%.0f trend=%.0f vol=%.0f stress=%.2f target=%.0f" % (
             code, score["buy_score"], score["reversal_score"], score["location_score"],
-            score["trend_score"], score["volume_score"], target_value))
+            score["trend_score"], score["volume_score"], stress_scale, target_value))
         order_target_value(code, target_value)
         sync_buy_state_after_order(code, context, today, price, score["atr"])
         if not has_position(context, code):

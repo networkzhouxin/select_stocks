@@ -35,7 +35,7 @@ def test_formal_joinquant_source_has_no_stale_release_labels():
 def test_joinquant_exposes_stable_release_fingerprint():
     fingerprint = strategy.business_config_fingerprint()
 
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260804.1"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260816.1"
     assert len(fingerprint) == 12
     assert all(ch in "0123456789abcdef" for ch in fingerprint)
 
@@ -1169,8 +1169,116 @@ def test_default_params_use_half_size_for_a_share_zero_volume_buys():
     assert params["a_share_zero_volume_buy_scale"] == 0.50
 
 
+def test_default_params_declare_frozen_portfolio_atr_stress_rule():
+    params = strategy.get_default_params()
+
+    assert params["portfolio_atr_stress_lookback_days"] == 15
+    assert params["portfolio_atr_stress_min_stops"] == 3
+    assert params["portfolio_atr_stress_buy_scale"] == 0.50
+
+
+def test_portfolio_atr_stress_scales_new_buys_after_clustered_atr_stops():
+    params = strategy.get_default_params()
+    trade_days = [
+        "2020-02-13", "2020-02-17", "2020-02-19",
+        "2020-03-02", "2020-03-03", "2020-03-05",
+    ]
+    stop_dates = ["2020-02-17", "2020-02-19", "2020-03-02"]
+    score = {"code": "513100.XSHG", "volume_score": 6}
+
+    scale = strategy.portfolio_atr_stress_buy_scale(
+        params, "2020-03-05", stop_dates, trade_days)
+    target = strategy.calc_stress_adjusted_buy_target_value(
+        12000.0, score, params,
+        current_date="2020-03-05",
+        atr_stop_history=stop_dates,
+        trade_days=trade_days,
+    )
+
+    assert scale == 0.50
+    assert target == pytest.approx(1900.0)
+
+
+def test_portfolio_atr_stress_ignores_stops_outside_lookback():
+    params = strategy.get_default_params()
+    trade_days = ["2020-01-%02d" % day for day in range(2, 24)]
+    stop_dates = ["2020-01-02", "2020-01-03", "2020-01-06"]
+
+    scale = strategy.portfolio_atr_stress_buy_scale(
+        params, "2020-01-23", stop_dates, trade_days)
+
+    assert scale == 1.0
+
+
+def test_portfolio_atr_stress_falls_back_to_full_size_without_params():
+    params = {
+        "base_ratio": 0.95,
+        "max_hold": 3,
+    }
+    stop_dates = ["2020-02-17", "2020-02-19", "2020-03-02"]
+
+    scale = strategy.portfolio_atr_stress_buy_scale(
+        params, "2020-03-05", stop_dates, ["2020-03-05"])
+
+    assert scale == 1.0
+
+
+def test_execute_sell_records_completed_atr_stop_dates(monkeypatch):
+    class Position(object):
+        total_amount = 1000
+
+    context = types.SimpleNamespace(
+        current_dt=types.SimpleNamespace(date=lambda: "2020-03-02"),
+        portfolio=types.SimpleNamespace(positions={"513100.XSHG": Position()}),
+    )
+    strategy.g = types.SimpleNamespace(
+        atr_stop_history=[],
+        highest_since_buy={},
+        entry_atr={},
+        buy_date={},
+        last_scores={},
+        sold_today=set(),
+    )
+
+    def fake_order_target(code, amount):
+        del context.portfolio.positions[code]
+
+    monkeypatch.setattr(strategy, "order_target", fake_order_target, raising=False)
+
+    strategy.execute_sell("513100.XSHG", context, "atr_stop 3.906<=4.000")
+
+    assert strategy.g.atr_stop_history == ["2020-03-02"]
+
+
+def test_execute_sell_does_not_record_signal_sell_dates(monkeypatch):
+    class Position(object):
+        total_amount = 1000
+
+    context = types.SimpleNamespace(
+        current_dt=types.SimpleNamespace(date=lambda: "2020-03-02"),
+        portfolio=types.SimpleNamespace(positions={"513100.XSHG": Position()}),
+    )
+    strategy.g = types.SimpleNamespace(
+        atr_stop_history=[],
+        highest_since_buy={},
+        entry_atr={},
+        buy_date={},
+        last_scores={},
+        sold_today=set(),
+    )
+
+    def fake_order_target(code, amount):
+        del context.portfolio.positions[code]
+
+    monkeypatch.setattr(strategy, "order_target", fake_order_target, raising=False)
+
+    strategy.execute_sell("513100.XSHG", context, "sell_score 32")
+
+    assert strategy.g.atr_stop_history == []
+
+
 def test_default_etf_pool_uses_joinquant_confirmed_training_candidate():
-    assert strategy.STRATEGY_VERSION == "cross-v0.3.2"
+    assert strategy.STRATEGY_VERSION == "cross-v0.3.3"
     assert strategy.get_default_etf_pool() == [
         "159915.XSHE",
         "512100.XSHG",
@@ -1660,7 +1768,7 @@ def test_format_cross_flags_shows_rsi_and_kdj_detail():
 def test_format_self_check_reports_version_and_diff_cross_status():
     text = strategy.format_self_check()
 
-    assert "[cross-v0.3.2] positional-diff-cross enabled" in text
+    assert "[cross-v0.3.3] positional-diff-cross enabled" in text
     assert "diff_cross_self_check=True expected=True" in text
     assert "self_rev=12" in text
 

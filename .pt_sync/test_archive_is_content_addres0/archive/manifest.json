@@ -1,0 +1,33 @@
+{
+  "files": [
+    {
+      "archive_name": "65de6150e212cf4ce23cfa1d762173cdf8b6f2396a94d69af62bdb5af7fd6a34.log",
+      "buy_fill_count": 1,
+      "buy_order_count": 1,
+      "execution_count": 1,
+      "execution_dates": [
+        "2026-07-18"
+      ],
+      "first_timestamp": "2026-07-18 09:30:00",
+      "halt_recovery_count": 1,
+      "iopv_observation_count": 1,
+      "last_timestamp": "2026-07-18 10:35:00",
+      "release_identity_count": 1,
+      "sell_fill_count": 0,
+      "sell_order_count": 0,
+      "sha256": "65de6150e212cf4ce23cfa1d762173cdf8b6f2396a94d69af62bdb5af7fd6a34",
+      "signal_dates": [
+        "2026-07-17"
+      ],
+      "size_bytes": 673,
+      "source_name": "exported-ptrade.log"
+    }
+  ],
+  "protocol_start": "2026-07-18",
+  "release": {
+    "business_fingerprint": "77e44d93d255",
+    "deployment_build": "20260816.1",
+    "strategy_version": "cross-v0.3.3"
+  },
+  "schema_version": 1
+}
