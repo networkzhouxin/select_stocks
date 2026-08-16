@@ -250,7 +250,7 @@ def test_failed_candidate_is_closed_in_research_budget_and_ledger():
     budget = json.loads(budget_path.read_text(encoding="utf-8"))
     families = {item["key"]: item for item in budget["families"]}
 
-    assert budget["expected_failed_experiment_count"] == 62
+    assert budget["expected_failed_experiment_count"] == 63
     family = families["macd_fast_exit_user_authorized"]
     assert family["status"] == "exhausted"
     assert family["max_new_experiments"] == 0

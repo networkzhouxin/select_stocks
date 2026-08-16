@@ -1336,3 +1336,12 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Causal boundary: The peak-day upper wick raises the high anchor into the winner's normal pullback band. The 5% close-anchored band exists precisely to absorb intraday spikes; the swap turns the noise the close anchor was designed to filter back into stop triggers. This validates the original close-anchor design rule with data.
 - Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No anchor blends, multiplier re-calibrations, or threshold changes are allowed from this result. The failed-experiment ledger count and the research budget were updated.
 - Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.
+
+### Reject Fixed Profit-Gated Direct-Sell Matrix
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized 4×3 profit-gated direct-sell matrix at the Step 0 observation stage, and close the `profit_gated_direct_sell_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: All 12 variants failed the gates. The 38/40 score thresholds never fired (sell scores that high arrive only after profit leaves the 2-6% band), and the 32/35 thresholds produced negative total per-share deltas, dominated by the 513050 +34% winner's mid-hold pullback that satisfies the trigger and would be exited early (1.523 versus the official 1.927).
+- Causal boundary: The profit band cannot distinguish a small winner that will keep winning from one that will fail; the framework's large winners pass through the 2-6% profit zone repeatedly with elevated sell scores on pullbacks. This is the same structural cause as the profit-giveback exit, break-even floor, and gold-stop failures.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No nearby thresholds, bands, or mechanism variants are allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The production multi-factor strategy is untouched.

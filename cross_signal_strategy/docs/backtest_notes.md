@@ -3278,6 +3278,28 @@ Interpretation:
 Decision:
 - Reject the candidate before JoinQuant and validation. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no anchor blends, multiplier re-calibrations, or threshold changes are allowed.
 
+## 2026-08-16 Profit-Gated Direct-Sell Matrix Observation
+
+Version: `cross-v0.3.3-profit-gated-matrix-observation` (read-only counterfactual, no candidate file)
+Protocol role: user-authorized fixed 4×3 matrix; training-only Step 0 observation
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Frozen matrix:
+- Direct-sell channels: sell-score thresholds 32/35/38/40 crossed with profit bands 2-4%/3-5%/4-6%, bypassing the price-structure confirmation while keeping the 5-day minimum hold and the ADX strong-uptrend exemption.
+
+Observation result:
+- 38/40 thresholds: 0 firing events (sell scores that high arrive only after profit leaves the band).
+- 32/35 thresholds: 19 and 18 firing events; every variant's total per-share delta was negative (A1 -0.051, B1 -0.077, A2/B2 -0.423, A3/B3 -0.313). The dominant clip is the 513050 +34% winner: its mid-hold pullback satisfies high-score-plus-small-profit and would exit at about 1.523 versus the official 1.927.
+- All 12 variants failed the gates; the pre-registered selection rule found no passing variant.
+
+Interpretation:
+- The profit band cannot distinguish a small winner that will keep winning from one that will fail; large winners pass through the 2-6% profit zone repeatedly with elevated sell scores on pullbacks. This completes the sell-side evidence: threshold changes, protections, giveback exits, and profit-gated bypasses all fail for the same structural reason.
+
+Decision:
+- Reject at Step 0 before any candidate. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no nearby thresholds, bands, or mechanism variants are allowed.
+
+
 
 
 

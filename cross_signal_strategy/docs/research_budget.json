@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 62,
+  "expected_failed_experiment_count": 63,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -454,6 +454,41 @@
       "extra_trigger_observations": 38,
       "changed_filled_orders": 175,
       "candidate_gate_passed": false,
+      "prohibit_alternatives": true,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only"
+    },
+    {
+      "key": "profit_gated_direct_sell_user_authorized",
+      "label": "User-authorized fixed profit-gated direct-sell matrix",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The fixed 4x3 matrix was consumed. All 12 variants failed the Step 0 trade-level gates: the 38/40 score thresholds never fired (sell scores that high arrive only after profit has already left the 2-6% band), and the 32/35 thresholds produced negative total per-share deltas because the 513050 +34% winner's mid-hold pullback satisfies high-score plus small-profit conditions and would be exited early. The pre-registered selection rule found no passing variant, so no candidate was created. No nearby thresholds, bands, or mechanism variants may be searched.",
+      "sell_score_thresholds": [
+        32,
+        35,
+        38,
+        40
+      ],
+      "profit_bands": [
+        [0.02, 0.04],
+        [0.03, 0.05],
+        [0.04, 0.06]
+      ],
+      "minimum_hold_days": 5,
+      "adx_exemption": "strong_uptrend",
+      "structure_confirmation": "bypassed",
+      "selection_rule": "highest_total_delta_among_gate_passing_variants",
+      "variants_tested": 12,
+      "passing_variants": 0,
+      "firing_events": {
+        "score_32": 19,
+        "score_35": 18,
+        "score_38": 0,
+        "score_40": 0
+      },
+      "observation_gate_passed": false,
+      "candidate_created": false,
       "prohibit_alternatives": true,
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only"

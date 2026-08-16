@@ -67,6 +67,7 @@ it does not change any score, order, position, or risk rule.
 | `gold_specific_stop_user_authorized` | exhausted | The fixed gold-only stop (518880: floor 0.03, multiplier 2.0×) bound on 223 check days with 6 extra triggers, but the local A/B failed the gates: return +125.00%→+120.96%, drawdown 6.03%→6.08%, Sharpe/Sortino worse, 2019 and 2021 annual returns worse. The first extra stop clipped a 2019 winner (+4.7% exit versus +9.0% baseline exit) and cascaded into 162 changed fills. The multi-factor V2.8 gold stop does not transfer to this reversal-entry framework; no nearby gold floor/multiplier values and no per-ETF extension are allowed. |
 | `profit_giveback_exit_user_authorized` | exhausted | The fixed profit-giveback direct exit (peak profit ≥5%, giveback 3pp → sell at the 09:35 stop check) fired 79 times across 21 affected closed trades, but the total per-share delta was -0.352 with annual deltas -0.380/-0.101/+0.129, failing the total and annual gates. It would have clipped two major winners (2019-02-11 159928 and 2020-04-17 513050) while saving small amounts elsewhere. Large trend winners routinely give back more than 3pp mid-hold, so the mechanism kills this framework's payoff source. No candidate was created; no threshold or mechanism search is allowed. |
 | `intraday_high_anchor_user_authorized` | exhausted | The fixed intraday-high trailing anchor (multiplier 2.5, floor 5%, cap 15% unchanged) bound on 1604 check days with 38 extra triggers, but the local A/B failed the gates: return +125.00%→+119.40%, drawdown 6.03%→6.06%, 2019 annual +35.84%→+30.55%. The dominant clip was 2019-02-11 159928 (exit 2.232 versus official 2.666 on an +18.8% winner); seven small saves could not offset it. The peak-day upper wick raises the anchor into the winner's normal pullback band, turning the noise the close anchor was designed to filter back into stop triggers. No anchor blends or re-calibrations are allowed. |
+| `profit_gated_direct_sell_user_authorized` | exhausted | The fixed 4×3 direct-sell matrix (sell scores 32/35/38/40 crossed with profit bands 2-4%/3-5%/4-6%) was consumed with 0 of 12 variants passing the Step 0 gates. The 38/40 thresholds never fired (scores that high arrive only after profit leaves the band), and the 32/35 thresholds produced negative total per-share deltas because the 513050 +34% winner's mid-hold pullback satisfies the trigger and would be exited early. No candidate was created; no nearby thresholds, bands, or mechanism variants may be searched. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -74,7 +75,14 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. The user-authorized `intraday_high_anchor_user_authorized` family was
+None. The user-authorized `profit_gated_direct_sell_user_authorized` family
+was consumed on 2026-08-16: the Step 0 matrix counterfactual found 0 of 12
+variants passing the gates (38/40 score thresholds never fired; 32/35
+thresholds clipped the 513050 +34% winner's mid-hold pullback), so the family
+closed without a candidate. Its design is documented in
+`docs/superpowers/specs/2026-08-16-profit-gated-direct-sell-design.md`.
+
+The user-authorized `intraday_high_anchor_user_authorized` family was
 consumed on 2026-08-16: the Step 0 binding observation passed (1604 binding
 days, 38 extra triggers) but the Step 1 local A/B failed the gates
 (+125.00%→+119.40% return, 6.03%→6.06% drawdown, worse 2019), because the
