@@ -20,7 +20,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260816.1 业务配置=77e44d93d255 状态结构=7
+[发布指纹] 构建=20260817.1 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -293,21 +293,24 @@ submission.
   highest-price baseline without waiting for the next delivery statement.
 - `get_deliver()` is called only from documented lifecycle callbacks:
   `before_trading_start` and `after_trading_end`. Records from `20100101`
-  through the proven T-1 date are replayed by signed quantity; the
-  reconstructed open quantity must exactly match the current broker position.
+  through the proven T-1 date are sorted chronologically. The last actual sell
+  closes the prior holding episode, and the first actual buy afterward proves
+  the current entry; without a sell, the first valid buy is used.
+  Delivery quantities are diagnostic only and do not have to equal the current
+  broker position.
   Under the dedicated-account operating contract, an existing in-pool holding
   is adopted even when its original buy came from the previously stopped
   strategy. Entry ATR is recalculated only from data available on the trading
   day before the actual buy date, and the trailing peak is rebuilt from the
-  actual weighted fill price plus pre-adjusted non-zero-volume closing prices
+  entry transaction price plus pre-adjusted non-zero-volume closing prices
   since entry.
 - The adapter never uses the multi-factor fallback guesses such as
   `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
-  Quantity mismatch, missing fill price, missing calendar evidence, or
+  Missing current-episode buy evidence, missing fill price, missing calendar evidence, or
   incomplete price history leaves the position unverified.
 - A failed takeover writes a stage-specific `[恢复诊断]` line.
-  `delivery-replay` reports only ETF codes, dates, buy/sell direction,
-  quantities, prices, aggregate replay counts, and field names; account,
+  `delivery-episode` reports only ETF codes, dates, buy/sell direction,
+  quantities, prices, aggregate history counts, and field names; account,
   client, fund, and shareholder-account values are never emitted. Other
   stages distinguish broker facts, historical calendar lookup, entry ATR,
   weighted fill price, close-history reconstruction, and same-day handling.
@@ -329,6 +332,11 @@ submission.
   the frozen ETF pool are then owned by the active cross-signal strategy.
   Out-of-pool holdings remain unverified and block new buys instead of being
   sold or assigned risk state automatically.
+- 交割单恢复不再重放历史数量。策略先找到该 ETF 的最后一次实际卖出，
+  再取此后第一笔实际买入作为当前持仓周期的买入日期和成交价；如果历史中
+  没有卖出，则取第一笔有效买入。当前数量和成本始终采用券商持仓事实，
+  不要求历史交割数量与当前持仓数量相等。最后一次卖出之后没有买入记录时
+  仍然闭锁恢复，不能凭当前持仓倒推出买入日期。
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
@@ -339,6 +347,15 @@ submission.
   pickle payload. After a third complete generation is appended, a temporary
   journal containing the latest two valid generations is fully decoded and
   verified before an atomic same-directory replacement; no direct `os` call is used.
+- Its stable filename is `cross_signal_live_state_<identity>.journal`, where
+  the anonymous identity is derived from account and trade name. Strategy
+  version and state-schema number are deliberately absent from the filename,
+  so a normal code upgrade continues using the same journal. On the first
+  start of this build, a compatible
+  `cross_signal_v033_live_state_v7_<identity>.journal` is atomically copied
+  into the stable path after full record validation; the legacy file is not
+  deleted. Incompatible older schemas are never merged blindly and instead
+  fall back to broker and delivery evidence.
 - Restore validates every complete journal record and selects the highest valid
   generation. A truncated tail never invalidates earlier complete records. On
   the next save, only the incomplete tail bytes are removed before a new record

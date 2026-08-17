@@ -1345,3 +1345,11 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Causal boundary: The profit band cannot distinguish a small winner that will keep winning from one that will fail; the framework's large winners pass through the 2-6% profit zone repeatedly with elevated sell scores on pullbacks. This is the same structural cause as the profit-giveback exit, break-even floor, and gold-stop failures.
 - Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No nearby thresholds, bands, or mechanism variants are allowed from this result. The failed-experiment ledger count and the research budget were updated.
 - Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The production multi-factor strategy is untouched.
+
+### Stabilize PTrade State Identity And Broker-First Entry Recovery
+
+- Date: 2026-08-17.
+- Decision: Release build `20260817.1` with a version-independent PTrade state journal filename and a broker-first delivery recovery rule. The stable file is `cross_signal_live_state_<identity>.journal`; the current compatible schema-7 versioned journal is validated and atomically copied on first use, while the old file remains untouched.
+- Recovery contract: Broker positions are authoritative for current quantity and cost. Delivery history only proves the current holding episode: locate the last actual sell and use the first actual buy afterward; if no sell exists, use the first valid buy. Historical delivery quantities are not replayed or required to equal the current broker amount. A last sell without a later buy remains unverified and fails closed.
+- Test-first evidence: The new contracts first failed because the adapter still embedded version/schema in the filename, had no migration helper, and rejected broker holdings whose historical delivery quantity differed. Nine focused state-path and delivery-recovery tests passed after implementation.
+- Business boundary: No signal, indicator, cross, parameter, score, threshold, ETF pool, ranking, position-sizing rule, sell rule, ATR formula, execution time, or T-1 boundary changed. The JoinQuant build marker changed only to preserve release identity parity. No market or validation-period data was read, and the production multi-factor strategy is untouched.

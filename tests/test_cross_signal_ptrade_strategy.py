@@ -136,7 +136,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260816.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260817.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -914,7 +914,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
 
     assert len({simulation_path, other_account_path, live_path}) == 3
     assert Path(simulation_path).name.startswith(
-        "cross_signal_v033_live_state_v7_")
+        "cross_signal_live_state_")
     assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
@@ -938,6 +938,58 @@ def test_automatic_live_state_path_survives_manual_restart(monkeypatch, tmp_path
     second_path = pt._live_state_path()
 
     assert first_path == second_path
+
+
+def test_automatic_live_state_path_survives_strategy_and_schema_upgrade(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        pt, "get_user_name", lambda real_trade: "account-a", raising=False
+    )
+    monkeypatch.setattr(pt, "get_trade_name", lambda: "cross-signal", raising=False)
+
+    original_path = pt._live_state_path()
+    monkeypatch.setattr(pt, "STRATEGY_VERSION", "cross-v9.9.9")
+    monkeypatch.setattr(pt, "LIVE_STATE_SCHEMA_VERSION", 99)
+
+    assert pt._live_state_path() == original_path
+    assert Path(original_path).name.startswith("cross_signal_live_state_")
+
+
+def test_current_versioned_journal_is_migrated_to_stable_path_without_deletion(
+        monkeypatch, tmp_path):
+    legacy_path = tmp_path / "cross_signal_v033_live_state_v7_legacy.journal"
+    stable_path = tmp_path / "cross_signal_live_state_legacy.journal"
+    buy_date = date(2026, 8, 5)
+    position = types.SimpleNamespace(
+        amount=400, cost_basis=2.2543, last_sale_price=2.267)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 8, 17, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.267},
+        entry_atr={"513100.SS": 0.0385},
+        buy_date={"513100.SS": buy_date},
+    )
+    assert pt._persist_live_state(context, path=legacy_path) is True
+    monkeypatch.setattr(
+        pt,
+        "_legacy_live_state_paths",
+        lambda state_path: [str(legacy_path)],
+        raising=False,
+    )
+
+    pt.g = make_g()
+    assert pt._migrate_legacy_live_state_journal(
+        context, str(stable_path)) is True
+
+    assert legacy_path.exists()
+    assert stable_path.exists()
+    assert pt._restore_live_state(context, path=stable_path) is True
+    assert pt.g.buy_date == {"513100.SS": buy_date}
+    assert pt.g.entry_atr == {"513100.SS": 0.0385}
+    assert pt.g.highest_since_buy == {"513100.SS": 2.267}
 
 
 def test_automatic_live_state_path_fails_closed_without_instance_identity(
@@ -7221,15 +7273,15 @@ def test_delivery_reconstruction_finds_current_open_position_episode():
         },
         {
             "stock_code": "513100",
-            "business_name": "\u8bc1\u5238\u4e70\u5165",
-            "occur_amount": 500,
+            "business_name": "\u8bc1\u5238\u5356\u51fa",
+            "occur_amount": 1000,
             "init_date": 20260303,
             "business_time": 93503,
         },
         {
             "stock_code": "513100",
-            "business_name": "\u8bc1\u5238\u5356\u51fa",
-            "occur_amount": 100,
+            "business_name": "\u8bc1\u5238\u4e70\u5165",
+            "occur_amount": 500,
             "init_date": 20260310,
             "business_time": 93504,
         },
@@ -7237,15 +7289,60 @@ def test_delivery_reconstruction_finds_current_open_position_episode():
 
     recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
 
-    assert recovered["buy_date"] == date(2026, 3, 3)
+    assert recovered["buy_date"] == date(2026, 3, 10)
     assert recovered["amount"] == pytest.approx(400)
 
 
-def test_delivery_reconstruction_rejects_quantity_mismatch():
+def test_delivery_reconstruction_uses_broker_amount_without_replaying_quantity():
     records = [{
         "stock_code": "513100",
         "entrust_bs": "1",
         "business_amount": 500,
+        "business_price": 1.18,
+        "init_date": 20260303,
+        "business_time": 93503,
+    }]
+
+    recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
+
+    assert recovered["buy_date"] == date(2026, 3, 3)
+    assert recovered["amount"] == pytest.approx(400)
+    assert recovered["entry_price"] == pytest.approx(1.18)
+
+
+def test_delivery_reconstruction_uses_first_buy_after_last_sell():
+    records = [
+        {
+            "stock_code": "513100",
+            "entrust_bs": "2",
+            "business_amount": 700,
+            "business_price": 2.146,
+            "init_date": 20260609,
+            "business_time": 93501,
+        },
+        {
+            "stock_code": "513100",
+            "entrust_bs": "1",
+            "business_amount": 400,
+            "business_price": 2.253,
+            "init_date": 20260805,
+            "business_time": 93502,
+        },
+    ]
+
+    recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
+
+    assert recovered["buy_date"] == date(2026, 8, 5)
+    assert recovered["amount"] == pytest.approx(400)
+    assert recovered["entry_price"] == pytest.approx(2.253)
+
+
+def test_delivery_reconstruction_rejects_last_sell_without_later_buy():
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "2",
+        "business_amount": 400,
+        "business_price": 1.18,
         "init_date": 20260303,
         "business_time": 93503,
     }]
@@ -7253,8 +7350,8 @@ def test_delivery_reconstruction_rejects_quantity_mismatch():
     assert pt._reconstruct_open_position(records, "513100.SS", 400) is None
 
 
-def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
-    monkeypatch,
+def test_live_recovery_logs_sanitized_delivery_replay_without_open_buy_episode(
+        monkeypatch,
 ):
     position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
     context = types.SimpleNamespace(
@@ -7263,7 +7360,7 @@ def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
     pt.g = make_g()
     records = [{
         "stock_code": "513100",
-        "entrust_bs": "1",
+        "entrust_bs": "2",
         "business_amount": 500,
         "business_price": 1.18,
         "init_date": 20260303,
@@ -7290,16 +7387,16 @@ def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
 
     summary = next(
         message for message in messages
-        if "阶段=交割单重放" in message
+        if "阶段=交割单持仓周期" in message
     )
     assert "代码=513100.SS" in summary
     assert "券商持仓=400" in summary
     assert "总记录数=1" in summary
     assert "标的记录数=1" in summary
     assert "有效记录数=1" in summary
-    assert "买入笔数=1" in summary
-    assert "卖出笔数=0" in summary
-    assert "净数量=500" in summary
+    assert "买入笔数=0" in summary
+    assert "卖出笔数=1" in summary
+    assert "净数量=-500" in summary
     assert "日期范围=2026-03-03~2026-03-03" in summary
     assert "可用代码=513100.SS" in summary
     rendered = "\n".join(messages)
@@ -8068,7 +8165,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260816.1" in notes
+    assert "20260817.1" in notes
     assert "77e44d93d255" in notes
     assert "状态结构=7" in notes
     assert "provisional risk state" in notes
@@ -8137,6 +8234,10 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "[持仓风险恢复]" in deployment
     assert "账户接管:交割单" in deployment
     assert "one account runs one active" in deployment
+    assert "cross_signal_live_state_" in deployment
+    assert "最后一次实际卖出" in deployment
+    assert "此后第一笔实际买入" in deployment
+    assert "不要求历史交割数量与当前持仓数量相等" in deployment
     assert "same calendar date as the running process" in deployment
     assert "reads `get_open_orders()` without cancelling or resubmitting" in deployment
     assert "business-configuration fingerprint" in deployment

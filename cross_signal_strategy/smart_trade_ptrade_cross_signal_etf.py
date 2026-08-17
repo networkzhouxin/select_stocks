@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.3"
-DEPLOYMENT_BUILD_ID = "20260816.1"
+DEPLOYMENT_BUILD_ID = "20260817.1"
 LIVE_STATE_SCHEMA_VERSION = 7
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -35,7 +35,10 @@ IOPV_OBSERVE_CODES = frozenset((
     "513880.SS",
     "513050.SS",
 ))
-LIVE_STATE_FILENAME = "cross_signal_v033_live_state_v7_%s.journal"
+LIVE_STATE_FILENAME = "cross_signal_live_state_%s.journal"
+LEGACY_LIVE_STATE_FILENAMES = (
+    "cross_signal_v033_live_state_v7_%s.journal",
+)
 DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
     "highest_since_buy",
@@ -326,6 +329,23 @@ def _cached_live_state_path(path=None):
     if path is not None:
         return str(path)
     return getattr(g, "__state_path", None)
+
+
+def _legacy_live_state_paths(state_path):
+    """返回与稳定台账身份一致、且结构可直接迁移的旧路径。"""
+    path = Path(str(state_path))
+    name = path.name
+    prefix = "cross_signal_live_state_"
+    suffix = ".journal"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return []
+    identity_hash = name[len(prefix):-len(suffix)]
+    if not identity_hash:
+        return []
+    return [
+        str(path.parent / (filename % identity_hash))
+        for filename in LEGACY_LIVE_STATE_FILENAMES
+    ]
 
 
 def _live_state_checksum(
@@ -625,6 +645,70 @@ def _scan_live_state_journal(state_path):
 def _read_live_state_journal(state_path):
     records, _, _ = _scan_live_state_journal(state_path)
     return records
+
+
+def _migrate_legacy_live_state_journal(context, state_path):
+    """把当前兼容的旧版台账原子复制到稳定路径，旧文件继续保留。"""
+    if state_path is None:
+        return False
+    target_path = Path(str(state_path))
+    if target_path.exists():
+        return False
+
+    for legacy_text in _legacy_live_state_paths(target_path):
+        legacy_path = Path(legacy_text)
+        if not legacy_path.exists():
+            continue
+        records, _, tail_damaged = _scan_live_state_journal(legacy_path)
+        if tail_damaged or not records:
+            log.warning(
+                "[状态台账迁移] 旧台账无完整兼容记录，已跳过: %s" %
+                legacy_path.name)
+            continue
+
+        retained = sorted(records, key=lambda item: item[0])[
+            -LIVE_STATE_RETAIN_RECORDS:
+        ]
+        temp_path = Path(str(target_path) + ".migrate")
+        try:
+            with temp_path.open("wb") as handle:
+                for generation, state, broker_positions in retained:
+                    pickle.dump(
+                        _encode_live_state_envelope(
+                            state,
+                            generation=generation,
+                            broker_positions=broker_positions,
+                        ),
+                        handle,
+                        protocol=LIVE_STATE_PICKLE_PROTOCOL,
+                    )
+
+            migrated, _, migrated_tail_damaged = (
+                _scan_live_state_journal(temp_path))
+            if migrated_tail_damaged or [item[0] for item in migrated] != [
+                item[0] for item in retained
+            ]:
+                raise ValueError("migrated journal verification failed")
+
+            temp_path.replace(target_path)
+            generation, state, broker_positions = retained[-1]
+            _cache_journal_tail(
+                target_path,
+                generation,
+                state,
+                broker_positions,
+                _journal_file_size(target_path),
+                len(retained),
+            )
+            log.info(
+                "[状态台账迁移] 已迁移至稳定文件=%s；旧文件=%s继续保留" % (
+                    target_path.name, legacy_path.name))
+            return True
+        except Exception as exc:
+            log.warning("[状态台账迁移] 失败，旧台账仍保留: %s" % (
+                _format_state_error_for_log(exc)))
+            return False
+    return False
 
 
 def _live_state_payload_digest(state, broker_positions):
@@ -1509,6 +1593,8 @@ def before_trading_start(context, data):
         if _cached_live_state_path() is None:
             g.__state_path = _live_state_path()
         if startup_recovery:
+            _migrate_legacy_live_state_journal(
+                context, _cached_live_state_path())
             persisted_g_candidate = _load_persisted_g_state(context)
             journal_state = _load_live_state(context)
             if persisted_g_candidate is not None:
@@ -4924,7 +5010,7 @@ def _limited_diagnostic_values(values, limit=30):
     return "%s,+%d" % (",".join(ordered[:limit]), len(ordered) - limit)
 
 
-def _diagnose_delivery_replay(records, code, broker_amount):
+def _diagnose_delivery_history(records, code, broker_amount):
     """生成不含账户标识和原始交割单的安全诊断摘要。"""
     target = normalize_code(code)
     all_records = list(records or [])
@@ -5014,7 +5100,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
     stage_text = {
         "pool": "标的池",
         "broker-position": "券商持仓",
-        "delivery-replay": "交割单重放",
+        "delivery-episode": "交割单持仓周期",
         "historical-calendar": "历史交易日历",
         "entry-atr": "入场ATR",
         "delivery-entry-price": "交割单入场价",
@@ -5025,7 +5111,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
     reason_text = {
         "outside-frozen-pool": "不在锁定标的池内",
         "invalid-amount-or-cost": "数量或成本无效",
-        "unreconciled": "无法与券商持仓核对一致",
+        "open-buy-unavailable": "无法证明当前持仓周期的买入记录",
         "previous-trade-date-unresolved": "无法确定前一交易日",
         "score-unavailable": "评分不可用",
         "atr-invalid": "ATR无效",
@@ -5044,7 +5130,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
 
 
 def _reconstruct_open_position(records, code, broker_amount):
-    """重放当前持仓区间，并要求重放数量与券商持仓严格一致。"""
+    """用最后一次卖出后的第一笔买入确定当前持仓周期。"""
     target = normalize_code(code)
     expected = _safe_float(broker_amount, np.nan)
     if not _is_positive_finite(expected):
@@ -5064,45 +5150,27 @@ def _reconstruct_open_position(records, code, broker_amount):
     if not matched:
         return None
 
-    amount = 0.0
-    buy_date = None
-    entry_quantity = 0.0
-    entry_value = 0.0
-    entry_source = None
-    tolerance = max(1e-6, expected * 1e-8)
-    for record in sorted(matched, key=_delivery_sort_key):
-        direction = _delivery_direction(record)
-        quantity = _delivery_quantity(record)
-        if direction > 0:
-            if amount <= tolerance:
-                buy_date = _delivery_trade_date(record)
-                entry_quantity = 0.0
-                entry_value = 0.0
-                entry_source = record.get("_recovery_source")
-            price = _safe_float(record.get("business_price"), np.nan)
-            if _is_positive_finite(price):
-                entry_quantity += quantity
-                entry_value += quantity * price
-            amount += quantity
-        else:
-            amount -= quantity
-            if amount < -tolerance:
-                return None
-            if abs(amount) <= tolerance:
-                amount = 0.0
-                buy_date = None
-                entry_quantity = 0.0
-                entry_value = 0.0
-                entry_source = None
+    ordered = sorted(matched, key=_delivery_sort_key)
+    last_sell_index = -1
+    for index, record in enumerate(ordered):
+        if _delivery_direction(record) < 0:
+            last_sell_index = index
 
-    if buy_date is None or abs(amount - expected) > tolerance:
+    entry_record = None
+    for record in ordered[last_sell_index + 1:]:
+        if _delivery_direction(record) > 0:
+            entry_record = record
+            break
+    if entry_record is None:
         return None
-    entry_price = entry_value / entry_quantity if entry_quantity > 0 else None
+
+    entry_price = _safe_float(entry_record.get("business_price"), np.nan)
     return {
-        "buy_date": buy_date,
-        "amount": amount,
-        "entry_price": entry_price,
-        "recovery_source": entry_source,
+        "buy_date": _delivery_trade_date(entry_record),
+        "amount": float(expected),
+        "entry_price": (
+            float(entry_price) if _is_positive_finite(entry_price) else None),
+        "recovery_source": entry_record.get("_recovery_source"),
     }
 
 
@@ -5209,9 +5277,9 @@ def _recover_position_from_broker(code, pos, records, prev_date):
     if open_position is None:
         return _log_recovery_failure(
             code,
-            "delivery-replay",
-            "unreconciled",
-            _diagnose_delivery_replay(records, code, amount),
+            "delivery-episode",
+            "open-buy-unavailable",
+            _diagnose_delivery_history(records, code, amount),
         )
     buy_date = open_position["buy_date"]
     signal_date = _previous_trade_date_before(buy_date)
