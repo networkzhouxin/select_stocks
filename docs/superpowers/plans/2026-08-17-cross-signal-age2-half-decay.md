@@ -37,7 +37,7 @@
 - [x] Implement `Age2HalfDecaySignalAdapter.score(code, current_date, return_reason=False)` as a defensive-copy decorator over the official adapter.
 - [x] Recompute only `reversal_score` and `buy_score`; expose observation-only `official_reversal_score`, `official_buy_score`, and `age2_half_decay_penalty` diagnostics.
 - [x] Run the focused test file and confirm green.
-- [ ] Commit the isolated decorator milestone.
+- [x] Commit the isolated decorator milestone (`a31de7a`).
 
 ## Task 2: Implement the frozen A/B result and adoption gate
 
@@ -46,12 +46,12 @@
 - Modify: `tests/test_cross_signal_age2_half_decay_candidate.py`
 - Modify: `cross_signal_strategy/research/age2_half_decay_candidate.py`
 
-- [ ] Add failing unit tests for an all-pass result and for each independent failure class: no changed filled-order day in one calendar year, non-strict total/annualized improvement, worse drawdown, worse Sharpe/Sortino/win-rate/profit-loss ratio, and a worse annual return.
-- [ ] Add a failing test that compares filled-order signatures by trading day and requires at least one changed day in each of 2019, 2020, and 2021.
-- [ ] Run the focused tests and capture the expected failures.
-- [ ] Implement immutable performance/result/gate dataclasses and a deterministic evaluator with no tolerance that could weaken the frozen inequalities.
-- [ ] Implement report rendering that records the hypothesis, exact change, baseline/candidate metrics, annual returns, changed-order counts, gate checks, interpretation, and next permitted action.
-- [ ] Run the focused tests and confirm green.
+- [x] Add failing unit tests for an all-pass result and for each independent failure class: no changed filled-order day in one calendar year, non-strict total/annualized improvement, worse drawdown, worse Sharpe/Sortino/win-rate/profit-loss ratio, and a worse annual return.
+- [x] Add a failing test that compares filled-order signatures by trading day and requires at least one changed day in each of 2019, 2020, and 2021.
+- [x] Run the focused tests and capture the expected failures.
+- [x] Implement immutable performance/result/gate dataclasses and a deterministic evaluator with no tolerance that could weaken the frozen inequalities.
+- [x] Implement report rendering that records the hypothesis, exact change, baseline/candidate metrics, annual returns, changed-order counts, gate checks, interpretation, and next permitted action.
+- [x] Run the focused tests and confirm green.
 - [ ] Commit the A/B gate milestone.
 
 ## Task 3: Wire the approved local training replay

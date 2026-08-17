@@ -4,6 +4,7 @@
 from copy import deepcopy
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -157,3 +158,187 @@ def test_candidate_preserves_official_snapshot_and_sell_side_without_mutation():
         "close",
     ):
         assert second[key] == original[key]
+
+
+def _performance(**overrides):
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        Age2HalfDecayPerformance,
+    )
+
+    values = {
+        "total_return": 1.00,
+        "annualized_return": 0.25,
+        "max_drawdown": 0.08,
+        "sharpe_ratio": 2.0,
+        "sortino_ratio": 3.0,
+        "win_rate": 0.55,
+        "profit_loss_ratio": 4.0,
+        "buy_count": 90,
+        "sell_count": 88,
+        "annual_returns": {2019: 0.20, 2020: 0.30, 2021: 0.15},
+    }
+    values.update(overrides)
+    return Age2HalfDecayPerformance(**values)
+
+
+def _passing_candidate(**overrides):
+    values = {
+        "total_return": 1.05,
+        "annualized_return": 0.26,
+        "max_drawdown": 0.08,
+        "sharpe_ratio": 2.0,
+        "sortino_ratio": 3.0,
+        "win_rate": 0.55,
+        "profit_loss_ratio": 4.0,
+        "annual_returns": {2019: 0.21, 2020: 0.30, 2021: 0.15},
+    }
+    values.update(overrides)
+    return _performance(**values)
+
+
+def test_strict_gate_passes_only_when_returns_improve_and_all_other_metrics_are_not_worse():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        evaluate_age2_half_decay_gate,
+    )
+
+    decision = evaluate_age2_half_decay_gate(
+        _performance(),
+        _passing_candidate(),
+        changed_days_by_year={2019: 1, 2020: 2, 2021: 1},
+    )
+
+    assert decision.passed
+    assert decision.reasons == ()
+
+
+@pytest.mark.parametrize(
+    ("candidate_overrides", "reason"),
+    [
+        ({"total_return": 1.00}, "candidate total return does not improve"),
+        ({"annualized_return": 0.25}, "candidate annualized return does not improve"),
+        ({"max_drawdown": 0.081}, "candidate maximum drawdown worsens"),
+        ({"sharpe_ratio": 1.99}, "candidate Sharpe ratio worsens"),
+        ({"sortino_ratio": 2.99}, "candidate Sortino ratio worsens"),
+        ({"win_rate": 0.549}, "candidate win rate worsens"),
+        ({"profit_loss_ratio": 3.99}, "candidate profit/loss ratio worsens"),
+        (
+            {"annual_returns": {2019: 0.21, 2020: 0.299, 2021: 0.15}},
+            "2020 candidate annual return worsens",
+        ),
+    ],
+)
+def test_strict_gate_rejects_each_independent_performance_regression(
+    candidate_overrides,
+    reason,
+):
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        evaluate_age2_half_decay_gate,
+    )
+
+    decision = evaluate_age2_half_decay_gate(
+        _performance(),
+        _passing_candidate(**candidate_overrides),
+        changed_days_by_year={2019: 1, 2020: 1, 2021: 1},
+    )
+
+    assert not decision.passed
+    assert reason in decision.reasons
+
+
+def test_strict_gate_rejects_a_year_without_changed_filled_order_days():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        evaluate_age2_half_decay_gate,
+    )
+
+    decision = evaluate_age2_half_decay_gate(
+        _performance(),
+        _passing_candidate(),
+        changed_days_by_year={2019: 1, 2020: 0, 2021: 1},
+    )
+
+    assert not decision.passed
+    assert "2020 has no changed filled-order day" in decision.reasons
+
+
+def _order(code, amount_delta, reason, filled=True):
+    return SimpleNamespace(
+        code=code,
+        amount_delta=amount_delta,
+        reason=reason,
+        filled=filled,
+    )
+
+
+def _day(date, *orders):
+    return SimpleNamespace(date=date, orders=list(orders), total_value=20000.0)
+
+
+def test_filled_order_path_comparison_counts_changed_days_in_each_training_year():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        compare_filled_order_paths,
+    )
+
+    baseline = [
+        _day("2019-03-01", _order("513100.XSHG", 100, "buy_signal")),
+        _day("2020-04-02", _order("510300.XSHG", 100, "buy_signal")),
+        _day("2021-05-06", _order("513050.XSHG", -100, "signal_sell")),
+    ]
+    candidate = [
+        _day("2019-03-01"),
+        _day("2020-04-02", _order("510300.XSHG", 100, "buy_signal", filled=False)),
+        _day("2021-05-06", _order("513050.XSHG", -100, "atr_stop")),
+    ]
+
+    changed = compare_filled_order_paths(baseline, candidate)
+
+    assert changed.changed_days_by_year == {2019: 1, 2020: 1, 2021: 1}
+    assert changed.changed_order_days == 3
+    assert tuple(item.date for item in changed.decisions) == (
+        "2019-03-01",
+        "2020-04-02",
+        "2021-05-06",
+    )
+
+
+def test_filled_order_path_comparison_rejects_different_dates_and_nontraining_dates():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        compare_filled_order_paths,
+    )
+
+    with pytest.raises(ValueError, match="identical trading dates"):
+        compare_filled_order_paths([_day("2019-01-02")], [_day("2019-01-03")])
+    with pytest.raises(ValueError, match="outside 2019-2021"):
+        compare_filled_order_paths([_day("2022-01-04")], [_day("2022-01-04")])
+
+
+def test_markdown_report_records_frozen_change_metrics_gate_and_next_action():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        Age2HalfDecayComparisonReport,
+        Age2HalfDecayGateDecision,
+        FilledOrderPathComparison,
+        format_age2_half_decay_comparison,
+    )
+
+    report = Age2HalfDecayComparisonReport(
+        baseline_report=None,
+        candidate_report=None,
+        baseline=_performance(),
+        candidate=_passing_candidate(),
+        path=FilledOrderPathComparison(
+            changed_order_days=4,
+            changed_days_by_year={2019: 1, 2020: 2, 2021: 1},
+            decisions=(),
+        ),
+        gate=Age2HalfDecayGateDecision(True, ()),
+    )
+
+    markdown = format_age2_half_decay_comparison(report)
+
+    assert "2019-2021" in markdown
+    assert "age 0/1" in markdown
+    assert "age 2" in markdown
+    assert "0.5" in markdown
+    assert "Baseline" in markdown and "Candidate" in markdown
+    assert "2019: 1" in markdown and "2020: 2" in markdown and "2021: 1" in markdown
+    assert "PASS" in markdown
+    assert "separate JoinQuant candidate" in markdown
