@@ -67,8 +67,8 @@
 - [x] Implement `run_age2_half_decay_training_ab` using `build_training_signal_adapter`, two identical local planners/engines, `initial_cash=20000`, and all approved 2019-2021 trading dates.
 - [x] Compute baseline/candidate performance and annual returns from replay outputs, compare daily filled-order signatures, evaluate the frozen gate, and return a structured result.
 - [x] Implement a CLI that writes the generated Markdown report under `cross_signal_strategy/reports/` only.
-- [ ] Run focused tests and then execute the real approved local A/B once.
-- [ ] Do not rerun with altered weights, indicators, ETFs, thresholds, or subperiod selections.
+- [x] Run focused tests and then execute the real approved local A/B once.
+- [x] Do not rerun with altered weights, indicators, ETFs, thresholds, or subperiod selections.
 
 ## Task 4A: Record a failed local experiment (only if the gate fails)
 
@@ -80,12 +80,12 @@
 - Modify: `cross_signal_strategy/docs/research_budget.md`
 - Modify: `cross_signal_strategy/docs/research_budget.json`
 
-- [ ] First add failing ledger tests for the exact experiment id, frozen hypothesis/change, fresh training metrics, failed gate reasons, and the prohibition on a JoinQuant candidate.
-- [ ] Run the ledger tests and capture the failure.
-- [ ] Write the generated report and append the failed-experiment/research-budget entries without altering prior records.
-- [ ] Confirm no `age2_half_decay` JoinQuant candidate file exists.
-- [ ] Run focused and full cross-signal tests.
-- [ ] Commit the rejected-experiment milestone.
+- [x] First add failing ledger tests for the exact experiment id, frozen hypothesis/change, fresh training metrics, failed gate reasons, and the prohibition on a JoinQuant candidate.
+- [x] Run the ledger tests and capture the failure.
+- [x] Write the generated report and append the failed-experiment/research-budget entries without altering prior records.
+- [x] Confirm no `age2_half_decay` JoinQuant candidate file exists.
+- [x] Run focused and full cross-signal tests.
+- [x] Commit the rejected-experiment milestone.
 
 ## Task 4B: Generate a separate JoinQuant candidate (only if every gate passes)
 
@@ -110,8 +110,8 @@
 
 - Verify all files changed in the branch.
 
-- [ ] Run the complete repository test suite with an isolated pytest temp/cache directory.
-- [ ] Run `git diff --check`, inspect `git status --short`, and verify no multi-factor or official strategy file changed.
-- [ ] Verify the report exactly matches the structured A/B result and that immutable data roots have no generated files.
+- [x] Run the complete repository test suite with an isolated pytest temp/cache directory.
+- [x] Run `git diff --check`, inspect `git status --short`, and verify no multi-factor or official strategy file changed.
+- [x] Verify the report exactly matches the structured A/B result and that immutable data roots have no generated files.
 - [ ] Summarize the actual training result, gate decision, changed-order evidence, files, commits, and residual limitations.
-- [ ] If passed, hand the separate candidate to the user for the JoinQuant 2019-2021 authority backtest; if failed, explicitly stop without producing one.
+- [x] If passed, hand the separate candidate to the user for the JoinQuant 2019-2021 authority backtest; if failed, explicitly stop without producing one.

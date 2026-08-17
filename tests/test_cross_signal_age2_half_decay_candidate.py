@@ -2,6 +2,7 @@
 """Tests for the isolated bullish-cross age-2 half-decay candidate."""
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -479,3 +480,59 @@ def test_training_runner_uses_identical_official_replay_configuration_for_both_a
     assert all(engine.loader is loader for engine in engines)
     assert all(engine.initial_cash == 20000.0 for engine in engines)
     assert all(engine.execution_time == "09:35" for engine in engines)
+
+
+def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
+    report_path = (
+        ROOT
+        / "cross_signal_strategy"
+        / "reports"
+        / "age2_half_decay_2019_2021.md"
+    )
+    failed_path = ROOT / "cross_signal_strategy" / "docs" / "failed_experiments.md"
+    budget_path = ROOT / "cross_signal_strategy" / "docs" / "research_budget.json"
+    guide_path = ROOT / "cross_signal_strategy" / "docs" / "research_budget.md"
+    candidate_path = (
+        ROOT
+        / "cross_signal_strategy"
+        / "archive"
+        / "candidates"
+        / "smart_trade_joinquant_cross_signal_etf_age2_half_decay_candidate.py"
+    )
+
+    report = report_path.read_text(encoding="utf-8")
+    failed = failed_path.read_text(encoding="utf-8")
+    budget = json.loads(budget_path.read_text(encoding="utf-8"))
+    guide = guide_path.read_text(encoding="utf-8")
+    family = next(
+        item
+        for item in budget["families"]
+        if item["key"] == "bullish_cross_age2_half_decay_user_authorized"
+    )
+
+    assert "Baseline | 125.00%" in report
+    assert "Candidate | 87.35%" in report
+    assert "Baseline: 2019: 35.84%, 2020: 52.68%, 2021: 8.49%" in report
+    assert "Candidate: 2019: 33.26%, 2020: 32.07%, 2021: 6.46%" in report
+    assert "2019: 15, 2020: 27, 2021: 22" in report
+    assert "Decision: REJECT" in report
+
+    assert "Version: `cross-v0.3.3-age2-half-decay-candidate`" in failed
+    assert "total return +125.00% to +87.35%" in failed
+    assert "maximum drawdown 6.03% to 8.79%" in failed
+    assert "JoinQuant training result: Not run" in failed
+    assert "Validation result: Not run" in failed
+    assert "Do not search other decay coefficients" in failed
+
+    assert budget["expected_failed_experiment_count"] == 64
+    assert family["status"] == "exhausted"
+    assert family["max_new_experiments"] == 0
+    assert family["age2_multiplier"] == 0.5
+    assert family["changed_order_days"] == 64
+    assert family["changed_days_by_year"] == {"2019": 15, "2020": 27, "2021": 22}
+    assert family["candidate_gate_passed"] is False
+    assert family["candidate_created"] is False
+    assert family["prohibit_alternatives"] is True
+    assert "Recorded failed or non-adopted experiments: 64" in guide
+    assert "bullish_cross_age2_half_decay_user_authorized" in guide
+    assert not candidate_path.exists()
