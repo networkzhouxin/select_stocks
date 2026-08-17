@@ -342,3 +342,140 @@ def test_markdown_report_records_frozen_change_metrics_gate_and_next_action():
     assert "2019: 1" in markdown and "2020: 2" in markdown and "2021: 1" in markdown
     assert "PASS" in markdown
     assert "separate JoinQuant candidate" in markdown
+
+
+def test_candidate_adapter_forwards_execution_date_and_preserves_t_minus_one_evidence():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        Age2HalfDecaySignalAdapter,
+    )
+
+    class RecordingAdapter(StaticSignalAdapter):
+        def __init__(self, score):
+            super().__init__(score)
+            self.calls = []
+
+        def score(self, code, current_date, return_reason=False):
+            self.calls.append((code, current_date, return_reason))
+            return super().score(code, current_date, return_reason)
+
+    source = RecordingAdapter(_official_score())
+    result = Age2HalfDecaySignalAdapter(source).score(
+        "513100",
+        "2019-01-08",
+        return_reason=True,
+    )
+
+    assert source.calls == [("513100", "2019-01-08", True)]
+    assert result[0]["signal_date"] == "2019-01-07"
+    assert result[0]["max_data_date"] == "2019-01-07"
+
+
+def test_training_runner_rejects_unapproved_training_or_warmup_roots():
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        run_age2_half_decay_training_ab,
+    )
+
+    bad_root = ROOT / "not-approved-market-data"
+    bad_loader = SimpleNamespace(root=bad_root / "training")
+    with pytest.raises(ValueError, match="approved training data root"):
+        run_age2_half_decay_training_ab(loader=bad_loader)
+    with pytest.raises(ValueError, match="approved warm-up data root"):
+        run_age2_half_decay_training_ab(warmup_root=bad_root / "warmup")
+
+
+def test_report_writer_rejects_market_data_roots_and_nonreport_paths():
+    from cross_signal_strategy.local.local_data_loader import APPROVED_TRAINING_ROOT
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        Age2HalfDecayComparisonReport,
+        Age2HalfDecayGateDecision,
+        FilledOrderPathComparison,
+        write_age2_half_decay_report,
+    )
+
+    report = Age2HalfDecayComparisonReport(
+        baseline_report=None,
+        candidate_report=None,
+        baseline=_performance(),
+        candidate=_passing_candidate(),
+        path=FilledOrderPathComparison(4, {2019: 1, 2020: 2, 2021: 1}, ()),
+        gate=Age2HalfDecayGateDecision(True, ()),
+    )
+    with pytest.raises(ValueError, match="read-only"):
+        write_age2_half_decay_report(report, APPROVED_TRAINING_ROOT / "result.md")
+    with pytest.raises(ValueError, match="reports directory"):
+        write_age2_half_decay_report(report, ROOT / "outside-reports" / "result.md")
+
+
+def test_training_runner_uses_identical_official_replay_configuration_for_both_arms(monkeypatch):
+    from cross_signal_strategy.local.local_data_loader import APPROVED_TRAINING_ROOT
+    from cross_signal_strategy.local import local_backtester, local_order_planner
+    from cross_signal_strategy import local_training_run
+    from cross_signal_strategy.research.age2_half_decay_candidate import (
+        Age2HalfDecaySignalAdapter,
+        run_age2_half_decay_training_ab,
+    )
+
+    dates = ["2019-01-02", "2020-01-02", "2021-01-04"]
+    loader = SimpleNamespace(root=APPROVED_TRAINING_ROOT)
+    built_adapters = []
+    planners = []
+    engines = []
+
+    class OfficialAdapterMarker:
+        pass
+
+    def fake_build_adapter(actual_loader, warmup_root):
+        marker = OfficialAdapterMarker()
+        built_adapters.append((actual_loader, Path(warmup_root).resolve(), marker))
+        return marker
+
+    class FakePlanner:
+        def __init__(self, signal_adapter, etf_pool, params, trade_dates):
+            self.signal_adapter = signal_adapter
+            self.etf_pool = list(etf_pool)
+            self.params = dict(params)
+            self.trade_dates = list(trade_dates)
+            planners.append(self)
+
+        def plan_orders(self, current_date, previous_date, broker, current_prices=None):
+            return []
+
+    class FakeEngine:
+        def __init__(self, loader, initial_cash, execution_time):
+            self.loader = loader
+            self.initial_cash = initial_cash
+            self.execution_time = execution_time
+            engines.append(self)
+
+        def run(self, trade_dates, order_plan):
+            return [
+                SimpleNamespace(
+                    date=date,
+                    orders=[],
+                    positions={},
+                    marks={},
+                    total_value=self.initial_cash,
+                )
+                for date in trade_dates
+            ]
+
+    monkeypatch.setattr(local_training_run, "get_training_trade_dates", lambda actual: dates)
+    monkeypatch.setattr(local_training_run, "build_training_signal_adapter", fake_build_adapter)
+    monkeypatch.setattr(local_order_planner, "LocalCrossSignalOrderPlanner", FakePlanner)
+    monkeypatch.setattr(local_backtester, "LocalBacktestEngine", FakeEngine)
+
+    run_age2_half_decay_training_ab(loader=loader)
+
+    assert len(built_adapters) == 2
+    assert all(item[0] is loader for item in built_adapters)
+    assert len(planners) == 2
+    assert planners[0].signal_adapter is built_adapters[0][2]
+    assert isinstance(planners[1].signal_adapter, Age2HalfDecaySignalAdapter)
+    assert planners[1].signal_adapter.source is built_adapters[1][2]
+    assert planners[0].params == planners[1].params
+    assert planners[0].etf_pool == planners[1].etf_pool
+    assert planners[0].trade_dates == planners[1].trade_dates == dates
+    assert len(engines) == 2
+    assert all(engine.loader is loader for engine in engines)
+    assert all(engine.initial_cash == 20000.0 for engine in engines)
+    assert all(engine.execution_time == "09:35" for engine in engines)

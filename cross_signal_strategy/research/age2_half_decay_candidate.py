@@ -5,7 +5,15 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
+
+from cross_signal_strategy.local.local_data_loader import (
+    APPROVED_TRAINING_ROOT,
+    APPROVED_WARMUP_ROOT,
+    CrossSignalTrainingDataLoader,
+    assert_not_training_write_path,
+)
 
 
 _BULLISH_CROSS_WEIGHTS = {
@@ -18,6 +26,8 @@ _BULLISH_CROSS_WEIGHTS = {
 _TRAINING_YEARS = (2019, 2020, 2021)
 _TRAINING_START = "2019-01-01"
 _TRAINING_END = "2021-12-31"
+REPORTS_ROOT = Path(__file__).resolve().parents[1] / "reports"
+DEFAULT_REPORT_PATH = REPORTS_ROOT / "age2_half_decay_2019_2021.md"
 
 
 def _rsi_group_direction(snapshot: dict[str, Any]) -> str | None:
@@ -221,6 +231,148 @@ def compare_filled_order_paths(
     )
 
 
+def run_age2_half_decay_training_ab(
+    loader: object | None = None,
+    initial_cash: float = 20000.0,
+    warmup_root: Path | str = APPROVED_WARMUP_ROOT,
+) -> Age2HalfDecayComparisonReport:
+    """Run the single frozen candidate against the official local baseline."""
+
+    from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+    from cross_signal_strategy.local.local_order_planner import (
+        LocalCrossSignalOrderPlanner,
+        strategy,
+    )
+    from cross_signal_strategy.local_training_run import (
+        build_training_signal_adapter,
+        get_training_trade_dates,
+    )
+    from cross_signal_strategy.research.baseline_report import build_baseline_report
+
+    loader = loader or CrossSignalTrainingDataLoader()
+    _assert_approved_loader(loader)
+    warmup = Path(warmup_root).expanduser().resolve()
+    if warmup != Path(APPROVED_WARMUP_ROOT).expanduser().resolve():
+        raise ValueError(f"Use approved warm-up data root only: {APPROVED_WARMUP_ROOT}")
+
+    trade_dates = get_training_trade_dates(loader)
+    _assert_training_dates(trade_dates)
+    params = strategy.get_default_params()
+    if int(params.get("cross_window", -1)) != 3:
+        raise ValueError("Age-2 half-decay experiment requires official cross_window=3")
+    etf_pool = [code.split(".")[0] for code in strategy.get_default_etf_pool()]
+
+    baseline_adapter = build_training_signal_adapter(loader, warmup_root=warmup)
+    baseline_planner = LocalCrossSignalOrderPlanner(
+        baseline_adapter,
+        etf_pool=etf_pool,
+        params=dict(params),
+        trade_dates=trade_dates,
+    )
+    baseline_days = LocalBacktestEngine(
+        loader=loader,
+        initial_cash=initial_cash,
+        execution_time="09:35",
+    ).run(trade_dates, baseline_planner.plan_orders)
+
+    candidate_official_adapter = build_training_signal_adapter(
+        loader,
+        warmup_root=warmup,
+    )
+    candidate_planner = LocalCrossSignalOrderPlanner(
+        Age2HalfDecaySignalAdapter(candidate_official_adapter),
+        etf_pool=etf_pool,
+        params=dict(params),
+        trade_dates=trade_dates,
+    )
+    candidate_days = LocalBacktestEngine(
+        loader=loader,
+        initial_cash=initial_cash,
+        execution_time="09:35",
+    ).run(trade_dates, candidate_planner.plan_orders)
+
+    baseline_report = build_baseline_report(baseline_days, initial_cash)
+    candidate_report = build_baseline_report(candidate_days, initial_cash)
+    baseline = _performance(baseline_report, baseline_days, initial_cash)
+    candidate = _performance(candidate_report, candidate_days, initial_cash)
+    path = compare_filled_order_paths(baseline_days, candidate_days)
+    gate = evaluate_age2_half_decay_gate(
+        baseline,
+        candidate,
+        path.changed_days_by_year,
+    )
+    return Age2HalfDecayComparisonReport(
+        baseline_report=baseline_report,
+        candidate_report=candidate_report,
+        baseline=baseline,
+        candidate=candidate,
+        path=path,
+        gate=gate,
+    )
+
+
+def write_age2_half_decay_report(
+    report: Age2HalfDecayComparisonReport,
+    path: Path | str = DEFAULT_REPORT_PATH,
+) -> Path:
+    """Write only to this strategy's report directory, never market-data roots."""
+
+    assert_not_training_write_path(path)
+    target = Path(path).expanduser().resolve()
+    reports_root = REPORTS_ROOT.resolve()
+    try:
+        target.relative_to(reports_root)
+    except ValueError as exc:
+        raise ValueError(f"Write age-decay reports only under reports directory: {reports_root}") from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(format_age2_half_decay_comparison(report), encoding="utf-8")
+    return target
+
+
+def _assert_approved_loader(loader: object) -> None:
+    loader_root = getattr(loader, "root", None)
+    if loader_root is None or (
+        Path(loader_root).expanduser().resolve()
+        != Path(APPROVED_TRAINING_ROOT).expanduser().resolve()
+    ):
+        raise ValueError(f"Use approved training data root only: {APPROVED_TRAINING_ROOT}")
+
+
+def _performance(
+    report: object,
+    days: Sequence[object],
+    initial_cash: float,
+) -> Age2HalfDecayPerformance:
+    return Age2HalfDecayPerformance(
+        total_return=float(report.total_return),
+        annualized_return=float(report.annualized_return),
+        max_drawdown=float(report.max_drawdown),
+        sharpe_ratio=report.sharpe_ratio,
+        sortino_ratio=report.sortino_ratio,
+        win_rate=float(report.win_rate),
+        profit_loss_ratio=report.profit_loss_ratio,
+        buy_count=int(report.buy_count),
+        sell_count=int(report.sell_count),
+        annual_returns=_annual_returns(days, initial_cash),
+    )
+
+
+def _annual_returns(
+    days: Sequence[object],
+    initial_cash: float,
+) -> Dict[int, float]:
+    grouped: Dict[int, list[object]] = {}
+    for day in days:
+        grouped.setdefault(int(str(day.date)[:4]), []).append(day)
+    annual = {}
+    start_value = float(initial_cash)
+    for year, year_days in sorted(grouped.items()):
+        end_value = float(year_days[-1].total_value)
+        annual[year] = end_value / start_value - 1.0 if start_value > 0 else 0.0
+        start_value = end_value
+    return annual
+
+
 def _filled_order_signature(day: object) -> tuple[tuple[str, str, str], ...]:
     signature = []
     for order in getattr(day, "orders", []):
@@ -326,3 +478,14 @@ def _annual_text(annual_returns: Mapping[int, float]) -> str:
 
 def _count_text(counts: Mapping[int, int]) -> str:
     return ", ".join(f"{year}: {counts.get(year, 0)}" for year in _TRAINING_YEARS)
+
+
+def main() -> None:
+    report = run_age2_half_decay_training_ab()
+    output_path = write_age2_half_decay_report(report)
+    print(format_age2_half_decay_comparison(report), end="")
+    print(f"Report: {output_path}")
+
+
+if __name__ == "__main__":
+    main()

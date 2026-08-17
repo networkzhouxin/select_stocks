@@ -52,7 +52,7 @@
 - [x] Implement immutable performance/result/gate dataclasses and a deterministic evaluator with no tolerance that could weaken the frozen inequalities.
 - [x] Implement report rendering that records the hypothesis, exact change, baseline/candidate metrics, annual returns, changed-order counts, gate checks, interpretation, and next permitted action.
 - [x] Run the focused tests and confirm green.
-- [ ] Commit the A/B gate milestone.
+- [x] Commit the A/B gate milestone (`8d28ef2`).
 
 ## Task 3: Wire the approved local training replay
 
@@ -61,12 +61,12 @@
 - Modify: `tests/test_cross_signal_age2_half_decay_candidate.py`
 - Modify: `cross_signal_strategy/research/age2_half_decay_candidate.py`
 
-- [ ] Add failing integration-contract tests proving the runner accepts only the approved loader roots/window, uses the same official adapter and replay configuration for both arms, and never requests post-T-1 signal data.
-- [ ] Add a failing CLI/report-path test that forbids output under either immutable market-data root.
-- [ ] Run the focused tests and capture the failures.
-- [ ] Implement `run_age2_half_decay_training_ab` using `build_training_signal_adapter`, two identical local planners/engines, `initial_cash=20000`, and all approved 2019-2021 trading dates.
-- [ ] Compute baseline/candidate performance and annual returns from replay outputs, compare daily filled-order signatures, evaluate the frozen gate, and return a structured result.
-- [ ] Implement a CLI that writes the generated Markdown report under `cross_signal_strategy/reports/` only.
+- [x] Add failing integration-contract tests proving the runner accepts only the approved loader roots/window, uses the same official adapter and replay configuration for both arms, and never requests post-T-1 signal data.
+- [x] Add a failing CLI/report-path test that forbids output under either immutable market-data root.
+- [x] Run the focused tests and capture the failures.
+- [x] Implement `run_age2_half_decay_training_ab` using `build_training_signal_adapter`, two identical local planners/engines, `initial_cash=20000`, and all approved 2019-2021 trading dates.
+- [x] Compute baseline/candidate performance and annual returns from replay outputs, compare daily filled-order signatures, evaluate the frozen gate, and return a structured result.
+- [x] Implement a CLI that writes the generated Markdown report under `cross_signal_strategy/reports/` only.
 - [ ] Run focused tests and then execute the real approved local A/B once.
 - [ ] Do not rerun with altered weights, indicators, ETFs, thresholds, or subperiod selections.
 
