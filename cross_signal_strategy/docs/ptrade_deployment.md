@@ -20,7 +20,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260817.1 业务配置=77e44d93d255 状态结构=7
+[发布指纹] 构建=20260818.1 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -450,7 +450,7 @@ official authority for this port.
 `log.debug` 和 `log.critical` 输出的内容完整镜像到研究根目录下的单一文件：
 
 ```text
-cross_signal_logs/cross_signal_v033_audit.log
+cross_signal_logs/cross_signal_audit.log
 ```
 
 平台控制台按用途分层：`INFO` 保留 `[交易日开始]`、五个处理阶段、候选与
@@ -465,13 +465,17 @@ cross_signal_logs/cross_signal_v033_audit.log
 主动调用日志接口产生的记录；
 PTrade 平台自身在策略代码之外生成的服务器配置、调度或网关日志不在该文件中。
 
-单文件硬上限为 `20 MB`。下一条日志会导致超限时，策略在同目录写入并校验
-临时文件，只淘汰最旧的完整日志行，将文件压缩到约 `16 MB` 后再原子替换。
-不会截断 UTF-8 字符或半条日志；替换失败时保留原文件，平台日志和交易流程
-继续运行，并通过底层平台日志只提示一次审计文件写入失败。反过来，平台日志
-接口异常也不会阻止审计文件写入或中断交易流程。该文件与只保存最近两代持仓
-风险状态的状态台账相互独立，不能用审计日志替代状态恢复，也不能用状态台账
-替代完整运行审计。
+活动文件硬上限为 `20 MiB`。下一条日志会导致超限时，策略先把新记录写入并
+校验同目录临时文件，再把完整的当前活动文件原子改名为
+`cross_signal_audit_YYYYMMDD_HHMMSS.log`，最后用临时文件建立新的
+`cross_signal_audit.log`。若同一秒已经存在同名归档，则增加毫秒和必要的
+防覆盖序号；任何既有归档都不会被覆盖。交易日变化、策略重启、服务器重启、
+策略版本或工程构建变化均不触发轮转。旧的 `cross_signal_v032_audit.log` 和
+`cross_signal_v033_audit.log` 保持原名、原内容，不迁移、不删除。轮转失败时
+尽力恢复原活动文件，平台日志和交易流程继续运行，并通过底层平台日志只提示
+一次审计文件写入失败。反过来，平台日志接口异常也不会阻止审计文件写入或
+中断交易流程。该文件与只保存最近两代持仓风险状态的状态台账相互独立，不能
+用审计日志替代状态恢复，也不能用状态台账替代完整运行审计。
 
 ## PTrade 运行日志审计
 

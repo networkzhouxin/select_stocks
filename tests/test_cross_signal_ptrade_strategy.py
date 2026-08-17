@@ -136,7 +136,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260817.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260818.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -197,6 +197,7 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
         tmp_path / pt.AUDIT_LOG_DIR / pt.AUDIT_LOG_FILENAME)
     text = audit_path.read_text(encoding="utf-8")
     assert created == [pt.AUDIT_LOG_DIR]
+    assert audit_path.name == "cross_signal_audit.log"
     assert text.splitlines() == [
         "2026-07-22 09:35:01 - INFO - " + detail,
         "2026-07-22 09:35:01 - DEBUG - " + debug_detail,
@@ -211,30 +212,27 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
     ]
 
 
-def test_audit_log_rolls_at_complete_utf8_lines_and_stays_bounded(tmp_path):
-    path = tmp_path / "cross_signal_v033_audit.log"
-    old_lines = [
-        ("旧明细%02d-" % index) + ("甲" * 20)
-        for index in range(12)
-    ]
-    path.write_text("\n".join(old_lines) + "\n", encoding="utf-8")
+def test_audit_log_rotates_full_active_file_to_timestamped_archive(
+        tmp_path, monkeypatch):
+    path = tmp_path / "cross_signal_audit.log"
+    original = "旧明细00-甲乙丙丁\n旧明细01-戊己庚辛\n"
+    path.write_text(original, encoding="utf-8")
     newest = "2026-07-22 09:35:00 - INFO - [候选排名] 最新完整明细\n"
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 8, 18, 14, 35, 22))
 
     assert pt._append_audit_log_text(
-        path, newest, max_bytes=420, compact_target_bytes=260) is True
+        path, newest, max_bytes=100) is True
 
-    raw = path.read_bytes()
-    text = raw.decode("utf-8")
-    assert len(raw) <= 420
-    assert text.endswith(newest)
-    assert "旧明细00" not in text
-    assert "最新完整明细" in text
-    assert all(line.startswith(("旧明细", "2026-07-22")) for line in text.splitlines())
+    archive = tmp_path / "cross_signal_audit_20260818_143522.log"
+    assert archive.read_text(encoding="utf-8") == original
+    assert path.read_text(encoding="utf-8") == newest
+    assert not list(tmp_path.glob("*.compact"))
 
 
-def test_audit_log_compaction_failure_preserves_original_file(
+def test_audit_log_rotation_failure_preserves_original_file(
         tmp_path, monkeypatch):
-    path = tmp_path / "cross_signal_v033_audit.log"
+    path = tmp_path / "cross_signal_audit.log"
     original = (("原始完整日志行\n" * 30).encode("utf-8"))
     path.write_bytes(original)
 
@@ -247,9 +245,95 @@ def test_audit_log_compaction_failure_preserves_original_file(
         path,
         "2026-07-22 09:35:00 - INFO - 新日志\n",
         max_bytes=300,
-        compact_target_bytes=180,
     ) is False
     assert path.read_bytes() == original
+
+
+def test_audit_log_rotation_uses_milliseconds_instead_of_overwriting(
+        tmp_path, monkeypatch):
+    path = tmp_path / "cross_signal_audit.log"
+    original = "原始日志\n" * 20
+    path.write_text(original, encoding="utf-8")
+    existing = tmp_path / "cross_signal_audit_20260818_143522.log"
+    existing.write_text("已有归档\n", encoding="utf-8")
+    monkeypatch.setattr(
+        pt,
+        "_audit_now",
+        lambda: datetime(2026, 8, 18, 14, 35, 22, 123000),
+    )
+
+    assert pt._append_audit_log_text(
+        path,
+        "2026-08-18 14:35:22 - INFO - 新日志\n",
+        max_bytes=100,
+    ) is True
+
+    collision_safe = tmp_path / "cross_signal_audit_20260818_143522_123.log"
+    assert existing.read_text(encoding="utf-8") == "已有归档\n"
+    assert collision_safe.read_text(encoding="utf-8") == original
+    assert path.read_text(encoding="utf-8") == (
+        "2026-08-18 14:35:22 - INFO - 新日志\n")
+
+
+def test_live_audit_log_leaves_legacy_versioned_files_untouched(
+        tmp_path, monkeypatch):
+    audit_dir = tmp_path / pt.AUDIT_LOG_DIR
+    audit_dir.mkdir(parents=True)
+    legacy_v032 = audit_dir / "cross_signal_v032_audit.log"
+    legacy_v033 = audit_dir / "cross_signal_v033_audit.log"
+    legacy_v032.write_bytes(b"legacy-v032\n")
+    legacy_v033.write_bytes(b"legacy-v033\n")
+    raw_log = types.SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        debug=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(pt, "log", raw_log)
+    monkeypatch.setattr(
+        pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "create_dir", lambda relative_path: True, raising=False)
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 8, 18, 14, 35, 22))
+
+    assert pt._install_live_audit_log(enabled=True) is True
+    pt.log.info("新活动日志")
+
+    assert legacy_v032.read_bytes() == b"legacy-v032\n"
+    assert legacy_v033.read_bytes() == b"legacy-v033\n"
+    active = audit_dir / "cross_signal_audit.log"
+    assert "新活动日志" in active.read_text(encoding="utf-8")
+
+
+def test_live_audit_log_restart_appends_to_existing_active_file(
+        tmp_path, monkeypatch):
+    audit_dir = tmp_path / pt.AUDIT_LOG_DIR
+    audit_dir.mkdir(parents=True)
+    active = audit_dir / "cross_signal_audit.log"
+    active.write_text("重启前日志\n", encoding="utf-8")
+    raw_log = types.SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        debug=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(pt, "log", raw_log)
+    monkeypatch.setattr(
+        pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "create_dir", lambda relative_path: True, raising=False)
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 8, 18, 15, 30, 0))
+
+    assert pt._install_live_audit_log(enabled=True) is True
+    pt.log.info("重启后日志")
+
+    assert active.read_text(encoding="utf-8").splitlines() == [
+        "重启前日志",
+        "2026-08-18 15:30:00 - INFO - 重启后日志",
+    ]
+    assert list(audit_dir.glob("cross_signal_audit_*.log")) == []
 
 
 def test_audit_log_proxy_isolates_platform_log_failure(monkeypatch):
@@ -8165,7 +8249,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260817.1" in notes
+    assert "20260818.1" in notes
     assert "77e44d93d255" in notes
     assert "状态结构=7" in notes
     assert "provisional risk state" in notes
@@ -8206,11 +8290,12 @@ def test_ptrade_deployment_notes_define_bounded_full_audit_log():
     ).read_text(encoding="utf-8")
 
     assert "cross_signal_logs" in notes
-    assert "cross_signal_v033_audit.log" in notes
+    assert "cross_signal_audit.log" in notes
     assert "完整镜像" in notes
-    assert "20 MB" in notes
-    assert "16 MB" in notes
-    assert "最旧的完整日志行" in notes
+    assert "20 MiB" in notes
+    assert "cross_signal_audit_YYYYMMDD_HHMMSS.log" in notes
+    assert "任何既有归档都不会被覆盖" in notes
+    assert "不迁移、不删除" in notes
     assert "PTrade 平台自身" in notes
 
 

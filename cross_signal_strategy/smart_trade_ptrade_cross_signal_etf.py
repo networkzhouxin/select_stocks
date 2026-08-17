@@ -20,15 +20,14 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.3"
-DEPLOYMENT_BUILD_ID = "20260817.1"
+DEPLOYMENT_BUILD_ID = "20260818.1"
 LIVE_STATE_SCHEMA_VERSION = 7
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
 LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
 AUDIT_LOG_DIR = "cross_signal_logs"
-AUDIT_LOG_FILENAME = "cross_signal_v033_audit.log"
+AUDIT_LOG_FILENAME = "cross_signal_audit.log"
 AUDIT_LOG_MAX_BYTES = 20 * 1024 * 1024
-AUDIT_LOG_COMPACT_TARGET_BYTES = 16 * 1024 * 1024
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
     "513500.SS",
@@ -89,14 +88,45 @@ def _render_log_message(message, args):
         return " ".join([str(message)] + [str(value) for value in args])
 
 
-def _append_audit_log_text(
-        path, text, max_bytes=AUDIT_LOG_MAX_BYTES,
-        compact_target_bytes=AUDIT_LOG_COMPACT_TARGET_BYTES):
-    """追加审计日志；超限时仅保留最新的完整 UTF-8 日志行。"""
+def _audit_rotation_path(path, now=None):
+    """返回不会覆盖既有归档的时间戳日志路径。"""
+    path = Path(path)
+    now = _audit_now() if now is None else now
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    candidate = path.with_name(
+        "%s_%s%s" % (path.stem, timestamp, path.suffix))
+    if not candidate.exists():
+        return candidate
+
+    millisecond = now.strftime("%f")[:3]
+    candidate = path.with_name(
+        "%s_%s_%s%s" % (
+            path.stem, timestamp, millisecond, path.suffix))
+    if not candidate.exists():
+        return candidate
+
+    for sequence in range(1, 1000):
+        candidate = path.with_name(
+            "%s_%s_%s_%03d%s" % (
+                path.stem,
+                timestamp,
+                millisecond,
+                sequence,
+                path.suffix,
+            ))
+        if not candidate.exists():
+            return candidate
+    return None
+
+
+def _append_audit_log_text(path, text, max_bytes=AUDIT_LOG_MAX_BYTES):
+    """追加审计日志；超限前归档原文件并创建新的活动日志。"""
     path = Path(path)
     incoming = str(text).encode("utf-8")
     if not incoming or len(incoming) > max_bytes:
         return False
+    temporary = Path(str(path) + ".rotate")
+    archive_path = None
     try:
         with open(str(path), "ab+") as audit_file:
             audit_file.seek(0, 2)
@@ -104,31 +134,26 @@ def _append_audit_log_text(
             if current_size + len(incoming) <= max_bytes:
                 audit_file.write(incoming)
                 return True
-            audit_file.seek(0)
-            existing = audit_file.read()
 
-        keep_budget = max(0, compact_target_bytes - len(incoming))
-        start = max(0, len(existing) - keep_budget)
-        if start > 0:
-            newline = existing.find(b"\n", start)
-            retained = existing[newline + 1:] if newline >= 0 else b""
-        else:
-            retained = existing
-        payload = retained + incoming
-        if len(payload) > max_bytes:
+        archive_path = _audit_rotation_path(path)
+        if archive_path is None or temporary.exists():
             return False
-        payload.decode("utf-8")
 
-        temporary = Path(str(path) + ".compact")
-        with open(str(temporary), "wb") as audit_file:
-            audit_file.write(payload)
-        if temporary.read_bytes() != payload:
-            raise IOError("审计日志临时文件校验失败")
+        with open(str(temporary), "xb") as audit_file:
+            audit_file.write(incoming)
+        if temporary.read_bytes() != incoming:
+            raise IOError("审计日志轮转临时文件校验失败")
+
+        path.replace(archive_path)
         temporary.replace(path)
         return True
     except Exception:
         try:
-            temporary = Path(str(path) + ".compact")
+            if archive_path is not None and archive_path.exists() and not path.exists():
+                archive_path.replace(path)
+        except Exception:
+            pass
+        try:
             if temporary.exists():
                 temporary.unlink()
         except Exception:

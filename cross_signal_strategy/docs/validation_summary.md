@@ -21,8 +21,9 @@ pre-check plus five JoinQuant windows:
 
 The JoinQuant and PTrade formal files were synchronized to `cross-v0.3.3` /
 build `20260816.1` / fingerprint `77e44d93d255` / PTrade state schema 7 on
-2026-08-16. The current engineering release is build `20260817.1`; its stable
-state identity and broker-first recovery change no trading rule. The ATR-stress
+2026-08-16. State recovery was stabilized in build `20260817.1`. The current
+engineering release is build `20260818.1`; its size-only timestamped audit-log
+rotation changes no trading rule. The ATR-stress
 rule is positioned as drawdown insurance, not an alpha source:
 it only scales new buys and never changes the trade path when inactive. Full
 evidence: `docs/backtest_notes.md` (sections "ATR-Stress Local Pre-Check",
