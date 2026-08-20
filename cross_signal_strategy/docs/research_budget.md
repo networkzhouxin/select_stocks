@@ -11,8 +11,12 @@ it does not change any score, order, position, or risk rule.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.2` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: zero. The one fixed `etf_share_flow_shadow`
-  `positive_vs_non_positive` observation is complete and exhausted.
+- New open budget: exactly one. The only open family is
+  `intraday_signal_clock_1445_user_authorized`, permitting one fixed candidate:
+  preserve the official 09:35 path and add one causal 14:45 full signal pass
+  using completed one-minute bars through 14:44.
+- The fixed `etf_share_flow_shadow` `positive_vs_non_positive` observation is
+  complete and exhausted.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
 - The completed fixed `cross_window=1/2/3/4` comparison remains closed; window 3 is retained.
 - The completed fixed `09:35/10:00` execution-time comparison remains closed; `09:35` is retained.
@@ -75,7 +79,14 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-None. The user-authorized `profit_gated_direct_sell_user_authorized` family
+`intraday_signal_clock_1445_user_authorized` is the only open family. It permits
+exactly one candidate with decision times `09:35` and `14:45`; the 14:45 signal
+cutoff is `14:44`, the data scope is the approved 2018 warm-up plus 2019-2021
+training data, and validation influence is forbidden. It does not reopen MACD,
+KDJ, ADX, direct-sell, ATR, execution-wait, neighboring-time, or ETF-specific
+families.
+
+The user-authorized `profit_gated_direct_sell_user_authorized` family
 was consumed on 2026-08-16: the Step 0 matrix counterfactual found 0 of 12
 variants passing the gates (38/40 score thresholds never fired; 32/35
 thresholds clipped the 513050 +34% winner's mid-hold pullback), so the family

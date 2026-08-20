@@ -6,7 +6,7 @@
   },
   "validation_tuning_forbidden": true,
   "expected_failed_experiment_count": 63,
-  "max_total_open_experiments": 0,
+  "max_total_open_experiments": 1,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -492,6 +492,23 @@
       "prohibit_alternatives": true,
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only"
+    },
+    {
+      "key": "intraday_signal_clock_1445_user_authorized",
+      "label": "User-authorized fixed 14:45 point-in-time signal pass",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "The user explicitly authorized one new structural family: preserve the official 09:35 decision and add one causal 14:45 full signal pass from completed minutes through 14:44. This is not a search over execution times or indicator rules.",
+      "planned_experiment": "keep the official 09:35 path and add one 14:45 full signal pass using completed 1-minute bars through 14:44",
+      "decision_times": [
+        "09:35",
+        "14:45"
+      ],
+      "signal_cutoff": "14:44",
+      "candidate_variants": 1,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
     }
   ]
 }

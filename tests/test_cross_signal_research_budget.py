@@ -75,7 +75,9 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].planned_experiment is None
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
+    assert [family.key for family in open_families] == [
+        "intraday_signal_clock_1445_user_authorized"
+    ]
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -212,6 +214,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     profit_gated.pop("planned_experiment", None)
+    signal_clock = next(
+        item for item in payload["families"]
+        if item["key"] == "intraday_signal_clock_1445_user_authorized"
+    )
+    signal_clock.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    signal_clock.pop("planned_experiment", None)
     synthetic_open = tmp_path / "open.json"
     synthetic_open.write_text(json.dumps(payload), encoding="utf-8")
     mined = evaluate_experiment_request(
@@ -232,7 +243,41 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
+
+
+def test_user_authorized_1445_signal_clock_is_the_only_open_family():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["intraday_signal_clock_1445_user_authorized"]
+
+    assert budget.max_total_open_experiments == 1
+    assert family.status == "open"
+    assert family.max_new_experiments == 1
+    assert family.planned_experiment == (
+        "keep the official 09:35 path and add one 14:45 full signal pass "
+        "using completed 1-minute bars through 14:44"
+    )
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is True
+    assert [item.key for item in budget.families if item.status == "open"] == [
+        "intraday_signal_clock_1445_user_authorized"
+    ]
+
+    raw = json.loads(BUDGET.read_text(encoding="utf-8"))
+    payload = next(item for item in raw["families"] if item["key"] == family.key)
+    assert payload["decision_times"] == ["09:35", "14:45"]
+    assert payload["signal_cutoff"] == "14:44"
+    assert payload["candidate_variants"] == 1
+    assert payload["validation_influence"] == "none"
+    assert payload["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert payload["prohibit_alternatives"] is True
 
 
 def test_user_authorized_reexpansion_observation_is_consumed_and_rejected():
