@@ -237,6 +237,43 @@ def test_dual_adapter_rejects_any_unregistered_decision_time():
         adapter.score_at("510300", "2019-07-01", "14:44")
 
 
+def test_dual_adapter_records_frame_contract_failures_as_missing_coverage():
+    from cross_signal_strategy.local.dual_timepoint_signal_adapter import (
+        DualTimepointSignalAdapter,
+    )
+
+    broken = _minutes()
+    broken.loc[:, "prev_close"] = 99.0
+
+    class Loader:
+        def load_minute_frame(self, code, date):
+            return broken
+
+    class Baseline:
+        loader = Loader()
+
+        def load_signal_frame(self, code, date):
+            return _t1_frame(), "2020-01-03"
+
+        def score_frame(self, *args, **kwargs):
+            raise AssertionError("invalid frame must fail before scoring")
+
+    baseline = Baseline()
+    adapter = DualTimepointSignalAdapter(baseline)
+
+    score, reason = adapter.score_at(
+        "510300", "2020-01-06", "14:45", return_reason=True
+    )
+
+    assert score is None
+    assert (
+        reason
+        == "invalid_intraday_frame:510300 2020-01-06 14:45: "
+        "Daily/minute adjustment boundary mismatch"
+    )
+    assert adapter.score_at("510300", "2020-01-06", "14:45") is None
+
+
 class _DualEngineLoader:
     MORNING_CLOSE_WITH_SLIPPAGE = 10.01
     AFTERNOON_OPEN_WITH_SLIPPAGE = 20.02

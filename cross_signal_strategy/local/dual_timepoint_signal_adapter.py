@@ -43,34 +43,44 @@ class DualTimepointSignalAdapter:
             if signal_date is None:
                 self._score_cache[key] = (None, "no_previous_trade_date")
             else:
-                day_loader = getattr(
-                    self.baseline.loader, "load_minute_day_frame", None
-                )
-                if day_loader is None:
-                    minute_year = self.baseline.loader.load_minute_frame(
-                        code_text, date_text
+                try:
+                    day_loader = getattr(
+                        self.baseline.loader, "load_minute_day_frame", None
                     )
-                    minutes = minute_year.loc[
-                        minute_year["date"].astype(str) == date_text
-                    ].copy()
+                    if day_loader is None:
+                        minute_year = self.baseline.loader.load_minute_frame(
+                            code_text, date_text
+                        )
+                        minutes = minute_year.loc[
+                            minute_year["date"].astype(str) == date_text
+                        ].copy()
+                    else:
+                        minutes = day_loader(code_text, date_text)
+                    point = build_intraday_signal_frame(
+                        t1_frame, minutes, date_text, time_text
+                    )
+                except (FileNotFoundError, KeyError, ValueError) as exc:
+                    reason = "invalid_intraday_frame:%s %s %s: %s" % (
+                        code_text,
+                        date_text,
+                        time_text,
+                        exc,
+                    )
+                    self._score_cache[key] = (None, reason)
                 else:
-                    minutes = day_loader(code_text, date_text)
-                point = build_intraday_signal_frame(
-                    t1_frame, minutes, date_text, time_text
-                )
-                self._score_cache[key] = self.baseline.score_frame(
-                    code_text,
-                    date_text,
-                    point.frame,
-                    signal_date=date_text,
-                    metadata={
-                        "decision_time": time_text,
-                        "data_cutoff": point.audit.data_cutoff,
-                        "last_minute": point.audit.last_minute,
-                        "minute_count": point.audit.minute_count,
-                        "partial_volume": point.audit.partial_volume,
-                    },
-                )
+                    self._score_cache[key] = self.baseline.score_frame(
+                        code_text,
+                        date_text,
+                        point.frame,
+                        signal_date=date_text,
+                        metadata={
+                            "decision_time": time_text,
+                            "data_cutoff": point.audit.data_cutoff,
+                            "last_minute": point.audit.last_minute,
+                            "minute_count": point.audit.minute_count,
+                            "partial_volume": point.audit.partial_volume,
+                        },
+                    )
 
         result, reason = self._score_cache[key]
         copied = dict(result) if result is not None else None
