@@ -7,14 +7,13 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 56 real ledger entries.
+- Recorded failed or non-adopted experiments: 64 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
-- Mainline: `cross-v0.3.2` remains unchanged.
+- Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: exactly one. The only open family is
-  `intraday_signal_clock_1445_user_authorized`, permitting one fixed candidate:
-  preserve the official 09:35 path and add one causal 14:45 full signal pass
-  using completed one-minute bars through 14:44.
+- New open budget: zero. The fixed
+  `intraday_signal_clock_1445_user_authorized` candidate has been consumed and
+  rejected; no family is open.
 - The fixed `etf_share_flow_shadow` `positive_vs_non_positive` observation is
   complete and exhausted.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
@@ -72,6 +71,7 @@ it does not change any score, order, position, or risk rule.
 | `profit_giveback_exit_user_authorized` | exhausted | The fixed profit-giveback direct exit (peak profit ≥5%, giveback 3pp → sell at the 09:35 stop check) fired 79 times across 21 affected closed trades, but the total per-share delta was -0.352 with annual deltas -0.380/-0.101/+0.129, failing the total and annual gates. It would have clipped two major winners (2019-02-11 159928 and 2020-04-17 513050) while saving small amounts elsewhere. Large trend winners routinely give back more than 3pp mid-hold, so the mechanism kills this framework's payoff source. No candidate was created; no threshold or mechanism search is allowed. |
 | `intraday_high_anchor_user_authorized` | exhausted | The fixed intraday-high trailing anchor (multiplier 2.5, floor 5%, cap 15% unchanged) bound on 1604 check days with 38 extra triggers, but the local A/B failed the gates: return +125.00%→+119.40%, drawdown 6.03%→6.06%, 2019 annual +35.84%→+30.55%. The dominant clip was 2019-02-11 159928 (exit 2.232 versus official 2.666 on an +18.8% winner); seven small saves could not offset it. The peak-day upper wick raises the anchor into the winner's normal pullback band, turning the noise the close anchor was designed to filter back into stop triggers. No anchor blends or re-calibrations are allowed. |
 | `profit_gated_direct_sell_user_authorized` | exhausted | The fixed 4×3 direct-sell matrix (sell scores 32/35/38/40 crossed with profit bands 2-4%/3-5%/4-6%) was consumed with 0 of 12 variants passing the Step 0 gates. The 38/40 thresholds never fired (scores that high arrive only after profit leaves the band), and the 32/35 thresholds produced negative total per-share deltas because the 513050 +34% winner's mid-hold pullback satisfies the trigger and would be exited early. No candidate was created; no nearby thresholds, bands, or mechanism variants may be searched. |
+| `intraday_signal_clock_1445_user_authorized` | exhausted | The fixed causal 09:35+14:45 full signal candidate reduced return from +125.00% to +85.00%, raised drawdown from 6.03% to 7.49%, lowered win rate from 56.18% to 47.66%, lowered profit/loss ratio to 2.813, and increased positive-to-negative round trips from 31 to 40. Doubled friction also worsened return and drawdown. Retain the official single 09:35 path; no nearby-time, per-ETF, side-only, indicator-subset, threshold, hold, or cooldown search is allowed. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -79,12 +79,13 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-`intraday_signal_clock_1445_user_authorized` is the only open family. It permits
-exactly one candidate with decision times `09:35` and `14:45`; the 14:45 signal
-cutoff is `14:44`, the data scope is the approved 2018 warm-up plus 2019-2021
-training data, and validation influence is forbidden. It does not reopen MACD,
-KDJ, ADX, direct-sell, ATR, execution-wait, neighboring-time, or ETF-specific
-families.
+No research family is open. The user-authorized
+`intraday_signal_clock_1445_user_authorized` family was consumed on 2026-08-21:
+the exact 09:35+14:45 candidate failed nine frozen quality and friction gates
+(+125.00% to +85.00% return, 6.03% to 7.49% drawdown, 56.18% to 47.66% win
+rate, and 31 to 40 positive-to-negative round trips). It closed without a
+JoinQuant or PTrade candidate and does not reopen MACD, KDJ, ADX, direct-sell,
+ATR, execution-wait, neighboring-time, or ETF-specific families.
 
 The user-authorized `profit_gated_direct_sell_user_authorized` family
 was consumed on 2026-08-16: the Step 0 matrix counterfactual found 0 of 12

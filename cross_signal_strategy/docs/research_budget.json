@@ -5,8 +5,8 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 63,
-  "max_total_open_experiments": 1,
+  "expected_failed_experiment_count": 64,
+  "max_total_open_experiments": 0,
   "families": [
     {
       "key": "cross_signal_definition",
@@ -496,16 +496,71 @@
     {
       "key": "intraday_signal_clock_1445_user_authorized",
       "label": "User-authorized fixed 14:45 point-in-time signal pass",
-      "status": "open",
-      "max_new_experiments": 1,
+      "status": "exhausted",
+      "max_new_experiments": 0,
       "rationale": "The user explicitly authorized one new structural family: preserve the official 09:35 decision and add one causal 14:45 full signal pass from completed minutes through 14:44. This is not a search over execution times or indicator rules.",
-      "planned_experiment": "keep the official 09:35 path and add one 14:45 full signal pass using completed 1-minute bars through 14:44",
       "decision_times": [
         "09:35",
         "14:45"
       ],
       "signal_cutoff": "14:44",
       "candidate_variants": 1,
+      "candidate_gate_passed": false,
+      "candidate_created": false,
+      "baseline_total_return": 1.250025,
+      "candidate_total_return": 0.84997,
+      "baseline_max_drawdown": 0.0603157868,
+      "candidate_max_drawdown": 0.0749189964,
+      "baseline_win_rate": 0.5617977528,
+      "candidate_win_rate": 0.476635514,
+      "baseline_profit_loss_ratio": 4.44,
+      "candidate_profit_loss_ratio": 2.8131383699,
+      "baseline_annual_win_rates": {
+        "2019": 0.56,
+        "2020": 0.586207,
+        "2021": 0.542857
+      },
+      "candidate_annual_win_rates": {
+        "2019": 0.535714,
+        "2020": 0.486486,
+        "2021": 0.428571
+      },
+      "baseline_round_trip_count": 31,
+      "candidate_round_trip_count": 40,
+      "round_trip_improved_codes": [
+        "512100"
+      ],
+      "baseline_max_loss_streak": 5,
+      "candidate_max_loss_streak": 5,
+      "baseline_buy_count": 92,
+      "candidate_buy_count": 109,
+      "baseline_sell_count": 89,
+      "candidate_sell_count": 107,
+      "baseline_double_friction_return": 1.12777192,
+      "candidate_double_friction_return": 0.731887427,
+      "baseline_double_friction_drawdown": 0.062539798,
+      "candidate_double_friction_drawdown": 0.0827629275,
+      "annual_coverage": {
+        "2019": 1765,
+        "2020": 2134,
+        "2021": 2132
+      },
+      "annual_missing": {
+        "2019": 431,
+        "2020": 53,
+        "2021": 55
+      },
+      "gate_reasons": [
+        "total return retains less than 80% of baseline",
+        "maximum drawdown worsens",
+        "profit/loss ratio is below 3.0",
+        "closed-trade win rate does not improve",
+        "fewer than two annual win rates are non-worse",
+        "positive-to-negative round trips fall by fewer than three",
+        "round-trip improvement is concentrated in fewer than two ETFs",
+        "doubled-friction return retains less than 80% of baseline",
+        "doubled-friction drawdown worsens"
+      ],
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true

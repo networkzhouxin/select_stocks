@@ -3299,6 +3299,45 @@ Interpretation:
 Decision:
 - Reject at Step 0 before any candidate. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no nearby thresholds, bands, or mechanism variants are allowed.
 
+## 2026-08-21 Fixed 14:45 Dual-Timepoint Candidate
+
+Version: `cross-v0.3.3-dual-timepoint-1445-candidate`
+Protocol role: user-authorized single fixed variant; training-only local A/B
+Engine: local causal 09:35/14:45 replay; JoinQuant remains the performance authority
+Data boundary: approved read-only 2018 warm-up plus 2019-2021 training data only; no validation, pressure, recent, full-period, or 2026 price data
+
+Frozen hypothesis and implementation:
+- Preserve the official 09:35 path and add one full 14:45 buy/sell decision from minute labels strictly before 14:45, with 14:44 as the final signal minute.
+- Recompute the unchanged RSI/KDJ/MACD/ADX/BOLL/MA/ATR scoring path on a provisional T-day bar; use raw partial volume; execute at the 14:45 minute open; share all broker, position, hold, ATR, close-anchor, sold-today, ranking, sizing, and risk state.
+- Keep all indicators, parameters, thresholds, ETF pool, fees, and official 09:35 behavior unchanged. Candidate variants: exactly one.
+
+Engineering audit before the completed run:
+- The first CLI attempt produced no report because 512100 on 2019-01-02 had 224 pre-14:45 minute rows with missing `prev_close`; the strict daily/minute boundary check stopped the process.
+- A failing regression test was added. The frame validator remains strict, while the dual adapter now records an invalid code-date as missing coverage and continues other ETFs. This does not invent a previous close or weaken causality.
+- A complete read-only score scan then found usable 14:45 coverage of 1765/2134/2132 and missing counts of 431/53/55 for 2019/2020/2021. The aborted implementation run was not a candidate result or a second variant.
+
+Nominal A/B result:
+- Total return: baseline +125.0025%, candidate +84.9970%.
+- Maximum drawdown: 6.0316% -> 7.4919%.
+- Closed-trade win rate: 56.18% -> 47.66%.
+- Profit/loss ratio: historical baseline 4.440, candidate 2.8131.
+- Annual win rates: 56.00%/58.62%/54.29% -> 53.57%/48.65%/42.86%.
+- Buys/sells: 92/89 -> 109/107.
+- Positive-to-negative round trips: 31 -> 40; only 512100 had a per-code reduction.
+- Maximum consecutive losing trades: 5 -> 5.
+
+Double-friction result:
+- Total return: +112.7772% -> +73.1887%.
+- Maximum drawdown: 6.2540% -> 8.2763%.
+
+Frozen gate outcome:
+- Failed return retention, nominal drawdown, candidate profit/loss ratio, overall win rate, annual win-rate consistency, total round-trip reduction, cross-ETF round-trip breadth, stressed return retention, and stressed drawdown.
+- Passed only the buy/sell count ceiling, non-worsening maximum loss streak, and nonzero annual score coverage requirements.
+
+Interpretation and decision:
+- A second full intraday signal pass increases reaction frequency but lowers accuracy. Partial-day indicator changes are too noisy to distinguish durable reversals from normal intraday movement, so the mechanism adds recycling, increases positive-to-negative outcomes, and worsens both nominal and stressed drawdown.
+- Decision: `STOP`. Reject before JoinQuant and PTrade, keep formal `cross-v0.3.3` unchanged, exhaust the family, and do not search nearby times, per-ETF times, afternoon-only sides, indicator subsets, thresholds, or hold/cooldown interactions.
+
 
 
 

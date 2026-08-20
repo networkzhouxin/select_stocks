@@ -16,6 +16,12 @@ FAILED_EXPERIMENTS = (
 )
 BUDGET = ROOT / "cross_signal_strategy" / "docs" / "research_budget.json"
 GUIDE = ROOT / "cross_signal_strategy" / "docs" / "research_budget.md"
+DUAL_TIMEPOINT_REPORT = (
+    ROOT
+    / "cross_signal_strategy"
+    / "reports"
+    / "dual_timepoint_1445_2019_2021.md"
+)
 
 
 def test_parse_failed_experiments_requires_complete_core_fields():
@@ -53,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 63
-    assert report.expected_failed_experiment_count == 63
+    assert report.failed_experiment_count == 64
+    assert report.expected_failed_experiment_count == 64
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -75,9 +81,7 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].planned_experiment is None
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert [family.key for family in open_families] == [
-        "intraday_signal_clock_1445_user_authorized"
-    ]
+    assert open_families == []
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -243,10 +247,10 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
 
 
-def test_user_authorized_1445_signal_clock_is_the_only_open_family():
+def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -256,19 +260,14 @@ def test_user_authorized_1445_signal_clock_is_the_only_open_family():
     families = {family.key: family for family in budget.families}
     family = families["intraday_signal_clock_1445_user_authorized"]
 
-    assert budget.max_total_open_experiments == 1
-    assert family.status == "open"
-    assert family.max_new_experiments == 1
-    assert family.planned_experiment == (
-        "keep the official 09:35 path and add one 14:45 full signal pass "
-        "using completed 1-minute bars through 14:44"
-    )
+    assert budget.max_total_open_experiments == 0
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
-    ).allowed is True
-    assert [item.key for item in budget.families if item.status == "open"] == [
-        "intraday_signal_clock_1445_user_authorized"
-    ]
+    ).allowed is False
+    assert [item.key for item in budget.families if item.status == "open"] == []
 
     raw = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload = next(item for item in raw["families"] if item["key"] == family.key)
@@ -278,6 +277,56 @@ def test_user_authorized_1445_signal_clock_is_the_only_open_family():
     assert payload["validation_influence"] == "none"
     assert payload["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
     assert payload["prohibit_alternatives"] is True
+
+
+def test_user_authorized_1445_signal_clock_is_consumed_and_rejected():
+    from cross_signal_strategy.research.research_budget import load_research_budget
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["intraday_signal_clock_1445_user_authorized"]
+    raw_family = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+    report_text = DUAL_TIMEPOINT_REPORT.read_text(encoding="utf-8")
+    report_gate_passed = "ELIGIBLE_FOR_JOINQUANT_PLAN" in report_text
+
+    assert budget.max_total_open_experiments == 0
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw_family["candidate_gate_passed"] is report_gate_passed
+    assert raw_family["candidate_created"] is False
+    assert raw_family["validation_influence"] == "none"
+    assert raw_family["prohibit_alternatives"] is True
+    assert raw_family["baseline_total_return"] == pytest.approx(1.250025)
+    assert raw_family["candidate_total_return"] == pytest.approx(0.84997)
+    assert raw_family["baseline_max_drawdown"] == pytest.approx(0.0603157868)
+    assert raw_family["candidate_max_drawdown"] == pytest.approx(0.0749189964)
+    assert raw_family["baseline_win_rate"] == pytest.approx(0.5617977528)
+    assert raw_family["candidate_win_rate"] == pytest.approx(0.4766355140)
+    assert raw_family["candidate_profit_loss_ratio"] == pytest.approx(2.8131383699)
+    assert raw_family["baseline_round_trip_count"] == 31
+    assert raw_family["candidate_round_trip_count"] == 40
+    assert raw_family["baseline_max_loss_streak"] == 5
+    assert raw_family["candidate_max_loss_streak"] == 5
+    assert raw_family["baseline_buy_count"] == 92
+    assert raw_family["candidate_buy_count"] == 109
+    assert raw_family["baseline_sell_count"] == 89
+    assert raw_family["candidate_sell_count"] == 107
+    assert raw_family["annual_coverage"] == {
+        "2019": 1765,
+        "2020": 2134,
+        "2021": 2132,
+    }
+    assert raw_family["annual_missing"] == {
+        "2019": 431,
+        "2020": 53,
+        "2021": 55,
+    }
+    assert "STOP" in report_text
 
 
 def test_user_authorized_reexpansion_observation_is_consumed_and_rejected():
