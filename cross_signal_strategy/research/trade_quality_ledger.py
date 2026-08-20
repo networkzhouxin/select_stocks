@@ -85,9 +85,17 @@ def _validate_trade(trade: ClosedTradeDiagnostic) -> tuple[pd.Timestamp, pd.Time
     sell_date = pd.Timestamp(trade.sell_date)
     if buy_date < TRAIN_START or sell_date > TRAIN_END or sell_date < buy_date:
         raise ValueError("Trade dates must stay inside the training window")
-    signal_date = (trade.entry_score or {}).get("signal_date")
-    if signal_date is not None and pd.Timestamp(signal_date) >= buy_date:
-        raise ValueError("Entry signal date must be before buy date")
+    entry_score = trade.entry_score or {}
+    signal_date = entry_score.get("signal_date")
+    if signal_date is not None:
+        signal_day = pd.Timestamp(signal_date)
+        proven_intraday = (
+            signal_day == buy_date
+            and str(entry_score.get("decision_time")) == "14:45"
+            and str(entry_score.get("data_cutoff")) == "14:44"
+        )
+        if signal_day > buy_date or (signal_day == buy_date and not proven_intraday):
+            raise ValueError("Entry signal date must be before buy date")
     return buy_date, sell_date
 
 

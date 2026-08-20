@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import pathlib
 import sys
 
@@ -573,3 +574,198 @@ def test_full_training_morning_only_dual_engine_matches_official_local_path():
     assert candidate_days[-1].total_value == pytest.approx(
         baseline_days[-1].total_value
     )
+
+
+def _passing_gate_inputs():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        DualTimepointGateInputs,
+    )
+
+    return DualTimepointGateInputs(
+        total_return=0.96,
+        baseline_total_return=1.20,
+        max_drawdown=0.07,
+        baseline_max_drawdown=0.07,
+        profit_loss_ratio=3.1,
+        win_rate=0.58,
+        baseline_win_rate=0.56,
+        annual_win_rates={2019: 0.60, 2020: 0.55, 2021: 0.50},
+        baseline_annual_win_rates={2019: 0.59, 2020: 0.55, 2021: 0.52},
+        round_trip_count=6,
+        baseline_round_trip_count=9,
+        round_trip_improved_codes=("AAA", "BBB"),
+        max_loss_streak=3,
+        baseline_max_loss_streak=3,
+        buy_count=115,
+        baseline_buy_count=100,
+        sell_count=112,
+        baseline_sell_count=100,
+        annual_coverage={2019: 10, 2020: 10, 2021: 10},
+        annual_missing={2019: 0, 2020: 1, 2021: 0},
+        double_friction_return=0.90,
+        baseline_double_friction_return=1.10,
+        double_friction_drawdown=0.07,
+        baseline_double_friction_drawdown=0.07,
+    )
+
+
+def test_1445_gate_requires_every_frozen_condition():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        evaluate_dual_timepoint_1445_gate,
+    )
+
+    passing = _passing_gate_inputs()
+    assert evaluate_dual_timepoint_1445_gate(passing).passed is True
+
+    failing_overrides = {
+        "total_return": 0.95,
+        "max_drawdown": 0.071,
+        "profit_loss_ratio": 2.99,
+        "win_rate": 0.56,
+        "annual_win_rates": {2019: 0.58, 2020: 0.54, 2021: 0.51},
+        "round_trip_count": 7,
+        "round_trip_improved_codes": ("AAA",),
+        "max_loss_streak": 4,
+        "buy_count": 131,
+        "sell_count": 131,
+        "annual_coverage": {2019: 10, 2020: 0, 2021: 10},
+        "double_friction_return": 0.87,
+        "double_friction_drawdown": 0.071,
+    }
+    for field, value in failing_overrides.items():
+        broken = replace(passing, **{field: value})
+        decision = evaluate_dual_timepoint_1445_gate(broken)
+        assert decision.passed is False, field
+        assert decision.reasons, field
+
+
+def test_1445_gate_requires_missing_coverage_counts_to_be_disclosed():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        evaluate_dual_timepoint_1445_gate,
+    )
+
+    broken = replace(_passing_gate_inputs(), annual_missing={2019: 0, 2020: 0})
+
+    decision = evaluate_dual_timepoint_1445_gate(broken)
+
+    assert decision.passed is False
+    assert "missing coverage counts" in " ".join(decision.reasons)
+
+
+class _LedgerLoader:
+    def load_daily_frame(self, code, trade_date):
+        if pd.Timestamp(trade_date).year != 2020:
+            raise FileNotFoundError(trade_date)
+        return pd.DataFrame(
+            {
+                "date": ["2020-01-02", "2020-01-03"],
+                "close": [10.5, 9.0],
+            }
+        )
+
+
+def _two_day_trade(sell_price, buy_time):
+    from cross_signal_strategy.local.local_backtester import (
+        DayResult,
+        OrderResult,
+        Position,
+    )
+
+    buy = OrderResult(
+        "AAA",
+        100,
+        10.0,
+        5.0,
+        "2020-01-02 %s" % buy_time,
+        True,
+        "buy_signal",
+    )
+    sell = OrderResult(
+        "AAA",
+        -100,
+        sell_price,
+        5.0,
+        "2020-01-03 09:35",
+        True,
+        "signal_sell",
+    )
+    return [
+        DayResult(
+            "2020-01-02",
+            None,
+            [buy],
+            0.0,
+            {"AAA": Position("AAA", 100, 10.0)},
+            {"AAA": 10.5},
+            1000.0,
+        ),
+        DayResult(
+            "2020-01-03",
+            "2020-01-02",
+            [sell],
+            900.0 if sell_price < 10.0 else 1100.0,
+            {},
+            {},
+            900.0 if sell_price < 10.0 else 1100.0,
+        ),
+    ]
+
+
+def test_report_builds_trade_quality_from_batch_specific_score_snapshots():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        build_dual_timepoint_1445_report,
+    )
+
+    baseline_days = _two_day_trade(11.0, "09:35")
+    candidate_days = _two_day_trade(9.0, "14:45")
+    baseline_entry = {
+        ("2020-01-02", "09:35", "AAA"): {
+            "atr": 0.2,
+            "signal_date": "2019-12-31",
+            "decision_time": "09:35",
+        }
+    }
+    candidate_entry = {
+        ("2020-01-02", "14:45", "AAA"): {
+            "atr": 0.2,
+            "signal_date": "2020-01-02",
+            "decision_time": "14:45",
+            "data_cutoff": "14:44",
+        }
+    }
+    exit_scores = {
+        ("2020-01-03", "09:35", "AAA"): {
+            "signal_date": "2020-01-02",
+            "decision_time": "09:35",
+        }
+    }
+
+    report = build_dual_timepoint_1445_report(
+        baseline_days=baseline_days,
+        candidate_days=candidate_days,
+        baseline_entry_score_snapshots=baseline_entry,
+        baseline_exit_score_snapshots=exit_scores,
+        candidate_entry_score_snapshots=candidate_entry,
+        candidate_exit_score_snapshots=exit_scores,
+        candidate_score_coverage={
+            ("2020-01-02", "14:45", "AAA"): "ok",
+            ("2020-01-02", "14:45", "BBB"): "no_data",
+        },
+        baseline_double_friction_days=baseline_days,
+        candidate_double_friction_days=candidate_days,
+        loader=_LedgerLoader(),
+        initial_cash=1000.0,
+    )
+
+    assert report.gate_inputs.baseline_annual_win_rates[2020] == pytest.approx(1.0)
+    assert report.gate_inputs.annual_win_rates[2020] == pytest.approx(0.0)
+    assert report.gate_inputs.baseline_round_trip_count == 0
+    assert report.gate_inputs.round_trip_count == 1
+    assert report.gate_inputs.max_loss_streak == 1
+    assert report.gate_inputs.annual_coverage[2020] == 1
+    assert report.gate_inputs.annual_missing[2020] == 1
+    assert report.candidate_trades[0].entry_score["data_cutoff"] == "14:44"
+    assert report.candidate_ledger[0].holding_mfe > 0
+    assert report.candidate_ledger[0].realized_return_pct < 0
+    assert report.candidate_order_signature[0][1] == "14:45"
+    assert report.gate.passed is False

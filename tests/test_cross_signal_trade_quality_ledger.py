@@ -177,6 +177,37 @@ def test_trade_quality_ledger_rejects_leakage_boundaries(trade, error):
         build_trade_quality_ledger([trade], FakeLoader({}))
 
 
+def test_trade_quality_ledger_accepts_proven_1445_same_day_signal_only():
+    from cross_signal_strategy.research.trade_quality_ledger import (
+        build_trade_quality_ledger,
+    )
+
+    loader = FakeLoader({
+        ("510300", 2021): pd.DataFrame({
+            "date": ["2021-06-01", "2021-06-02", "2021-06-03"],
+            "close": [10.2, 10.4, 10.5],
+        }),
+    })
+    trade = _trade(
+        code="510300",
+        buy_date="2021-06-01",
+        sell_date="2021-06-03",
+        buy_price=10.0,
+        sell_price=10.5,
+        entry_score={
+            "atr": 0.2,
+            "signal_date": "2021-06-01",
+            "decision_time": "14:45",
+            "data_cutoff": "14:44",
+        },
+    )
+
+    row = build_trade_quality_ledger([trade], loader)[0]
+
+    assert row.buy_date == "2021-06-01"
+    assert row.realized_return_pct == pytest.approx(5.0)
+
+
 def test_trade_quality_summary_groups_by_year_market_and_reason():
     from cross_signal_strategy.research.trade_quality_ledger import (
         TradeQualityRow,

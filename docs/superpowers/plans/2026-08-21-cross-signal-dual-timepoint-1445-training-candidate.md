@@ -36,6 +36,8 @@
 - Create `tests/test_cross_signal_dual_timepoint_1445.py`: focused data, scoring, engine, planner, and gate tests.
 - Modify `cross_signal_strategy/local/local_signal_adapter.py`: extract one reusable score-from-frame method without changing official 09:35 results.
 - Modify `cross_signal_strategy/local/local_backtester.py`: accept optional broker friction kwargs while preserving defaults.
+- Modify `cross_signal_strategy/research/trade_quality_ledger.py`: accept a same-day entry signal only when its audit proves the fixed 14:45 decision and 14:44 cutoff; preserve rejection of every other same-day or future signal.
+- Modify `tests/test_cross_signal_trade_quality_ledger.py`: cover the narrow point-in-time ledger exception and unchanged leakage rejection.
 - Modify `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, and `tests/test_cross_signal_research_budget.py`: open exactly one family before running it, then close it after the fixed run.
 - Modify either `cross_signal_strategy/docs/failed_experiments.md` or `cross_signal_strategy/docs/decisions.md`, plus `cross_signal_strategy/docs/backtest_notes.md`: record the one empirical outcome.
 - Generate `cross_signal_strategy/reports/dual_timepoint_1445_2019_2021.md`: immutable human-readable result for the consumed candidate.
@@ -1048,7 +1050,9 @@ git commit -m "feat(cross-signal): replay shared 09:35 and 14:45 decisions"
 
 **Files:**
 - Create: `cross_signal_strategy/research/dual_timepoint_1445_candidate.py`
+- Modify: `cross_signal_strategy/research/trade_quality_ledger.py`
 - Modify: `tests/test_cross_signal_dual_timepoint_1445.py`
+- Modify: `tests/test_cross_signal_trade_quality_ledger.py`
 
 **Interfaces:**
 - Consumes: baseline `DayResult` list, candidate `DayResult` list, score snapshots, `build_baseline_report`, `build_closed_trade_diagnostics`, and `build_trade_quality_ledger`.
