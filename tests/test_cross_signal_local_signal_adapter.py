@@ -85,6 +85,24 @@ def test_signal_score_matches_strategy_snapshot_scoring_after_lookback():
     assert score["atr"] > 0
 
 
+def test_score_frame_exactly_matches_score_for_the_same_visible_frame():
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT))
+    expected, expected_reason = adapter.score(
+        "510300", "2019-07-01", return_reason=True
+    )
+    frame, signal_date = adapter.load_signal_frame("510300", "2019-07-01")
+
+    actual, actual_reason = adapter.score_frame(
+        "510300", "2019-07-01", frame, signal_date
+    )
+
+    assert actual_reason == expected_reason
+    assert actual == expected
+
+
 def test_signal_score_allows_new_listing_when_required_indicators_are_valid():
     from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter

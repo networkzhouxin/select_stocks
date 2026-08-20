@@ -178,3 +178,59 @@ def test_1445_frame_rejects_unregistered_time_and_empty_visible_window():
     late_only = _minutes().loc[_minutes()["time"] >= "14:45"].copy()
     with pytest.raises(ValueError, match="No completed minute"):
         build_intraday_signal_frame(_t1_frame(), late_only, "2020-01-06", "14:45")
+
+
+def test_dual_adapter_delegates_0935_and_scores_real_partial_t_bar():
+    from cross_signal_strategy.local.dual_timepoint_signal_adapter import (
+        DualTimepointSignalAdapter,
+    )
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_training_run import build_training_signal_adapter
+
+    baseline = build_training_signal_adapter(
+        CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    )
+    adapter = DualTimepointSignalAdapter(baseline)
+
+    morning = adapter.score_at("510300", "2019-07-01", "09:35")
+    afternoon = adapter.score_at("510300", "2019-07-01", "14:45")
+
+    assert morning == baseline.score("510300", "2019-07-01")
+    assert afternoon["signal_date"] == "2019-07-01"
+    assert afternoon["decision_time"] == "14:45"
+    assert afternoon["data_cutoff"] == "14:44"
+    assert afternoon["max_data_date"] == "2019-07-01"
+    assert afternoon["partial_volume"] is True
+    for field in (
+        "rsi6",
+        "rsi12",
+        "rsi24",
+        "k",
+        "d",
+        "j",
+        "dif",
+        "dea",
+        "adx",
+        "boll_mid",
+        "ma5",
+        "ma10",
+        "ma20",
+        "ma60",
+        "atr",
+    ):
+        assert pd.notna(afternoon[field]), field
+
+
+def test_dual_adapter_rejects_any_unregistered_decision_time():
+    from cross_signal_strategy.local.dual_timepoint_signal_adapter import (
+        DualTimepointSignalAdapter,
+    )
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_training_run import build_training_signal_adapter
+
+    adapter = DualTimepointSignalAdapter(
+        build_training_signal_adapter(CrossSignalTrainingDataLoader(TRAIN_ROOT))
+    )
+
+    with pytest.raises(ValueError, match="Only 09:35 and 14:45"):
+        adapter.score_at("510300", "2019-07-01", "14:44")
