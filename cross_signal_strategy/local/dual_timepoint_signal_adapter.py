@@ -43,12 +43,18 @@ class DualTimepointSignalAdapter:
             if signal_date is None:
                 self._score_cache[key] = (None, "no_previous_trade_date")
             else:
-                minute_year = self.baseline.loader.load_minute_frame(
-                    code_text, date_text
+                day_loader = getattr(
+                    self.baseline.loader, "load_minute_day_frame", None
                 )
-                minutes = minute_year.loc[
-                    minute_year["date"].astype(str) == date_text
-                ].copy()
+                if day_loader is None:
+                    minute_year = self.baseline.loader.load_minute_frame(
+                        code_text, date_text
+                    )
+                    minutes = minute_year.loc[
+                        minute_year["date"].astype(str) == date_text
+                    ].copy()
+                else:
+                    minutes = day_loader(code_text, date_text)
                 point = build_intraday_signal_frame(
                     t1_frame, minutes, date_text, time_text
                 )

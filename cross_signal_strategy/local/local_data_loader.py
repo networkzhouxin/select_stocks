@@ -96,10 +96,26 @@ class CrossSignalTrainingDataLoader:
     def load_minute_frame(self, code: str, trade_date: Union[str, pd.Timestamp]) -> pd.DataFrame:
         return self._load_frame("minute_1m", code, trade_date)
 
+    def load_minute_day_frame(
+        self, code: str, trade_date: Union[str, pd.Timestamp]
+    ) -> pd.DataFrame:
+        """Return one defensive day slice without copying the whole year."""
+        date_text = pd.Timestamp(trade_date).strftime("%Y-%m-%d")
+        frame = self._cached_frame("minute_1m", code, trade_date)
+        rows = frame.loc[frame["date"].astype(str) == date_text]
+        if rows.empty:
+            raise KeyError(f"No minute rows for {code} {date_text}")
+        return rows.copy()
+
     def load_daily_frame(self, code: str, trade_date: Union[str, pd.Timestamp]) -> pd.DataFrame:
         return self._load_frame("daily", code, trade_date)
 
     def _load_frame(self, kind: str, code: str, trade_date: Union[str, pd.Timestamp]) -> pd.DataFrame:
+        return self._cached_frame(kind, code, trade_date).copy()
+
+    def _cached_frame(
+        self, kind: str, code: str, trade_date: Union[str, pd.Timestamp]
+    ) -> pd.DataFrame:
         path = self._csv_path(kind, code, trade_date)
         cache = getattr(self, "_frame_cache")
         key = str(path)
@@ -107,7 +123,7 @@ class CrossSignalTrainingDataLoader:
             frame = pd.read_csv(path, dtype={"code": str})
             assert_dates_in_training_window(frame)
             cache[key] = frame
-        return cache[key].copy()
+        return cache[key]
 
     def get_minute_bar(
         self,

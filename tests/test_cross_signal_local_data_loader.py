@@ -86,3 +86,17 @@ def test_loader_caches_training_csv_reads_and_returns_defensive_copies(monkeypat
 
     assert calls == ["510300.csv"]
     assert second.loc[0, "close"] != -999.0
+
+
+def test_loader_returns_only_one_minute_day_as_a_defensive_copy():
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    first = loader.load_minute_day_frame("510300", "2019-01-02")
+
+    assert set(first["date"].astype(str)) == {"2019-01-02"}
+    assert first["time"].astype(str).str[:5].min() == "09:30"
+    first.loc[first.index[0], "close"] = -999.0
+
+    second = loader.load_minute_day_frame("510300", "2019-01-02")
+    assert second.iloc[0]["close"] != -999.0

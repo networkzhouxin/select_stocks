@@ -4,11 +4,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 import pandas as pd
 
 from cross_signal_strategy.local.local_data_loader import TRAIN_END, TRAIN_START
+from cross_signal_strategy.local.local_data_loader import (
+    APPROVED_TRAINING_ROOT,
+    APPROVED_WARMUP_ROOT,
+    CrossSignalTrainingDataLoader,
+)
+from cross_signal_strategy.local.dual_timepoint_backtester import (
+    DualTimepointBacktestEngine,
+)
+from cross_signal_strategy.local.dual_timepoint_order_planner import (
+    DualTimepointOrderPlanner,
+)
+from cross_signal_strategy.local.dual_timepoint_signal_adapter import (
+    DualTimepointSignalAdapter,
+)
+from cross_signal_strategy.local_training_run import (
+    build_training_signal_adapter,
+    get_training_trade_dates,
+)
 from cross_signal_strategy.research.baseline_report import (
     BaselineReport,
     build_baseline_report,
@@ -24,6 +43,33 @@ from cross_signal_strategy.research.trade_quality_ledger import (
 
 
 TRAINING_YEARS = (2019, 2020, 2021)
+
+
+@dataclass(frozen=True)
+class DualTimepoint1445TrainingConfig:
+    candidate_name: str
+    decision_times: tuple[str, str]
+    signal_cutoff: str
+    training_start: str
+    training_end: str
+    training_root: Path
+    warmup_root: Path
+    initial_cash: float
+    candidate_variants: int
+
+
+def dual_timepoint_1445_training_config() -> DualTimepoint1445TrainingConfig:
+    return DualTimepoint1445TrainingConfig(
+        candidate_name="cross-v0.3.3-dual-timepoint-1445-candidate",
+        decision_times=("09:35", "14:45"),
+        signal_cutoff="14:44",
+        training_start="2019-01-01",
+        training_end="2021-12-31",
+        training_root=Path(APPROVED_TRAINING_ROOT),
+        warmup_root=Path(APPROVED_WARMUP_ROOT),
+        initial_cash=20000.0,
+        candidate_variants=1,
+    )
 
 
 @dataclass(frozen=True)
@@ -62,6 +108,7 @@ class DualTimepointGateDecision:
 
 @dataclass(frozen=True)
 class DualTimepoint1445Report:
+    config: DualTimepoint1445TrainingConfig
     baseline_report: BaselineReport
     candidate_report: BaselineReport
     baseline_double_friction_report: BaselineReport
@@ -74,6 +121,7 @@ class DualTimepoint1445Report:
     candidate_ledger: Sequence[TradeQualityRow]
     baseline_order_signature: Sequence[tuple]
     candidate_order_signature: Sequence[tuple]
+    rendered_sections: Sequence[str]
 
 
 def evaluate_dual_timepoint_1445_gate(
@@ -135,6 +183,7 @@ def build_dual_timepoint_1445_report(
     candidate_double_friction_days: Iterable[object],
     loader,
     initial_cash: float = 20000.0,
+    config: DualTimepoint1445TrainingConfig | None = None,
 ) -> DualTimepoint1445Report:
     """Build the frozen A/B report without feeding diagnostics into execution."""
 
@@ -209,6 +258,7 @@ def build_dual_timepoint_1445_report(
         baseline_double_friction_drawdown=baseline_stress_report.max_drawdown,
     )
     return DualTimepoint1445Report(
+        config=config or dual_timepoint_1445_training_config(),
         baseline_report=baseline_report,
         candidate_report=candidate_report,
         baseline_double_friction_report=baseline_stress_report,
@@ -221,7 +271,224 @@ def build_dual_timepoint_1445_report(
         candidate_ledger=tuple(candidate_ledger),
         baseline_order_signature=_filled_order_signature(baseline),
         candidate_order_signature=_filled_order_signature(candidate),
+        rendered_sections=(
+            "nominal",
+            "annual win rates",
+            "trade quality",
+            "coverage",
+            "double friction",
+            "gate",
+        ),
     )
+
+
+def render_dual_timepoint_1445_report(report: DualTimepoint1445Report) -> str:
+    """Render only frozen report fields; never query data or recompute metrics."""
+
+    item = report.gate_inputs
+    years = "\n".join(
+        "- %d: baseline %.6f, candidate %.6f, coverage %d, missing %d"
+        % (
+            year,
+            item.baseline_annual_win_rates.get(year, 0.0),
+            item.annual_win_rates.get(year, 0.0),
+            item.annual_coverage.get(year, 0),
+            item.annual_missing.get(year, 0),
+        )
+        for year in TRAINING_YEARS
+    )
+    reasons = (
+        "\n".join("- %s" % reason for reason in report.gate.reasons)
+        if report.gate.reasons
+        else "- none"
+    )
+    decision = "ELIGIBLE_FOR_JOINQUANT_PLAN" if report.gate.passed else "STOP"
+    return """# Cross-signal fixed 14:45 training candidate
+
+Candidate: {candidate}
+Data scope: {start} through {end}; 2018 warm-up only
+Decision times: {times}; signal cutoff: {cutoff}
+
+## Nominal
+
+- total return: baseline {base_return:.10f}, candidate {candidate_return:.10f}
+- maximum drawdown: baseline {base_dd:.10f}, candidate {candidate_dd:.10f}
+- win rate: baseline {base_win:.10f}, candidate {candidate_win:.10f}
+- profit/loss ratio: candidate {pl_ratio}
+- orders: baseline buy/sell {base_buy}/{base_sell}, candidate {candidate_buy}/{candidate_sell}
+
+## Annual win rates and coverage
+
+{years}
+
+## Trade quality
+
+- round trip: baseline {base_round_trip}, candidate {candidate_round_trip}, improved codes {codes}
+- maximum loss streak: baseline {base_streak}, candidate {candidate_streak}
+
+## Double friction
+
+- total return: baseline {base_stress_return:.10f}, candidate {candidate_stress_return:.10f}
+- maximum drawdown: baseline {base_stress_dd:.10f}, candidate {candidate_stress_dd:.10f}
+
+## Gate reasons
+
+{reasons}
+
+## Decision
+
+{decision}
+""".format(
+        candidate=report.config.candidate_name,
+        start=report.config.training_start,
+        end=report.config.training_end,
+        times=", ".join(report.config.decision_times),
+        cutoff=report.config.signal_cutoff,
+        base_return=item.baseline_total_return,
+        candidate_return=item.total_return,
+        base_dd=item.baseline_max_drawdown,
+        candidate_dd=item.max_drawdown,
+        base_win=item.baseline_win_rate,
+        candidate_win=item.win_rate,
+        pl_ratio=(
+            "none"
+            if item.profit_loss_ratio is None
+            else "%.10f" % item.profit_loss_ratio
+        ),
+        base_buy=item.baseline_buy_count,
+        base_sell=item.baseline_sell_count,
+        candidate_buy=item.buy_count,
+        candidate_sell=item.sell_count,
+        years=years,
+        base_round_trip=item.baseline_round_trip_count,
+        candidate_round_trip=item.round_trip_count,
+        codes=",".join(item.round_trip_improved_codes) or "none",
+        base_streak=item.baseline_max_loss_streak,
+        candidate_streak=item.max_loss_streak,
+        base_stress_return=item.baseline_double_friction_return,
+        candidate_stress_return=item.double_friction_return,
+        base_stress_dd=item.baseline_double_friction_drawdown,
+        candidate_stress_dd=item.double_friction_drawdown,
+        reasons=reasons,
+        decision=decision,
+    )
+
+
+def run_training_dual_timepoint_1445_candidate(
+    config: DualTimepoint1445TrainingConfig,
+) -> DualTimepoint1445Report:
+    """Consume the single pre-registered local training candidate."""
+
+    _assert_exact_training_config(config)
+    loader = CrossSignalTrainingDataLoader(config.training_root)
+    trade_dates = get_training_trade_dates(loader)
+    if not trade_dates:
+        raise ValueError("Training replay has no trade dates")
+    if (
+        min(trade_dates) < config.training_start
+        or max(trade_dates) > config.training_end
+    ):
+        raise ValueError("Training replay dates exceed the frozen bounds")
+
+    baseline_adapter = build_training_signal_adapter(
+        loader, warmup_root=config.warmup_root
+    )
+    shared_scores = DualTimepointSignalAdapter(baseline_adapter)
+    baseline_days, baseline_planner = _run_one_replay(
+        loader,
+        shared_scores,
+        trade_dates,
+        config.initial_cash,
+        decision_times=("09:35",),
+    )
+    candidate_days, candidate_planner = _run_one_replay(
+        loader,
+        shared_scores,
+        trade_dates,
+        config.initial_cash,
+        decision_times=config.decision_times,
+    )
+    doubled_friction = {"commission_rate": 0.0006, "slippage_rate": 0.002}
+    baseline_stress_days, _ = _run_one_replay(
+        loader,
+        shared_scores,
+        trade_dates,
+        config.initial_cash,
+        decision_times=("09:35",),
+        broker_kwargs=doubled_friction,
+    )
+    candidate_stress_days, _ = _run_one_replay(
+        loader,
+        shared_scores,
+        trade_dates,
+        config.initial_cash,
+        decision_times=config.decision_times,
+        broker_kwargs=doubled_friction,
+    )
+    return build_dual_timepoint_1445_report(
+        baseline_days=baseline_days,
+        candidate_days=candidate_days,
+        baseline_entry_score_snapshots=baseline_planner.entry_score_snapshots,
+        baseline_exit_score_snapshots=baseline_planner.exit_score_snapshots,
+        candidate_entry_score_snapshots=candidate_planner.entry_score_snapshots,
+        candidate_exit_score_snapshots=candidate_planner.exit_score_snapshots,
+        candidate_score_coverage=candidate_planner.score_coverage,
+        baseline_double_friction_days=baseline_stress_days,
+        candidate_double_friction_days=candidate_stress_days,
+        loader=loader,
+        initial_cash=config.initial_cash,
+        config=config,
+    )
+
+
+def _assert_exact_training_config(config: DualTimepoint1445TrainingConfig) -> None:
+    expected = dual_timepoint_1445_training_config()
+    if type(config) is not DualTimepoint1445TrainingConfig or config != expected:
+        raise ValueError("Use the exact frozen 14:45 training config")
+    if Path(config.training_root).resolve() != Path(APPROVED_TRAINING_ROOT).resolve():
+        raise ValueError("Use the exact frozen 14:45 training config")
+    if Path(config.warmup_root).resolve() != Path(APPROVED_WARMUP_ROOT).resolve():
+        raise ValueError("Use the exact frozen 14:45 training config")
+    if pd.Timestamp(config.training_start) != TRAIN_START:
+        raise ValueError("Use the exact frozen 14:45 training config")
+    if pd.Timestamp(config.training_end) != TRAIN_END:
+        raise ValueError("Use the exact frozen 14:45 training config")
+
+
+def _run_one_replay(
+    loader,
+    signal_adapter,
+    trade_dates,
+    initial_cash,
+    *,
+    decision_times,
+    broker_kwargs=None,
+):
+    planner = DualTimepointOrderPlanner(
+        signal_adapter, trade_dates=list(trade_dates)
+    )
+    engine = DualTimepointBacktestEngine(
+        loader,
+        initial_cash,
+        decision_times=decision_times,
+        broker_kwargs=broker_kwargs,
+    )
+    return engine.run(trade_dates, planner), planner
+
+
+def main() -> int:
+    config = dual_timepoint_1445_training_config()
+    report = run_training_dual_timepoint_1445_candidate(config)
+    text = render_dual_timepoint_1445_report(report)
+    report_path = (
+        Path(__file__).resolve().parents[1]
+        / "reports"
+        / "dual_timepoint_1445_2019_2021.md"
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(text, encoding="utf-8")
+    print(text, end="")
+    return 0 if report.gate.passed else 1
 
 
 def _assert_aligned_training_dates(*batches: Sequence[object]) -> None:
@@ -327,3 +594,7 @@ def _filled_order_signature(days: Sequence[object]) -> tuple[tuple, ...]:
                 )
             )
     return tuple(signature)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

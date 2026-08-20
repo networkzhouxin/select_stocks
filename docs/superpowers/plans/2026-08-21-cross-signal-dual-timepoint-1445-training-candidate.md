@@ -36,6 +36,8 @@
 - Create `tests/test_cross_signal_dual_timepoint_1445.py`: focused data, scoring, engine, planner, and gate tests.
 - Modify `cross_signal_strategy/local/local_signal_adapter.py`: extract one reusable score-from-frame method without changing official 09:35 results.
 - Modify `cross_signal_strategy/local/local_backtester.py`: accept optional broker friction kwargs while preserving defaults.
+- Modify `cross_signal_strategy/local/local_data_loader.py`: expose a defensive one-day minute slice so the single fixed run does not repeatedly copy an entire year; preserve the existing whole-frame API.
+- Modify `tests/test_cross_signal_local_data_loader.py`: prove the one-day slice is exact and defensive.
 - Modify `cross_signal_strategy/research/trade_quality_ledger.py`: accept a same-day entry signal only when its audit proves the fixed 14:45 decision and 14:44 cutoff; preserve rejection of every other same-day or future signal.
 - Modify `tests/test_cross_signal_trade_quality_ledger.py`: cover the narrow point-in-time ledger exception and unchanged leakage rejection.
 - Modify `cross_signal_strategy/docs/research_budget.json`, `cross_signal_strategy/docs/research_budget.md`, and `tests/test_cross_signal_research_budget.py`: open exactly one family before running it, then close it after the fixed run.

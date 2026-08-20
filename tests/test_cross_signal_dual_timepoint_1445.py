@@ -769,3 +769,113 @@ def test_report_builds_trade_quality_from_batch_specific_score_snapshots():
     assert report.candidate_ledger[0].realized_return_pct < 0
     assert report.candidate_order_signature[0][1] == "14:45"
     assert report.gate.passed is False
+
+
+def test_training_runner_configuration_is_frozen():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        dual_timepoint_1445_training_config,
+    )
+
+    config = dual_timepoint_1445_training_config()
+
+    assert config.candidate_name == "cross-v0.3.3-dual-timepoint-1445-candidate"
+    assert config.decision_times == ("09:35", "14:45")
+    assert config.signal_cutoff == "14:44"
+    assert config.training_start == "2019-01-01"
+    assert config.training_end == "2021-12-31"
+    assert config.training_root == pathlib.Path(
+        r"G:\financial\history_data\cross_signal_train_2019_2021"
+    )
+    assert config.warmup_root == pathlib.Path(
+        r"G:\financial\history_data\cross_signal_warmup_2018"
+    )
+    assert config.initial_cash == pytest.approx(20000.0)
+    assert config.candidate_variants == 1
+
+
+def test_training_runner_rejects_any_configuration_variant_before_loading():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        dual_timepoint_1445_training_config,
+        run_training_dual_timepoint_1445_candidate,
+    )
+
+    config = replace(
+        dual_timepoint_1445_training_config(), candidate_variants=2
+    )
+
+    with pytest.raises(ValueError, match="exact frozen 14:45 training config"):
+        run_training_dual_timepoint_1445_candidate(config)
+
+
+def _formatter_report():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        build_dual_timepoint_1445_report,
+    )
+
+    days = _two_day_trade(11.0, "09:35")
+    entry = {
+        ("2020-01-02", "09:35", "AAA"): {
+            "atr": 0.2,
+            "signal_date": "2019-12-31",
+            "decision_time": "09:35",
+        }
+    }
+    exit_scores = {
+        ("2020-01-03", "09:35", "AAA"): {
+            "signal_date": "2020-01-02",
+            "decision_time": "09:35",
+        }
+    }
+    return build_dual_timepoint_1445_report(
+        baseline_days=days,
+        candidate_days=days,
+        baseline_entry_score_snapshots=entry,
+        baseline_exit_score_snapshots=exit_scores,
+        candidate_entry_score_snapshots=entry,
+        candidate_exit_score_snapshots=exit_scores,
+        candidate_score_coverage={
+            ("2020-01-02", "14:45", "AAA"): "ok",
+        },
+        baseline_double_friction_days=days,
+        candidate_double_friction_days=days,
+        loader=_LedgerLoader(),
+        initial_cash=1000.0,
+    )
+
+
+def test_formatter_renders_fixed_failure_and_pass_decisions_without_market_data():
+    from cross_signal_strategy.research.dual_timepoint_1445_candidate import (
+        DualTimepointGateDecision,
+        render_dual_timepoint_1445_report,
+    )
+
+    base = _formatter_report()
+    failed = replace(
+        base,
+        gate_inputs=_passing_gate_inputs(),
+        gate=DualTimepointGateDecision(False, ("maximum drawdown worsens",)),
+    )
+    text = render_dual_timepoint_1445_report(failed)
+    lowered = text.lower()
+    for phrase in (
+        "nominal",
+        "2019",
+        "2020",
+        "2021",
+        "round trip",
+        "maximum loss streak",
+        "coverage",
+        "missing",
+        "double friction",
+        "maximum drawdown worsens",
+        "stop",
+    ):
+        assert phrase in lowered
+
+    passed = replace(
+        failed,
+        gate=DualTimepointGateDecision(True, ()),
+    )
+    assert "ELIGIBLE_FOR_JOINQUANT_PLAN" in render_dual_timepoint_1445_report(
+        passed
+    )
