@@ -170,9 +170,18 @@ OrderPlan = Callable[[str, str | None, LocalBroker], Sequence[Mapping[str, objec
 class LocalBacktestEngine:
     """Minimal daily loop using a fixed T-day execution time and close marks."""
 
-    def __init__(self, loader, initial_cash: float, execution_time: str = "09:35") -> None:
+    def __init__(
+        self,
+        loader,
+        initial_cash: float,
+        execution_time: str = "09:35",
+        broker_kwargs: Mapping[str, object] | None = None,
+    ) -> None:
         self.loader = loader
-        self.broker = LocalBroker(initial_cash=initial_cash)
+        self.broker = LocalBroker(
+            initial_cash=initial_cash,
+            **dict(broker_kwargs or {}),
+        )
         self.execution_time = str(execution_time)[:5]
 
     def run(self, trade_dates: Iterable[str], order_plan: OrderPlan) -> List[DayResult]:

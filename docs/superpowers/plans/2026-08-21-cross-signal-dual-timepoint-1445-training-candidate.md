@@ -608,7 +608,7 @@ def test_dual_engine_runs_0935_then_1445_and_marks_close_once():
 ```
 
 Add a small-fixture parity test and this full training-path regression. The
-full test preserves the already established 262-event JoinQuant/local order
+full test preserves the current frozen `cross-v0.3.3` 181-event order
 alignment by proving that the new engine's morning-only mode is exactly the old
 local engine, event for event:
 
@@ -675,7 +675,7 @@ def test_full_training_morning_only_dual_engine_matches_official_local_path():
         loader, 20000.0, decision_times=("09:35",)
     ).run(dates, candidate_planner)
 
-    assert len(_filled_signature(baseline_days)) == 262
+    assert len(_filled_signature(baseline_days)) == 181
     assert _filled_signature(candidate_days) == _filled_signature(baseline_days)
     assert _all_order_signature(candidate_days) == _all_order_signature(baseline_days)
     assert candidate_days[-1].total_value == pytest.approx(
