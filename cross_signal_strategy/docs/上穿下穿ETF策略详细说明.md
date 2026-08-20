@@ -6,7 +6,7 @@
 |---|---|
 | 策略名称 | 上穿下穿 ETF 策略 |
 | 正式版本 | `cross-v0.3.3` |
-| 部署构建号 | `20260818.1` |
+| 部署构建号 | `20260820.1` |
 | 聚宽正式文件 | `smart_trade_joinquant_cross_signal_etf.py` |
 | PTrade 正式文件 | `smart_trade_ptrade_cross_signal_etf.py` |
 | 本地训练回放入口 | `local_training_run.py` |

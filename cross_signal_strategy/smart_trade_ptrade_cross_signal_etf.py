@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.3"
-DEPLOYMENT_BUILD_ID = "20260818.1"
+DEPLOYMENT_BUILD_ID = "20260820.1"
 LIVE_STATE_SCHEMA_VERSION = 7
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -3759,6 +3759,10 @@ def execute_sell(code, context, reason):
         code, _format_reason_for_log(reason), amount, limit_price))
     submitted_at = _order_lifecycle_now(context)
     try:
+        cash_before_submit = max(0.0, _available_cash(context))
+    except Exception:
+        cash_before_submit = None
+    try:
         order_id = order_target(code, 0, limit_price=limit_price)
     except Exception as exc:
         log.error("[卖出] %s委托提交失败: %s" % (code, exc))
@@ -3772,6 +3776,7 @@ def execute_sell(code, context, reason):
         "reason": reason,
         "order_id": str(order_id),
         "submitted_at": submitted_at,
+        "cash_before_submit": cash_before_submit,
         "trigger_date": _as_date(get_context_datetime(context)),
     }
     if getattr(g, "__is_live", False):
@@ -3868,10 +3873,20 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
 def _begin_deferred_buy_wait(context):
     """冻结卖出前现金，供成交回报到达但账户快照尚未同步时使用。"""
     if not getattr(g, "__deferred_buy_after_sell", False):
-        try:
-            base_cash = max(0.0, _available_cash(context))
-        except Exception:
-            base_cash = 0.0
+        recorded_cash = []
+        for pending in getattr(g, "__pending_sells", {}).values():
+            if not isinstance(pending, dict):
+                continue
+            value = _safe_float(pending.get("cash_before_submit"), np.nan)
+            if np.isfinite(value) and value >= 0:
+                recorded_cash.append(value)
+        if recorded_cash:
+            base_cash = min(recorded_cash)
+        else:
+            try:
+                base_cash = max(0.0, _available_cash(context))
+            except Exception:
+                base_cash = 0.0
         g.__deferred_buy_base_cash = base_cash
         g.__deferred_sell_proceeds = 0.0
         g.__deferred_sold_codes = set()

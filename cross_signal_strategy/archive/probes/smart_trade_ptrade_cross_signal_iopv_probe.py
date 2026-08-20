@@ -20,11 +20,7 @@ QDII_CODES = [
 
 
 def _current_dt(context):
-    value = getattr(context, "current_dt", None)
-    if value is not None:
-        return value
-    blotter = getattr(context, "blotter", None)
-    return getattr(blotter, "current_dt", None)
+    return datetime.datetime.now()
 
 
 def _positive_finite(value):

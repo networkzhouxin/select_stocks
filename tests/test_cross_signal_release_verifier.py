@@ -23,7 +23,7 @@ def test_release_verifier_passes_static_formal_checks():
 
     assert report["status"] == "通过"
     assert report["strategy_version"] == "cross-v0.3.3"
-    assert report["deployment_build"] == "20260818.1"
+    assert report["deployment_build"] == "20260820.1"
     assert report["business_fingerprint"] == "77e44d93d255"
     assert all(item["status"] == "通过" for item in report["checks"])
 

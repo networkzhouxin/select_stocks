@@ -20,7 +20,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260818.1 业务配置=77e44d93d255 状态结构=7
+[发布指纹] 构建=20260820.1 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint

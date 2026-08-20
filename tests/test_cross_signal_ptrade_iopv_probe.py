@@ -2,7 +2,10 @@
 """Guards for the isolated, no-order PTrade IOPV capability probe."""
 
 import ast
+import datetime
+import importlib.util
 import pathlib
+import types
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -21,6 +24,13 @@ IOPV_QUALITY = ROOT / "cross_signal_strategy" / "docs" / "iopv_data_quality.md"
 
 def probe_text():
     return PROBE.read_text(encoding="utf-8")
+
+
+def load_probe_module():
+    spec = importlib.util.spec_from_file_location("ptrade_iopv_probe", PROBE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_probe_is_isolated_and_contains_no_order_calls():
@@ -73,6 +83,25 @@ def test_probe_uses_three_intraday_callbacks_within_ptrade_schedule_limit():
     assert 'time="09:34"' in text
     assert 'time="09:35"' in text
     assert 'time="09:36"' in text
+
+
+def test_probe_uses_wall_clock_when_ptrade_context_time_is_stale(monkeypatch):
+    probe = load_probe_module()
+
+    class FixedDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 20, 9, 35, 1)
+
+    monkeypatch.setattr(probe.datetime, "datetime", FixedDateTime)
+    stale = datetime.datetime(2026, 8, 20, 9, 10, 0)
+    context = types.SimpleNamespace(
+        current_dt=stale,
+        blotter=types.SimpleNamespace(current_dt=stale),
+    )
+
+    assert probe._current_dt(context) == FixedDateTime(
+        2026, 8, 20, 9, 35, 1)
 
 
 def test_probe_documentation_forbids_strategy_or_threshold_inference():

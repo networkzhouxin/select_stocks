@@ -136,7 +136,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260818.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260820.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3510,6 +3510,49 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
     assert "累计成交=0" in lifecycle
     assert "剩余数量=500" in lifecycle
     assert "耗时=0.000秒" in lifecycle
+
+
+def test_sell_submission_freezes_cash_before_synchronous_broker_update(
+        monkeypatch):
+    position = types.SimpleNamespace(
+        amount=400,
+        cost_basis=2.2543,
+        last_sale_price=2.222,
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 8, 20, 10, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={"513100.SS": position},
+            cash=16608.32,
+            portfolio_value=17497.12,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.274},
+        entry_atr={"513100.SS": 0.0385},
+        buy_date={"513100.SS": date(2026, 8, 5)},
+        __last_snapshot={
+            "513100.SS": make_fresh_live_snapshot(last_px=2.222),
+        },
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.222)
+    monkeypatch.setattr(
+        pt, "get_sell_limit_price", lambda code, price: 1.980)
+
+    def synchronous_order_target(code, amount, limit_price=None):
+        context.portfolio.cash = 17497.12
+        return "sell-order-1"
+
+    monkeypatch.setattr(
+        pt, "order_target", synchronous_order_target, raising=False)
+
+    assert pt.execute_sell("513100.SS", context, "sell_score 45") is True
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score("518880.SS")],
+        date(2026, 8, 20),
+    ) == 0
+    assert pt.g.__deferred_buy_base_cash == pytest.approx(16608.32)
 
 
 @pytest.mark.parametrize(
@@ -8249,7 +8292,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260818.1" in notes
+    assert "20260820.1" in notes
     assert "77e44d93d255" in notes
     assert "状态结构=7" in notes
     assert "provisional risk state" in notes

@@ -16,7 +16,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "cross-v0.3.3"
-DEPLOYMENT_BUILD_ID = "20260818.1"
+DEPLOYMENT_BUILD_ID = "20260820.1"
 
 
 try:
