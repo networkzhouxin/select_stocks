@@ -1,0 +1,597 @@
+{
+  "decision": {
+    "reasons": [
+      "official filled path is not aligned"
+    ],
+    "status": "stop"
+  },
+  "entries": [],
+  "entry_distributions": {
+    "full": {
+      "age_two_share": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "earliest_delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mae_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mfe_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "execution_gap_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "extension_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    },
+    "year:2019": {
+      "age_two_share": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "earliest_delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mae_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mfe_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "execution_gap_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "extension_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    },
+    "year:2020": {
+      "age_two_share": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "earliest_delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mae_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mfe_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "execution_gap_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "extension_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    },
+    "year:2021": {
+      "age_two_share": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "earliest_delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mae_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_mfe_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "execution_gap_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "extension_atr": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    }
+  },
+  "exit_distributions": {
+    "full": {
+      "delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_3": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "exit_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "giveback_from_peak": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "incremental_giveback": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "peak_close_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "profit_at_first_high_score": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    },
+    "year:2019": {
+      "delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_3": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "exit_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "giveback_from_peak": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "incremental_giveback": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "peak_close_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "profit_at_first_high_score": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    },
+    "year:2020": {
+      "delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_3": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "exit_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "giveback_from_peak": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "incremental_giveback": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "peak_close_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "profit_at_first_high_score": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    },
+    "year:2021": {
+      "delay_sessions": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_3": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "evaluation_post_exit_return_5": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "exit_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "giveback_from_peak": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "incremental_giveback": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "peak_close_profit": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      },
+      "profit_at_first_high_score": {
+        "count": 0,
+        "maximum": null,
+        "median": null,
+        "minimum": null,
+        "missing_count": 0,
+        "q1": null,
+        "q3": null,
+        "usable_count": 0
+      }
+    }
+  },
+  "exits": [],
+  "path_evidence": {
+    "actual_count": 0,
+    "expected_count": 0,
+    "status": "blocked_missing_official_path"
+  },
+  "top_entry_etf_share": null,
+  "top_exit_etf_share": null
+}

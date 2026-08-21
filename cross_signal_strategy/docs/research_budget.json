@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 64,
+  "expected_failed_experiment_count": 65,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -488,6 +488,32 @@
         "score_40": 0
       },
       "observation_gate_passed": false,
+      "candidate_created": false,
+      "prohibit_alternatives": true,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only"
+    },
+    {
+      "key": "bullish_cross_age2_half_decay_user_authorized",
+      "label": "User-authorized fixed bullish-cross age-2 half-decay candidate",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The single frozen age-2 multiplier 0.5 changed 64 filled-order days across all three training years but cut local return from +125.00% to +87.35%, worsened maximum drawdown from 6.03% to 8.79%, worsened Sharpe, Sortino, profit/loss ratio, and every annual return. The candidate was rejected before JoinQuant or validation. Other decay coefficients, per-indicator age weights, exceptions, and compensating rules are prohibited post hoc.",
+      "age0_multiplier": 1.0,
+      "age1_multiplier": 1.0,
+      "age2_multiplier": 0.5,
+      "side": "buy_only",
+      "changed_order_days": 64,
+      "changed_days_by_year": {
+        "2019": 15,
+        "2020": 27,
+        "2021": 22
+      },
+      "baseline_total_return": 1.25,
+      "candidate_total_return": 0.8735,
+      "baseline_max_drawdown": 0.0603,
+      "candidate_max_drawdown": 0.0879,
+      "candidate_gate_passed": false,
       "candidate_created": false,
       "prohibit_alternatives": true,
       "validation_influence": "none",
