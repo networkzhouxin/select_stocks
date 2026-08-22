@@ -530,6 +530,136 @@ def test_training_runner_requires_official_path_before_touching_market_loader():
         run_training_extreme_lag_attribution([], loader=ExplodingLoader())
 
 
+def test_official_execution_replay_uses_proven_fill_despite_zero_trade_minute():
+    from cross_signal_strategy.local.local_backtester import Position
+    from cross_signal_strategy.research.official_execution_replay import (
+        OfficialExecutionReplayEngine,
+    )
+
+    class ZeroTradeLoader:
+        def get_minute_bar(self, code, current_date, trade_time):
+            return {
+                "close": 1.099,
+                "volume": 0,
+                "num_trades": 0,
+            }
+
+        def load_daily_frame(self, code, trade_date):
+            return pd.DataFrame({"date": [trade_date], "close": [1.105]})
+
+    intent = _event("2019-12-30", "SELL", "513880", 7700)
+    fill = _event("2019-12-30", "SELL", "513880", 7700)
+    fill = fill.__class__(
+        date=fill.date,
+        side=fill.side,
+        code=fill.code,
+        amount=fill.amount,
+        price=1.098,
+        commission=5.0,
+    )
+    engine = OfficialExecutionReplayEngine(
+        loader=ZeroTradeLoader(),
+        initial_cash=1000.0,
+        intent_events=[intent],
+        fill_events=[fill],
+    )
+    engine.broker.positions["513880"] = Position("513880", 7700, 1.000)
+
+    def order_plan(current_date, previous_date, broker, current_prices=None):
+        return [{"code": "513880", "target_value": 0.0, "reason": "signal_sell"}]
+
+    day = engine.run(["2019-12-30"], order_plan)[0]
+
+    assert [(order.code, order.amount_delta, order.exec_price, order.commission)
+            for order in day.orders] == [("513880", -7700, 1.098, 5.0)]
+    assert day.orders[0].filled is True
+    assert day.orders[0].reason == "signal_sell"
+    assert day.positions == {}
+    assert day.cash == pytest.approx(9449.6)
+
+
+def test_official_execution_replay_keeps_proven_unfilled_intent_and_rejects_drift():
+    from cross_signal_strategy.local.local_backtester import Position
+    from cross_signal_strategy.research.official_execution_replay import (
+        OfficialExecutionReplayEngine,
+    )
+
+    class Loader:
+        def get_minute_bar(self, code, current_date, trade_time):
+            return {"close": 1.091, "volume": 0, "num_trades": 0}
+
+        def load_daily_frame(self, code, trade_date):
+            return pd.DataFrame({"date": [trade_date], "close": [1.095]})
+
+    intent = _event("2019-12-12", "SELL", "513880", 7700)
+    engine = OfficialExecutionReplayEngine(
+        loader=Loader(),
+        initial_cash=1000.0,
+        intent_events=[intent],
+        fill_events=[],
+    )
+    engine.broker.positions["513880"] = Position("513880", 7700, 1.000)
+
+    def matching_plan(current_date, previous_date, broker, current_prices=None):
+        return [{"code": "513880", "target_value": 0.0, "reason": "signal_sell"}]
+
+    day = engine.run(["2019-12-12"], matching_plan)[0]
+    assert day.orders[0].filled is False
+    assert day.orders[0].reason == "official intent was not filled"
+    assert day.positions["513880"].amount == 7700
+    assert day.cash == pytest.approx(1000.0)
+
+    drifted = OfficialExecutionReplayEngine(
+        loader=Loader(),
+        initial_cash=1000.0,
+        intent_events=[intent],
+        fill_events=[],
+    )
+    with pytest.raises(ValueError, match="official intent mismatch on 2019-12-12"):
+        drifted.run(["2019-12-12"], lambda current_date, previous_date, broker: [])
+
+
+def test_official_execution_replay_allows_only_same_day_sell_order_permutation():
+    from cross_signal_strategy.local.local_backtester import Position
+    from cross_signal_strategy.research.official_execution_replay import (
+        OfficialExecutionReplayEngine,
+    )
+    from cross_signal_strategy.research.order_path_diagnostics import OrderPathEvent
+
+    class Loader:
+        def get_minute_bar(self, code, current_date, trade_time):
+            return {"close": 2.0, "volume": 100, "num_trades": 1}
+
+        def load_daily_frame(self, code, trade_date):
+            return pd.DataFrame({"date": [trade_date], "close": [2.0]})
+
+    date = "2020-09-04"
+    intents = [_event(date, "SELL", "513500", 100), _event(date, "SELL", "513100", 100)]
+    fills = [
+        OrderPathEvent(date, "SELL", "513500", amount=100, price=2.0, commission=5.0),
+        OrderPathEvent(date, "SELL", "513100", amount=100, price=3.0, commission=5.0),
+    ]
+    engine = OfficialExecutionReplayEngine(Loader(), 1000.0, intents, fills)
+    engine.broker.positions = {
+        "513100": Position("513100", 100, 2.5),
+        "513500": Position("513500", 100, 1.5),
+    }
+
+    def reversed_sell_plan(current_date, previous_date, broker, current_prices=None):
+        return [
+            {"code": "513100", "target_value": 0.0, "reason": "signal_sell"},
+            {"code": "513500", "target_value": 0.0, "reason": "atr_stop"},
+        ]
+
+    day = engine.run([date], reversed_sell_plan)[0]
+
+    assert [(order.code, order.amount_delta, order.reason) for order in day.orders] == [
+        ("513500", -100, "atr_stop"),
+        ("513100", -100, "signal_sell"),
+    ]
+    assert day.positions == {}
+
+
 def test_artifact_writer_emits_explicit_blocked_markdown_and_json(tmp_path):
     import json
 

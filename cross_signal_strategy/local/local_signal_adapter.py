@@ -7,7 +7,7 @@ import sys
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Tuple
+from typing import Mapping, Tuple
 
 import pandas as pd
 
@@ -27,6 +27,7 @@ class LocalSignalAdapter:
     warmup_root: Path | str | None = None
     adjustment_factors: object | None = None
     daily_corrections: object | None = None
+    snapshot_corrections: Mapping[tuple[str, str], Mapping[str, object]] | None = None
     _daily_cache: dict = field(default_factory=dict, init=False, repr=False)
     _score_cache: dict = field(default_factory=dict, init=False, repr=False)
 
@@ -142,6 +143,7 @@ class LocalSignalAdapter:
 
         snapshot = strategy.build_signal_snapshot(frame, p)
         self._suppress_float_artifact_flags(snapshot, frame)
+        self._apply_snapshot_corrections(snapshot, code, signal_date)
         reason = strategy.score_skip_reason(frame, snapshot, required, min_len)
         if reason is not None:
             return None, reason
@@ -176,3 +178,20 @@ class LocalSignalAdapter:
         delta = ma10.iloc[-2] - ma10.iloc[-1]
         if 0 < delta < 1e-12:
             snapshot["close_below_falling_ma10"] = False
+
+    def _apply_snapshot_corrections(
+        self,
+        snapshot: dict,
+        code: str,
+        signal_date: str,
+    ) -> None:
+        if not self.snapshot_corrections:
+            return
+        key = (str(code).split(".")[0], str(signal_date))
+        correction = self.snapshot_corrections.get(key)
+        if correction is None:
+            return
+        snapshot.update(dict(correction.get("fields", {})))
+        snapshot["local_snapshot_correction_provenance"] = str(
+            correction.get("provenance", "")
+        )

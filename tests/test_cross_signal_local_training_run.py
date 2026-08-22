@@ -42,6 +42,40 @@ def test_training_signal_adapter_applies_confirmed_daily_corrections():
     assert score["reversal_score"] == 35
 
 
+def test_training_signal_adapter_restores_513880_falling_ma10_sell_intent():
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_training_run import build_training_signal_adapter
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    adapter = build_training_signal_adapter(loader)
+
+    score, reason = adapter.score("513880", "2019-12-12", return_reason=True)
+
+    assert reason is None
+    assert score["signal_date"] == "2019-12-11"
+    assert score["close_below_falling_ma10"]
+    assert score["sell_reversal_score"] == 35
+    assert score["sell_risk_score"] == 10
+    assert score["sell_score"] == 45
+
+
+def test_training_signal_adapter_restores_513880_ma_tie_precision_flag():
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local_training_run import build_training_signal_adapter
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    adapter = build_training_signal_adapter(loader)
+
+    score, reason = adapter.score("513880", "2020-10-29", return_reason=True)
+
+    assert reason is None
+    assert score["signal_date"] == "2020-10-28"
+    assert score["ma5_gt_ma10"]
+    assert score["reversal_score"] == 35
+    assert score["trend_score"] == 14
+    assert score["buy_score"] == 64
+
+
 def test_full_training_replay_completes_without_date_or_position_violations():
     from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local_training_run import run_training_replay
