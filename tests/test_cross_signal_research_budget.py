@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 70
-    assert report.expected_failed_experiment_count == 70
+    assert report.failed_experiment_count == 71
+    assert report.expected_failed_experiment_count == 71
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -513,6 +513,42 @@ def test_extreme_zone_score_candidate_is_exhausted_after_noop_local_screen():
     assert raw["local_changed_days"] == 0
     assert raw["candidate_gate_passed"] is False
     assert raw["joinquant_status"] == "not_run_local_gate_failed"
+    assert raw["validation_influence"] == "none"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is False
+
+
+def test_kdj_tiered_persistence_candidate_is_exhausted_after_failed_local_gate():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    family = next(
+        item for item in budget.families
+        if item.key == "kdj_tiered_persistence_user_authorized"
+    )
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert raw["strong_points"] == pytest.approx(10.0)
+    assert raw["near_points"] == pytest.approx(5.0)
+    assert raw["retention_sessions"] == 3
+    assert raw["same_direction_rule"] == "maximum_not_sum"
+    assert raw["opposite_direction_rule"] == "most_recent_wins"
+    assert raw["local_changed_days"] == 22
+    assert raw["changed_days_by_year"] == {"2019": 20, "2020": 2}
+    assert raw["candidate_gate_passed"] is False
+    assert raw["joinquant_status"] == "not_run_local_gate_failed"
+    assert raw["formal_files_unchanged"] is True
     assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
     assert evaluate_experiment_request(
