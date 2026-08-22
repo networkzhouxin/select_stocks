@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 71 real ledger entries.
+- Recorded failed or non-adopted experiments: 72 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -83,6 +83,7 @@ it does not change any score, order, position, or risk rule.
 | `opportunity_replacement_user_authorized` | exhausted | The fixed full-capacity rule replaced only sell-score-at-least-30 holdings blocked by price/ADX when all three holdings had completed five sessions and a formal score-at-least-60 candidate existed. Nineteen replacements cut return +125.00%→+89.87%, win rate 56.18%→55.05%, worsened drawdown and every risk-adjusted/annual metric, and increased buys 92→112. Reject before JoinQuant; do not search thresholds, score spreads, ETF exceptions, rankings, hold periods, or cooldowns. |
 | `kdj_extreme_zone_score_user_authorized` | exhausted | The fixed K≤20 buy +5 / K≥80 sell +5 unified-score candidate changed zero filled orders. Of 93 oversold bonuses none crossed 60; 11 of 1,382 overbought bonuses crossed 30, but every event remained blocked by formal price/ADX protection. All normal and doubled-friction metrics were identical, so stop before JoinQuant. Historical point-in-time IOPV was unavailable; the live-only override remains untested and undeployed. |
 | `kdj_tiered_persistence_user_authorized` | exhausted | The fixed 10/5-point, three-session KDJ state rule changed 22 filled-order days but none in 2021. Win rate fell 56.18%→55.43%, return 125.00%→118.33%, profit/loss ratio 4.878→4.384, and doubled-friction win rate 51.69%→48.91%. Reject before JoinQuant/PTrade; do not search nearby points, zones, retention lengths, direction precedence, or protection overrides. |
+| `kdj_tiered_current_state_user_authorized` | exhausted | The fixed 10/5-point current-T-1-only KDJ state rule changed zero filled orders. All normal and doubled-friction metrics exactly matched the baseline, so accuracy did not improve. Reject before JoinQuant/PTrade; do not search nearby points, zones, state definitions, or protection overrides. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better

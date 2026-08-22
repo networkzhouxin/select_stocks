@@ -524,7 +524,7 @@ def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
     assert "Validation result: Not run" in failed
     assert "Do not search other decay coefficients" in failed
 
-    assert budget["expected_failed_experiment_count"] == 71
+    assert budget["expected_failed_experiment_count"] == 72
     assert family["status"] == "exhausted"
     assert family["max_new_experiments"] == 0
     assert family["age2_multiplier"] == 0.5
@@ -533,6 +533,6 @@ def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
     assert family["candidate_gate_passed"] is False
     assert family["candidate_created"] is False
     assert family["prohibit_alternatives"] is True
-    assert "Recorded failed or non-adopted experiments: 71" in guide
+    assert "Recorded failed or non-adopted experiments: 72" in guide
     assert "bullish_cross_age2_half_decay_user_authorized" in guide
     assert not candidate_path.exists()

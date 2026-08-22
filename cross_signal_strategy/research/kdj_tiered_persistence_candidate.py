@@ -146,6 +146,7 @@ def run_kdj_tiered_persistence_training_ab(
     loader: object | None = None,
     initial_cash: float = 20000.0,
     warmup_root: Path | str = APPROVED_WARMUP_ROOT,
+    adapter_factory=None,
 ) -> ExtremeZoneComparisonReport:
     """Run the one fixed tiered-persistence candidate on training data only."""
 
@@ -177,7 +178,8 @@ def run_kdj_tiered_persistence_training_ab(
         trade_dates=trade_dates,
         codes=pool,
     )
-    candidate_adapter = KdjTieredPersistenceScoreAdapter(cached, trade_dates)
+    factory = adapter_factory or KdjTieredPersistenceScoreAdapter
+    candidate_adapter = factory(cached, trade_dates)
 
     baseline_days = _run_replay(
         loader,
