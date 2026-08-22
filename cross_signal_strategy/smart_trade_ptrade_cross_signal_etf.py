@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.3"
-DEPLOYMENT_BUILD_ID = "20260822.1"
+DEPLOYMENT_BUILD_ID = "20260822.2"
 LIVE_STATE_SCHEMA_VERSION = 7
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -35,6 +35,8 @@ IOPV_OBSERVE_CODES = frozenset((
     "513050.SS",
 ))
 IOPV_SHADOW_PREMIUM_RATE = 0.05
+IOPV_SELL_OVERRIDE_PREMIUM_RATE = 0.08
+IOPV_SELL_MAX_SNAPSHOT_AGE_SECONDS = 10.0
 LIVE_STATE_FILENAME = "cross_signal_live_state_%s.journal"
 LEGACY_LIVE_STATE_FILENAMES = (
     "cross_signal_v033_live_state_v7_%s.journal",
@@ -3303,47 +3305,74 @@ def get_iopv_sell_execution_price(code):
     return round(bid_one, 3)
 
 
-def log_iopv_blocked_sell_shadow(context, code, score, blockers):
-    """记录达到卖分但被正式附加条件阻止的卖出反事实。"""
+def try_iopv_blocked_sell_override(context, code, score, blockers):
+    """Sell a weakened QDII when a fresh executable premium reaches 8%."""
     if not getattr(g, "__is_live", False):
-        return
+        return False
     normalized = normalize_code(code)
     if normalized not in IOPV_OBSERVE_CODES:
-        return
-    observation = None
-    execution_price = None
+        return False
+
     observed_at = _iopv_observed_at(context)
     try:
         current = get_current_price(normalized)
-        if current is not None and current > 0:
-            execution_price = get_iopv_sell_execution_price(normalized)
-        if execution_price is not None:
-            snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
-            observation = build_iopv_observation(
-                normalized,
-                snapshot,
-                execution_price,
-                observed_at=observed_at,
-            )
+        if current is None or current <= 0:
+            return False
+        snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
+        if _fresh_snapshot_trade_status(snapshot, observed_at) != "tradable":
+            return False
+        execution_price = get_iopv_sell_execution_price(normalized)
+        if execution_price is None:
+            return False
+        observation = build_iopv_observation(
+            normalized,
+            snapshot,
+            execution_price,
+            observed_at=observed_at,
+        )
     except Exception as exc:
-        log.warning("[IOPV影子卖出] 代码=%s 数据读取失败: %s" % (
+        log.warning("[IOPV卖出加速] 代码=%s 数据读取失败: %s" % (
             normalized, exc))
-    action = _iopv_shadow_action(observation, "拟加速卖出", "不加速")
+        return False
+
+    if not observation or not observation.get("valid"):
+        return False
+    snapshot_age = observation.get("snapshot_age_seconds")
+    if (
+        snapshot_age is None
+        or snapshot_age < 0
+        or snapshot_age > IOPV_SELL_MAX_SNAPSHOT_AGE_SECONDS
+    ):
+        return False
+    premium = observation.get("premium")
+    if premium is None:
+        return False
+
+    premium_pct = premium * 100.0
+    triggered = premium >= IOPV_SELL_OVERRIDE_PREMIUM_RATE
     log.info(
-        "[IOPV影子卖出] 时间=%s 代码=%s 卖出评分=%s "
-        "原规则阻断=%s 执行价=%s IOPV=%s 溢价率百分比=%s "
-        "阈值百分比=%.1f 动作=%s 真实委托不变=True"
+        "[IOPV卖出加速] 时间=%s 代码=%s 卖出评分=%.0f "
+        "原规则阻断=%s 执行价=%s IOPV=%s 溢价率百分比=%.2f "
+        "阈值百分比=%.1f 动作=%s"
         % (
             observed_at,
             normalized,
-            score.get("sell_score"),
+            score.get("sell_score", 0),
             "+".join(blockers) if blockers else "未知",
             execution_price,
-            observation.get("iopv") if isinstance(observation, dict) else None,
-            _iopv_premium_percent(observation),
-            IOPV_SHADOW_PREMIUM_RATE * 100.0,
-            action,
+            observation.get("iopv"),
+            premium_pct,
+            IOPV_SELL_OVERRIDE_PREMIUM_RATE * 100.0,
+            "直接卖出" if triggered else "不触发",
         )
+    )
+    if not triggered:
+        return False
+    return execute_sell(
+        normalized,
+        context,
+        "sell_score %.0f iopv_override premium=%.2f%%" % (
+            score.get("sell_score", 0), premium_pct),
     )
 
 
@@ -4071,11 +4100,12 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
         if is_protected_by_strong_adx_uptrend(score, p):
             blockers.append("ADX保护")
         try:
-            log_iopv_blocked_sell_shadow(context, code, score, blockers)
+            if try_iopv_blocked_sell_override(
+                    context, code, score, blockers):
+                return True
         except Exception as exc:
-            log.warning(
-                "[IOPV影子卖出] %s观察异常，正式卖出评估不变: %s" % (
-                    code, exc))
+            log.warning("[IOPV卖出加速] %s评估异常，原卖出逻辑继续: %s" % (
+                code, exc))
     if score["sell_score"] >= p["risk_tighten_threshold"]:
         log.info("[卖出风险观察] %s卖出评分=%.0f，仅记录、不收紧止损" % (
             code, score["sell_score"]))

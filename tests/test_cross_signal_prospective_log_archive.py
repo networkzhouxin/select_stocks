@@ -18,6 +18,7 @@ from cross_signal_strategy.research.prospective_log_archive import (
 
 EXPECTED_VERSION = "cross-v0.3.3"
 EXPECTED_BUILD = "20260822.1"
+CURRENT_BUILD = "20260822.2"
 EXPECTED_FINGERPRINT = "77e44d93d255"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL_DOC = (
@@ -240,7 +241,7 @@ def test_cli_uses_current_formal_release_identity(tmp_path, capsys):
 
     source = tmp_path / "future-live.log"
     archive_root = tmp_path / "forward-archive"
-    source.write_bytes(_valid_log())
+    source.write_bytes(_valid_log(build=CURRENT_BUILD))
 
     exit_code = main([
         "--archive-root",
@@ -253,7 +254,7 @@ def test_cli_uses_current_formal_release_identity(tmp_path, capsys):
 
     assert exit_code == 0
     assert manifest["release"]["strategy_version"] == EXPECTED_VERSION
-    assert manifest["release"]["deployment_build"] == EXPECTED_BUILD
+    assert manifest["release"]["deployment_build"] == CURRENT_BUILD
     assert manifest["release"]["business_fingerprint"] == EXPECTED_FINGERPRINT
     assert "归档完成" in capsys.readouterr().out
 

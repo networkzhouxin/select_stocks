@@ -26,8 +26,10 @@ engineering release advanced through build `20260818.1` for size-only
 timestamped audit-log rotation, build `20260820.1` for PTrade pre-sell cash
 capture plus the isolated IOPV probe wall-clock correction, and is now build
 `20260822.1` for observation-only IOPV buy/sell shadows and the existing
-10:35 callback recheck;
-none of these engineering changes alters a trading rule. The ATR-stress
+10:35 callback recheck, then `20260822.2` for the user-approved PTrade-live 8%
+QDII blocked-sell override. The last change is an execution rule and has no
+JoinQuant performance result because JoinQuant does not expose the required
+point-in-time IOPV and PTrade daily backtests do not reproduce live timing. The ATR-stress
 rule is positioned as drawdown insurance, not an alpha source:
 it only scales new buys and never changes the trade path when inactive. Full
 evidence: `docs/backtest_notes.md` (sections "ATR-Stress Local Pre-Check",

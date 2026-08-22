@@ -20,7 +20,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260822.1 业务配置=77e44d93d255 状态结构=7
+[发布指纹] 构建=20260822.2 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -39,9 +39,11 @@ It persists the earliest unconfirmed session, the prior confirmed baseline, an
 optional provisional observation, and the stress stop history.
 
 The indicator calculations, cross detection, buy/sell scoring, candidate
-filtering, position sizing, minimum signal hold, and ATR stop formula are
-frozen to the JoinQuant `cross-v0.3.3` mainline. Only platform access and live
-order lifecycle handling differ.
+filtering, position sizing, minimum signal hold, and ATR stop formula remain
+frozen to the JoinQuant `cross-v0.3.3` mainline. Build `20260822.2` has one
+documented PTrade-live execution overlay: a fresh 8% QDII IOPV premium can
+bypass the price-confirmation and ADX blockers after the normal sell-score and
+minimum-hold gates have already passed.
 
 Live buy orders use the fresh snapshot already accepted by the execution-price
 guard and submit the sell-five quote (`offer_grp[5]`) as the limit price. The
@@ -411,7 +413,7 @@ submission.
   unverified. Verified holdings retain their normal exit behavior, so recovery
   uncertainty cannot expand exposure or disable unrelated risk reduction.
 
-## Observation-Only IOPV Log
+## IOPV Buy Observation And Live Sell Override
 
 For `513100.SS`, `513500.SS`, `513880.SS`, and `513050.SS`, the adapter writes
 one `[IOPV观察]` line immediately before an actual buy submission. It reuses
@@ -429,14 +431,12 @@ All live IOPV timestamps and snapshot ages use the PTrade server wall clock.
 They do not use `context.current_dt`, because capability probing proved that
 the callback context can remain at 09:10 during later scheduled callbacks.
 
-IOPV logging is failure-open and must never block or resize an order. Missing,
-zero, stale, malformed, or exception-producing IOPV data only changes the log.
-It does not reopen the rejected premium-filter experiment and must not be used
-to select a threshold from validation or early live results.
+Buy-side IOPV logging is failure-open and must never block or resize an order.
+Missing, zero, stale, malformed, or exception-producing IOPV data only changes
+the buy-side log. The 5% buy shadow remains observation-only and does not defer
+or cancel an order.
 
-Build `20260822.1` adds three explicitly non-binding shadow logs around this
-observation. They use a fixed, pre-declared `5%` classification boundary but
-do not feed that boundary into any trading decision:
+Build `20260822.1` added the following 5% observation-only buy records:
 
 - `[IOPV影子买入]`: at the 09:35 main flow, labels a qualified QDII as
   `拟延迟` when its sell-five price is at least 5% above IOPV. The real order
@@ -444,11 +444,26 @@ do not feed that boundary into any trading decision:
 - `[IOPV影子复查]`: at the start of the already-existing 10:35 callback,
   rechecks those labels with the current sell-five quote. It records
   `拟恢复买入`, `拟继续放弃`, or `数据不可用` and never submits an order.
-- `[IOPV影子卖出]`: only after the minimum holding period and sell score of 30
-  have both been satisfied, but the formal price confirmation or ADX guard has
-  blocked the signal sell. It uses bid-one as the conservative immediate-sell
-  reference and records `拟加速卖出`, `不加速`, or `数据不可用`; it never
-  overrides the blocker or calls the sell executor.
+
+Build `20260822.2` replaces the former blocked-sell shadow with
+`[IOPV卖出加速]`. It is restricted to `513050.SS`, `513100.SS`, `513500.SS`,
+and `513880.SS` in PTrade live mode. The normal minimum holding period and
+sell score of at least 30 must already be satisfied. If price confirmation or
+ADX would otherwise block the signal sell, the adapter uses bid-one as the
+immediately executable reference and calculates `bid1 / IOPV - 1`.
+
+- Premium `>= 8%`: bypass price confirmation and ADX protection, then submit a
+  full-position sell through the existing sell executor.
+- Premium `< 8%`: keep the original blocker and do not sell.
+- Invalid/non-positive IOPV, missing bid-one depth, a halted quote, a negative
+  quote age, a quote older than 10 seconds, non-live mode, or any exception:
+  do not activate the override and continue the original sell path.
+
+This overlay does not change ATR stops, the five-trading-day minimum hold,
+the T-1 sell score, the score-30 boundary, the ETF pool, or buy behavior. A
+sell that already satisfies the original confirmation/ADX logic executes
+before this overlay and does not depend on IOPV. PTrade daily backtests cannot
+validate this live-only rule's return or accuracy.
 
 The 09:35-to-10:35 records are double-underscore runtime state. They are reset
 before each session, excluded from persistent strategy state, and may be lost

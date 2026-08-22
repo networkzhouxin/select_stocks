@@ -74,6 +74,10 @@ EXECUTION_CONTRACT_TESTS = {
         "test_buy_execution_waits_for_submitted_sells_to_finish",
         "test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio",
         "test_live_sell_blocks_noncontinuous_status_and_keeps_bounded_retry",
+        "test_eight_percent_premium_executes_blocked_qdii_sell",
+        "test_below_eight_percent_keeps_original_blocked_sell",
+        "test_iopv_sell_override_rejects_unsafe_snapshot",
+        "test_iopv_sell_override_exception_cannot_interrupt_sell_evaluation",
     },
 }
 

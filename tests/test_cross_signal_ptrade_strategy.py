@@ -137,7 +137,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260822.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260822.2"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3405,7 +3405,7 @@ def test_1035_iopv_shadow_exception_cannot_block_halt_recovery(monkeypatch):
         ),
     ],
 )
-def test_high_premium_blocked_qdii_sell_emits_shadow_without_order(
+def test_eight_percent_premium_executes_blocked_qdii_sell(
     monkeypatch, blocker_updates, expected_blocker
 ):
     code = "513100.SS"
@@ -3429,13 +3429,14 @@ def test_high_premium_blocked_qdii_sell_emits_shadow_without_order(
             code: {
                 "last_px": 2.0,
                 "bid_grp": {1: [1.995, 10000, 3]},
-                "iopv": 1.85,
+                "iopv": 1.995 / 1.08,
                 "trade_status": "TRADE",
                 "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
             }
         },
     )
     score = make_sell_score(code)
+    score["sell_score"] = 30
     score.update(blocker_updates)
     messages = []
     monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
@@ -3443,11 +3444,12 @@ def test_high_premium_blocked_qdii_sell_emits_shadow_without_order(
     monkeypatch.setattr(
         pt.log, "info", lambda message, *args: messages.append(
             message % args if args else str(message)))
+    sold = []
     monkeypatch.setattr(
         pt,
         "execute_sell",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("blocked sell shadow must never execute a sell")
+        lambda sold_code, sold_context, reason: (
+            sold.append((sold_code, sold_context, reason)) or True
         ),
     )
 
@@ -3464,19 +3466,148 @@ def test_high_premium_blocked_qdii_sell_emits_shadow_without_order(
             date(2026, 6, 5),
             today,
         ],
-    ) is False
+    ) is True
 
-    shadow = [
+    override_logs = [
         message for message in messages
-        if message.startswith("[IOPV影子卖出]")
+        if message.startswith("[IOPV卖出加速]")
     ]
-    assert len(shadow) == 1
-    assert "动作=拟加速卖出" in shadow[0]
-    assert ("原规则阻断=%s" % expected_blocker) in shadow[0]
-    assert "执行价=1.995" in shadow[0]
+    assert sold[0][0:2] == (code, context)
+    assert sold[0][2].startswith("sell_score 30 iopv_override")
+    assert len(override_logs) == 1
+    assert ("原规则阻断=%s" % expected_blocker) in override_logs[0]
+    assert "执行价=1.995" in override_logs[0]
+    assert "阈值百分比=8.0" in override_logs[0]
 
 
-def test_blocked_sell_shadow_exception_cannot_interrupt_sell_evaluation(
+def test_below_eight_percent_keeps_original_blocked_sell(monkeypatch):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={code: types.SimpleNamespace(
+                amount=500, cost_basis=1.0, last_sale_price=2.0)}),
+    )
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "bid_grp": {1: [1.995, 10000, 3]},
+                "iopv": 1.85,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    score = make_sell_score(code)
+    score.update({
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+    })
+    messages = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt.log, "info", lambda message, *args: messages.append(
+            message % args if args else str(message)))
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("premium below 8% must not sell")),
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [buy_date, date(2026, 6, 2), date(2026, 6, 3),
+         date(2026, 6, 4), date(2026, 6, 5), today],
+    ) is False
+    assert any(
+        message.startswith("[IOPV卖出加速]")
+        and "阈值百分比=8.0" in message
+        and "动作=不触发" in message
+        for message in messages
+    )
+    assert not any(
+        message.startswith("[IOPV影子卖出]")
+        and "动作=拟加速卖出" in message
+        for message in messages
+    )
+
+
+@pytest.mark.parametrize("unsafe_case", ["non_live", "halted", "stale"])
+def test_iopv_sell_override_rejects_unsafe_snapshot(
+    monkeypatch, unsafe_case
+):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    snapshot = {
+        "last_px": 2.0,
+        "bid_grp": {1: [1.995, 10000, 3]},
+        "iopv": 1.84,
+        "trade_status": "TRADE",
+        "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+    }
+    is_live = True
+    if unsafe_case == "non_live":
+        is_live = False
+    elif unsafe_case == "halted":
+        snapshot["trade_status"] = "HALT"
+    else:
+        snapshot["hsTimeStamp"] = (
+            datetime.now() - timedelta(seconds=11)
+        ).strftime("%Y%m%d%H%M%S")
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={code: types.SimpleNamespace(
+                amount=500, cost_basis=1.0, last_sale_price=2.0)}),
+    )
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        __is_live=is_live,
+        __last_snapshot={code: snapshot},
+    )
+    score = make_sell_score(code)
+    score.update({
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+    })
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt, "execute_sell",
+        lambda *args: sold.append(args) or True,
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [buy_date, date(2026, 6, 2), date(2026, 6, 3),
+         date(2026, 6, 4), date(2026, 6, 5), today],
+    ) is False
+    assert sold == []
+
+
+def test_iopv_sell_override_exception_cannot_interrupt_sell_evaluation(
     monkeypatch,
 ):
     code = "513100.SS"
@@ -3502,8 +3633,8 @@ def test_blocked_sell_shadow_exception_cannot_interrupt_sell_evaluation(
     monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
     monkeypatch.setattr(
         pt,
-        "log_iopv_blocked_sell_shadow",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("shadow failed")),
+        "try_iopv_blocked_sell_override",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("iopv failed")),
     )
     monkeypatch.setattr(pt.log, "warning", lambda *args: None)
 
@@ -7028,7 +7159,7 @@ def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
     assert not any(message.startswith("[IOPV观察]") for message in messages)
 
 
-def test_release_docs_keep_iopv_observation_non_binding():
+def test_release_docs_describe_iopv_buy_shadow_and_eight_percent_sell_override():
     deployment = (
         ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
     ).read_text(encoding="utf-8")
@@ -7042,7 +7173,10 @@ def test_release_docs_keep_iopv_observation_non_binding():
     assert "[IOPV观察]" in deployment
     assert "must never block or resize an order" in deployment
     assert "Observe PTrade IOPV Without Changing Frozen Orders" in decisions
-    assert "observation-only IOPV" in readme
+    assert "[IOPV卖出加速]" in deployment
+    assert "8%" in deployment
+    assert "Activate An 8% PTrade IOPV Sell Override" in decisions
+    assert "8% live sell override" in readme
 
 
 def test_release_docs_describe_buy_rejection_diagnostics():
@@ -8704,7 +8838,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260822.1" in notes
+    assert "20260822.2" in notes
     assert "77e44d93d255" in notes
     assert "状态结构=7" in notes
     assert "provisional risk state" in notes
