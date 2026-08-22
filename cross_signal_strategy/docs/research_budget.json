@@ -590,6 +590,46 @@
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true
+    },
+    {
+      "key": "fresh_unextended_entry_user_authorized",
+      "label": "User-authorized fixed fresh-unextended fast-entry candidate",
+      "status": "blocked",
+      "max_new_experiments": 0,
+      "rationale": "The extreme-lag attribution found a consistent negative annual relationship between entry extension and subsequent five-day upside. The user authorized exactly one fixed earlier-entry mechanism. Local replay is not the performance authority and showed adverse direction, so the standalone candidate must be decided only by the official JoinQuant 2019-2021 run; no threshold or ETF alternatives may be searched.",
+      "candidate_variants": 1,
+      "buy_score_band": [
+        50,
+        59
+      ],
+      "minimum_reversal_score": 35,
+      "maximum_cross_age": 1,
+      "maximum_extension_atr": 1.0,
+      "primary_path_unchanged": true,
+      "sell_path_unchanged": true,
+      "local_baseline_total_return": 1.25,
+      "local_candidate_total_return": 0.9811,
+      "local_baseline_max_drawdown": 0.0603,
+      "local_candidate_max_drawdown": 0.0603,
+      "local_baseline_win_rate": 0.5618,
+      "local_candidate_win_rate": 0.4948,
+      "local_baseline_profit_loss_ratio": 4.878,
+      "local_candidate_profit_loss_ratio": 3.197,
+      "local_baseline_double_friction_return": 1.0815,
+      "local_candidate_double_friction_return": 0.8101,
+      "local_baseline_double_friction_drawdown": 0.0639,
+      "local_candidate_double_friction_drawdown": 0.0778,
+      "local_filled_fresh_buys": 19,
+      "local_fresh_buy_years": [
+        2019,
+        2020,
+        2021
+      ],
+      "candidate_created": true,
+      "joinquant_status": "pending",
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
     }
   ]
 }

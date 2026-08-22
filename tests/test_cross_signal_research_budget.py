@@ -329,6 +329,37 @@ def test_user_authorized_1445_signal_clock_is_consumed_and_rejected():
     assert "STOP" in report_text
 
 
+def test_fresh_unextended_entry_candidate_is_frozen_pending_joinquant():
+    from cross_signal_strategy.research.research_budget import load_research_budget
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["fresh_unextended_entry_user_authorized"]
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert family.status == "blocked"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert raw["candidate_variants"] == 1
+    assert raw["buy_score_band"] == [50, 59]
+    assert raw["minimum_reversal_score"] == 35
+    assert raw["maximum_cross_age"] == 1
+    assert raw["maximum_extension_atr"] == pytest.approx(1.0)
+    assert raw["primary_path_unchanged"] is True
+    assert raw["sell_path_unchanged"] is True
+    assert raw["local_filled_fresh_buys"] == 19
+    assert raw["local_fresh_buy_years"] == [2019, 2020, 2021]
+    assert raw["candidate_created"] is True
+    assert raw["joinquant_status"] == "pending"
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+
+
 def test_user_authorized_reexpansion_observation_is_consumed_and_rejected():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,

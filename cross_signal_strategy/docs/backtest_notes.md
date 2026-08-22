@@ -3338,6 +3338,35 @@ Interpretation and decision:
 - A second full intraday signal pass increases reaction frequency but lowers accuracy. Partial-day indicator changes are too noisy to distinguish durable reversals from normal intraday movement, so the mechanism adds recycling, increases positive-to-negative outcomes, and worsens both nominal and stressed drawdown.
 - Decision: `STOP`. Reject before JoinQuant and PTrade, keep formal `cross-v0.3.3` unchanged, exhaust the family, and do not search nearby times, per-ETF times, afternoon-only sides, indicator subsets, thresholds, or hold/cooldown interactions.
 
+## 2026-08-22 Fresh-Unextended Fast-Entry Candidate Preparation
+
+Version: `cross-v0.3.3-fresh-unextended-entry-candidate`
+Protocol role: user-authorized single fixed variant; local engineering screen followed by one official JoinQuant training run
+Data boundary: approved read-only 2018 warm-up plus 2019-2021 training data only; no validation data inspected
+
+Frozen hypothesis and rule:
+- Some 50-59 score observations may be delayed primary entries rather than generally weak entries when reversal contribution is already at least 35, every contributing bullish cross is only age 0/1, and the T-1 close has extended no more than 1 ATR14 from the earliest contributing cross close.
+- The official score>=60 primary queue remains first and unchanged. The candidate can fill only a slot left by that queue.
+- All existing RSI overheat, price-position, blocked-combination, sell-score, ATR cooldown, sizing, sell, and risk rules remain unchanged.
+- Exactly one variant is allowed: score 50-59, reversal>=35, maximum cross age 1, maximum extension 1 ATR. No neighboring or per-ETF search is permitted.
+
+TDD and causal checks:
+- Candidate rule, main-queue priority, no-displacement, and future-row rejection tests were written and observed failing before implementation.
+- The local adapter records `max_data_date` and rejects any row later than `signal_date`.
+- The standalone JoinQuant candidate derives cross close only from the daily frame already ending at `prev_date`; T-day data does not enter the signal.
+
+Local engineering screen (not performance authority):
+- Baseline return +125.00%, drawdown 6.03%, win rate 56.18%, profit/loss ratio 4.878.
+- Candidate return +98.11%, drawdown 6.03%, win rate 49.48%, profit/loss ratio 3.197.
+- Double-friction baseline/candidate return +108.15%/+81.01%; drawdown 6.39%/7.78%.
+- The fresh channel filled 19 buys and appeared in 2019, 2020, and 2021, so it is neither sparse nor a no-op.
+
+Interpretation and next step:
+- The local result is a clear adverse warning, especially for win rate and doubled-friction drawdown, but local minute execution is known not to reproduce changed JoinQuant order paths authoritatively.
+- Do not reject, approve, or retune from the local values. Run the standalone JoinQuant candidate once over 2019-01-01 to 2021-12-31 with CNY 20,000 and daily frequency, then apply the predeclared official gates.
+- Official nominal gates versus the official `cross-v0.3.3` baseline: win rate +3 percentage points or more; at least 3 fewer positive-to-negative round trips; no worse maximum drawdown; at least 95% total-return retention; profit/loss ratio at least 3.0; and positive return in every training year. Run the unchanged rule under doubled friction only if all nominal gates pass.
+- Formal JoinQuant/PTrade `cross-v0.3.3` remains unchanged.
+
 
 
 
