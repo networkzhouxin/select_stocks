@@ -1,7 +1,7 @@
 # Cross-Signal Frozen Validation Summary
 
 Date: 2026-07-09
-Updated: 2026-08-20
+Updated: 2026-08-22
 
 This file summarizes the frozen validation evidence for the official cross-signal mainline and its candidates. It is a decision record, not a parameter-search notebook. Do not use these reserved-period results to tune thresholds, add indicators, remove ETFs, or choose a new validation-fitting variant.
 
@@ -23,8 +23,10 @@ The JoinQuant and PTrade formal files were synchronized to `cross-v0.3.3` /
 build `20260816.1` / fingerprint `77e44d93d255` / PTrade state schema 7 on
 2026-08-16. State recovery was stabilized in build `20260817.1`. The current
 engineering release advanced through build `20260818.1` for size-only
-timestamped audit-log rotation and is now build `20260820.1` for PTrade
-pre-sell cash capture plus the isolated IOPV probe wall-clock correction;
+timestamped audit-log rotation, build `20260820.1` for PTrade pre-sell cash
+capture plus the isolated IOPV probe wall-clock correction, and is now build
+`20260822.1` for observation-only IOPV buy/sell shadows and the existing
+10:35 callback recheck;
 none of these engineering changes alters a trading rule. The ATR-stress
 rule is positioned as drawdown insurance, not an alpha source:
 it only scales new buys and never changes the trade path when inactive. Full

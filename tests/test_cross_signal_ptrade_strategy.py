@@ -71,6 +71,7 @@ def make_g(**overrides):
         "__deferred_sell_proceeds": 0.0,
         "__deferred_sold_codes": set(),
         "__selected_buy_codes_today": None,
+        "__iopv_shadow_deferred_buys": {},
         "__order_state_unknown": False,
         "__is_live": True,
         "__mode_verified": True,
@@ -136,7 +137,7 @@ def make_sell_score(code="513100.SS"):
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
     assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260820.1"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260822.1"
     assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
@@ -3134,6 +3135,59 @@ def test_iopv_observation_uses_the_same_snapshot_as_the_live_buy_price():
     assert observation["snapshot_age_seconds"] == pytest.approx(1.0)
 
 
+def test_iopv_observation_prefers_supplied_executable_price_over_last_price():
+    observation = pt.build_iopv_observation(
+        "513100.SS",
+        {
+            "last_px": 2.0,
+            "iopv": 2.0,
+            "hsTimeStamp": "20260713093500123",
+        },
+        execution_price=2.1,
+        observed_at=datetime(2026, 7, 13, 9, 35, 1),
+    )
+
+    assert observation["market_price"] == pytest.approx(2.1)
+    assert observation["premium"] == pytest.approx(0.05)
+
+
+def test_live_iopv_log_uses_wall_clock_when_callback_context_is_stale(
+    monkeypatch,
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 8, 20, 9, 35, 0)
+
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 8, 20, 9, 10, 0)))
+    pt.g = make_g(
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "iopv": 1.95,
+                "hsTimeStamp": "20260820093500",
+            }
+        }
+    )
+    messages = []
+    monkeypatch.setattr(pt, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+
+    pt.log_iopv_buy_observation(context, code, 2.01)
+
+    assert len(messages) == 1
+    assert "时间=2026-08-20 09:35:00" in messages[0]
+    assert "行情延迟秒数=0.0" in messages[0]
+
+
 def test_iopv_observation_is_limited_to_qdii_and_tolerates_missing_values():
     assert pt.build_iopv_observation(
         "159915.SZ", {"last_px": 2.0, "iopv": 1.95}, 2.0
@@ -3145,6 +3199,329 @@ def test_iopv_observation_is_limited_to_qdii_and_tolerates_missing_values():
     assert observation["valid"] is False
     assert observation["iopv"] is None
     assert observation["premium"] is None
+
+
+def test_high_premium_qdii_buy_records_shadow_but_submits_original_order(
+    monkeypatch,
+):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g(
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "up_px": 2.2,
+                "offer_grp": {5: [2.01, 10000, 3]},
+                "iopv": 1.90,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        }
+    )
+    events = []
+
+    def log_info(message, *args):
+        rendered = message % args if args else message
+        events.append(("log", str(rendered)))
+
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(info=log_info, warning=log_info, error=log_info),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: events.append(("order", (args, kwargs)))
+        or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score(code)],
+        date(2026, 7, 13),
+        diagnostic_source="09:35主流程",
+    ) == 1
+
+    assert ("order", ((code, 3100), {"limit_price": 2.01})) in events
+    assert code in pt.g.__iopv_shadow_deferred_buys
+    shadow_logs = [
+        value for kind, value in events
+        if kind == "log" and value.startswith("[IOPV影子买入]")
+    ]
+    assert len(shadow_logs) == 1
+    assert "动作=拟延迟" in shadow_logs[0]
+    assert "执行价=2.01" in shadow_logs[0]
+
+
+@pytest.mark.parametrize(
+    ("iopv", "expected_action"),
+    [(1.95, "拟恢复买入"), (1.80, "拟继续放弃")],
+)
+def test_1035_iopv_shadow_recheck_is_observation_only(
+    monkeypatch, iopv, expected_action
+):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 10, 35, 0)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    pt.g = make_g(
+        __iopv_shadow_deferred_buys={
+            code: {
+                "code": code,
+                "initial_premium": 0.06,
+                "initial_execution_price": 2.01,
+            }
+        },
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "up_px": 2.2,
+                "offer_grp": {5: [2.0, 10000, 3]},
+                "iopv": iopv,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(
+                message % args if args else str(message)),
+            warning=lambda message, *args: messages.append(
+                message % args if args else str(message)),
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("10:35 shadow recheck must not submit buy orders")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("10:35 shadow recheck must not submit sell orders")
+        ),
+        raising=False,
+    )
+
+    pt.recheck_iopv_shadow_deferred_buys(context)
+
+    assert pt.g.__iopv_shadow_deferred_buys == {}
+    assert any(
+        message.startswith("[IOPV影子复查]")
+        and ("动作=%s" % expected_action) in message
+        for message in messages
+    )
+
+
+def test_1035_wrapper_runs_iopv_shadow_recheck_before_halt_recovery(monkeypatch):
+    events = []
+    context = object()
+    monkeypatch.setattr(
+        pt,
+        "recheck_iopv_shadow_deferred_buys",
+        lambda received: events.append(("recheck", received)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt, "halt_recover", lambda received: events.append(("halt", received)))
+    monkeypatch.setattr(
+        pt, "_persist_live_state", lambda received: events.append(("persist", received)))
+
+    pt._halt_recover_wrapper(context)
+
+    assert events == [
+        ("recheck", context),
+        ("halt", context),
+        ("persist", context),
+    ]
+
+
+def test_1035_iopv_shadow_exception_cannot_block_halt_recovery(monkeypatch):
+    events = []
+    context = object()
+    monkeypatch.setattr(
+        pt,
+        "recheck_iopv_shadow_deferred_buys",
+        lambda received: (_ for _ in ()).throw(RuntimeError("shadow failed")),
+    )
+    monkeypatch.setattr(
+        pt, "halt_recover", lambda received: events.append(("halt", received)))
+    monkeypatch.setattr(
+        pt, "_persist_live_state", lambda received: events.append(("persist", received)))
+    monkeypatch.setattr(pt.log, "warning", lambda *args: None)
+
+    pt._halt_recover_wrapper(context)
+
+    assert events == [("halt", context), ("persist", context)]
+
+
+@pytest.mark.parametrize(
+    ("blocker_updates", "expected_blocker"),
+    [
+        (
+            {
+                "close_below_ma20": False,
+                "close_below_boll_mid": False,
+                "close_below_falling_ma10": False,
+                "downside_continuation": False,
+                "far_above_ma20_and_rsi6_down": False,
+            },
+            "价格确认不足",
+        ),
+        (
+            {
+                "close_below_ma20": False,
+                "close_below_boll_mid": True,
+                "close_below_falling_ma10": False,
+                "downside_continuation": False,
+                "far_above_ma20_and_rsi6_down": False,
+                "adx": 30.0,
+                "plus_di": 25.0,
+                "minus_di": 10.0,
+                "ma20_slope_non_negative": True,
+            },
+            "ADX保护",
+        ),
+    ],
+)
+def test_high_premium_blocked_qdii_sell_emits_shadow_without_order(
+    monkeypatch, blocker_updates, expected_blocker
+):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=500, cost_basis=1.0, last_sale_price=2.0)
+            }
+        ),
+    )
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        entry_atr={code: 0.05},
+        highest_since_buy={code: 2.1},
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "bid_grp": {1: [1.995, 10000, 3]},
+                "iopv": 1.85,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    score = make_sell_score(code)
+    score.update(blocker_updates)
+    messages = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt.log, "info", lambda message, *args: messages.append(
+            message % args if args else str(message)))
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked sell shadow must never execute a sell")
+        ),
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [
+            buy_date,
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 4),
+            date(2026, 6, 5),
+            today,
+        ],
+    ) is False
+
+    shadow = [
+        message for message in messages
+        if message.startswith("[IOPV影子卖出]")
+    ]
+    assert len(shadow) == 1
+    assert "动作=拟加速卖出" in shadow[0]
+    assert ("原规则阻断=%s" % expected_blocker) in shadow[0]
+    assert "执行价=1.995" in shadow[0]
+
+
+def test_blocked_sell_shadow_exception_cannot_interrupt_sell_evaluation(
+    monkeypatch,
+):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=500, cost_basis=1.0, last_sale_price=2.0)
+            }
+        )
+    )
+    pt.g = make_g(buy_date={code: buy_date})
+    score = make_sell_score(code)
+    score.update({
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+    })
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(
+        pt,
+        "log_iopv_blocked_sell_shadow",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("shadow failed")),
+    )
+    monkeypatch.setattr(pt.log, "warning", lambda *args: None)
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [
+            buy_date,
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 4),
+            date(2026, 6, 5),
+            today,
+        ],
+    ) is False
+
 
 
 def test_prev_trade_date_does_not_guess_weekdays_when_apis_fail(monkeypatch):
@@ -6588,6 +6965,41 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
     assert observations[0][0] < order_index
 
 
+def test_buy_shadow_exception_cannot_block_original_buy_order(monkeypatch):
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g()
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "get_buy_limit_price", lambda code, current: 2.01)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: {})
+    monkeypatch.setattr(
+        pt,
+        "log_iopv_buy_shadow",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("shadow failed")),
+    )
+    monkeypatch.setattr(pt.log, "warning", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: orders.append((args, kwargs)) or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score()],
+        date(2026, 7, 13),
+        diagnostic_source="09:35主流程",
+    ) == 1
+    assert orders == [(("513100.SS", 3100), {"limit_price": 2.01})]
+
+
 def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
     context = types.SimpleNamespace(
         blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35)),
@@ -8292,7 +8704,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260820.1" in notes
+    assert "20260822.1" in notes
     assert "77e44d93d255" in notes
     assert "状态结构=7" in notes
     assert "provisional risk state" in notes

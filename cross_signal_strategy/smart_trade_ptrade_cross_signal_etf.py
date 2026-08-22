@@ -20,7 +20,7 @@ from pathlib import Path
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
 STRATEGY_VERSION = "cross-v0.3.3"
-DEPLOYMENT_BUILD_ID = "20260820.1"
+DEPLOYMENT_BUILD_ID = "20260822.1"
 LIVE_STATE_SCHEMA_VERSION = 7
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
@@ -34,6 +34,7 @@ IOPV_OBSERVE_CODES = frozenset((
     "513880.SS",
     "513050.SS",
 ))
+IOPV_SHADOW_PREMIUM_RATE = 0.05
 LIVE_STATE_FILENAME = "cross_signal_live_state_%s.journal"
 LEGACY_LIVE_STATE_FILENAMES = (
     "cross_signal_v033_live_state_v7_%s.journal",
@@ -1555,6 +1556,8 @@ def initialize(context):
     g.__deferred_sold_codes = set()
     # 首次实际买入评估后冻结原定名单，后续核对不得晋升后排候选。
     g.__selected_buy_codes_today = None
+    # 只用于当天 09:35->10:35 的反事实观察，不持久化、不影响委托。
+    g.__iopv_shadow_deferred_buys = {}
     g.__order_state_unknown = False
     g.__data = None
     g.__is_live = is_live
@@ -1608,6 +1611,7 @@ def handle_data(context, data):
 def before_trading_start(context, data):
     g.__data = data
     g.__last_snapshot = {}
+    g.__iopv_shadow_deferred_buys = {}
     startup_recovery = bool(
         g.__is_live and not getattr(g, "__startup_recovery_done", False))
     persisted_g_state = None
@@ -1726,6 +1730,10 @@ def _recent_fill_reconcile_wrapper(context):
 
 
 def _halt_recover_wrapper(context):
+    try:
+        recheck_iopv_shadow_deferred_buys(context)
+    except Exception as exc:
+        log.warning("[IOPV影子复查] 观察异常，正式10:35流程继续: %s" % exc)
     halt_recover(context)
     _persist_live_state(context)
 
@@ -3076,6 +3084,13 @@ def _snapshot_session_date(raw_timestamp):
         return None
 
 
+def _iopv_observed_at(context):
+    """PTrade 实盘回调时间可能陈旧；IOPV 审计使用服务器墙钟。"""
+    if getattr(g, "__is_live", False):
+        return datetime.now()
+    return get_context_datetime(context)
+
+
 def build_iopv_observation(
     code,
     snapshot,
@@ -3086,9 +3101,13 @@ def build_iopv_observation(
     if code not in IOPV_OBSERVE_CODES:
         return None
     snapshot = snapshot if isinstance(snapshot, dict) else {}
+    executable_price = _positive_float_or_none(execution_price)
     snapshot_price = _positive_float_or_none(snapshot.get("last_px"))
-    fallback_price = _positive_float_or_none(execution_price)
-    market_price = snapshot_price if snapshot_price is not None else fallback_price
+    market_price = (
+        executable_price
+        if executable_price is not None
+        else snapshot_price
+    )
     iopv = _positive_float_or_none(snapshot.get("iopv"))
     premium = (
         market_price / iopv - 1.0
@@ -3109,18 +3128,19 @@ def build_iopv_observation(
 
 def log_iopv_buy_observation(context, code, execution_price):
     if not getattr(g, "__is_live", False):
-        return
+        return None
     try:
         normalized = normalize_code(code)
         snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
+        observed_at = _iopv_observed_at(context)
         observation = build_iopv_observation(
             normalized,
             snapshot,
             execution_price,
-            observed_at=get_context_datetime(context),
+            observed_at=observed_at,
         )
         if observation is None:
-            return
+            return None
         premium_pct = (
             observation["premium"] * 100.0
             if observation["premium"] is not None
@@ -3130,7 +3150,7 @@ def log_iopv_buy_observation(context, code, execution_price):
             "[IOPV观察] 事件=买入 时间=%s 代码=%s 有效=%s 市价=%s "
             "IOPV=%s 溢价率百分比=%s 行情时间戳=%s 行情延迟秒数=%s"
             % (
-                get_context_datetime(context),
+                observed_at,
                 observation["code"],
                 observation["valid"],
                 observation["market_price"],
@@ -3140,11 +3160,191 @@ def log_iopv_buy_observation(context, code, execution_price):
                 observation["snapshot_age_seconds"],
             )
         )
+        return observation
     except Exception as exc:
         try:
             log.warning("[IOPV观察] 代码=%s 数据不可用: %s" % (code, exc))
         except Exception:
             pass
+        return None
+
+
+def _iopv_shadow_action(observation, high_action, normal_action):
+    if not isinstance(observation, dict) or not observation.get("valid"):
+        return "数据不可用"
+    premium = observation.get("premium")
+    if premium is None:
+        return "数据不可用"
+    return (
+        high_action
+        if premium >= IOPV_SHADOW_PREMIUM_RATE
+        else normal_action
+    )
+
+
+def _iopv_premium_percent(observation):
+    if not isinstance(observation, dict):
+        return None
+    premium = observation.get("premium")
+    return premium * 100.0 if premium is not None else None
+
+
+def log_iopv_buy_shadow(
+    context,
+    code,
+    execution_price,
+    observation,
+    diagnostic_source,
+):
+    """记录反事实买入分类；真实买单继续走原有路径。"""
+    if not getattr(g, "__is_live", False):
+        return
+    normalized = normalize_code(code)
+    if normalized not in IOPV_OBSERVE_CODES:
+        return
+    observed_at = _iopv_observed_at(context)
+    action = _iopv_shadow_action(observation, "拟延迟", "正常买入")
+    if action == "拟延迟" and diagnostic_source == "09:35主流程":
+        records = getattr(g, "__iopv_shadow_deferred_buys", None)
+        if not isinstance(records, dict):
+            records = {}
+            g.__iopv_shadow_deferred_buys = records
+        records[normalized] = {
+            "code": normalized,
+            "initial_premium": observation.get("premium"),
+            "initial_execution_price": execution_price,
+            "observed_at": observed_at,
+        }
+    log.info(
+        "[IOPV影子买入] 时间=%s 代码=%s 来源=%s 执行价=%s "
+        "IOPV=%s 溢价率百分比=%s 阈值百分比=%.1f 动作=%s "
+        "真实委托不变=True"
+        % (
+            observed_at,
+            normalized,
+            diagnostic_source,
+            execution_price,
+            observation.get("iopv") if isinstance(observation, dict) else None,
+            _iopv_premium_percent(observation),
+            IOPV_SHADOW_PREMIUM_RATE * 100.0,
+            action,
+        )
+    )
+
+
+def recheck_iopv_shadow_deferred_buys(context):
+    """在现有 10:35 回调中复查 09:35 高溢价影子，不执行交易。"""
+    records = getattr(g, "__iopv_shadow_deferred_buys", {})
+    if not isinstance(records, dict) or not records:
+        return
+    # 先清空，确保单次观察和异常幂等；影子记录绝不参与后续下单。
+    g.__iopv_shadow_deferred_buys = {}
+    for code in sorted(records):
+        record = records.get(code, {})
+        observation = None
+        execution_price = None
+        observed_at = _iopv_observed_at(context)
+        try:
+            current = get_current_price(code)
+            if current is not None and current > 0:
+                execution_price = get_buy_limit_price(code, current)
+            if execution_price is not None:
+                snapshot = getattr(g, "__last_snapshot", {}).get(code, {})
+                observation = build_iopv_observation(
+                    code,
+                    snapshot,
+                    execution_price,
+                    observed_at=observed_at,
+                )
+        except Exception as exc:
+            log.warning("[IOPV影子复查] 代码=%s 数据读取失败: %s" % (code, exc))
+        action = _iopv_shadow_action(
+            observation, "拟继续放弃", "拟恢复买入")
+        log.info(
+            "[IOPV影子复查] 时间=%s 代码=%s 初始执行价=%s "
+            "初始溢价率百分比=%s 当前执行价=%s IOPV=%s "
+            "当前溢价率百分比=%s 阈值百分比=%.1f 动作=%s "
+            "真实委托不变=True"
+            % (
+                observed_at,
+                code,
+                record.get("initial_execution_price"),
+                (
+                    record.get("initial_premium") * 100.0
+                    if record.get("initial_premium") is not None
+                    else None
+                ),
+                execution_price,
+                observation.get("iopv") if isinstance(observation, dict) else None,
+                _iopv_premium_percent(observation),
+                IOPV_SHADOW_PREMIUM_RATE * 100.0,
+                action,
+            )
+        )
+
+
+def get_iopv_sell_execution_price(code):
+    """读取买一价作为立即卖出的保守成交侧估计；缺失时不回退。"""
+    code = normalize_code(code)
+    snapshot = getattr(g, "__last_snapshot", {}).get(code, {})
+    bid_group = snapshot.get("bid_grp") if isinstance(snapshot, dict) else None
+    if not isinstance(bid_group, dict):
+        return None
+    level_one = bid_group.get(1)
+    if level_one is None:
+        level_one = bid_group.get("1")
+    try:
+        bid_one = _positive_float_or_none(level_one[0])
+        bid_one_volume = _positive_float_or_none(level_one[1])
+    except (IndexError, KeyError, TypeError):
+        return None
+    if bid_one is None or bid_one_volume is None:
+        return None
+    return round(bid_one, 3)
+
+
+def log_iopv_blocked_sell_shadow(context, code, score, blockers):
+    """记录达到卖分但被正式附加条件阻止的卖出反事实。"""
+    if not getattr(g, "__is_live", False):
+        return
+    normalized = normalize_code(code)
+    if normalized not in IOPV_OBSERVE_CODES:
+        return
+    observation = None
+    execution_price = None
+    observed_at = _iopv_observed_at(context)
+    try:
+        current = get_current_price(normalized)
+        if current is not None and current > 0:
+            execution_price = get_iopv_sell_execution_price(normalized)
+        if execution_price is not None:
+            snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
+            observation = build_iopv_observation(
+                normalized,
+                snapshot,
+                execution_price,
+                observed_at=observed_at,
+            )
+    except Exception as exc:
+        log.warning("[IOPV影子卖出] 代码=%s 数据读取失败: %s" % (
+            normalized, exc))
+    action = _iopv_shadow_action(observation, "拟加速卖出", "不加速")
+    log.info(
+        "[IOPV影子卖出] 时间=%s 代码=%s 卖出评分=%s "
+        "原规则阻断=%s 执行价=%s IOPV=%s 溢价率百分比=%s "
+        "阈值百分比=%.1f 动作=%s 真实委托不变=True"
+        % (
+            observed_at,
+            normalized,
+            score.get("sell_score"),
+            "+".join(blockers) if blockers else "未知",
+            execution_price,
+            observation.get("iopv") if isinstance(observation, dict) else None,
+            _iopv_premium_percent(observation),
+            IOPV_SHADOW_PREMIUM_RATE * 100.0,
+            action,
+        )
+    )
 
 
 def get_after_close_observed_price(code, context):
@@ -3864,6 +4064,18 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
         return False
     if should_force_sell(score, False, p):
         return execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
+    if score["sell_score"] >= p["sell_threshold"]:
+        blockers = []
+        if not has_signal_sell_confirmation(score):
+            blockers.append("价格确认不足")
+        if is_protected_by_strong_adx_uptrend(score, p):
+            blockers.append("ADX保护")
+        try:
+            log_iopv_blocked_sell_shadow(context, code, score, blockers)
+        except Exception as exc:
+            log.warning(
+                "[IOPV影子卖出] %s观察异常，正式卖出评估不变: %s" % (
+                    code, exc))
     if score["sell_score"] >= p["risk_tighten_threshold"]:
         log.info("[卖出风险观察] %s卖出评分=%.0f，仅记录、不收紧止损" % (
             code, score["sell_score"]))
@@ -4071,7 +4283,20 @@ def execute_buy_candidates(
         if shares < 100:
             log.info("[买入跳过] %s可用资金不足 当前可用=%.0f" % (code, available))
             continue
-        log_iopv_buy_observation(context, code, price)
+        try:
+            iopv_observation = log_iopv_buy_observation(
+                context, code, limit_price)
+            log_iopv_buy_shadow(
+                context,
+                code,
+                limit_price,
+                iopv_observation,
+                diagnostic_source,
+            )
+        except Exception as exc:
+            log.warning(
+                "[IOPV影子买入] %s观察异常，正式买单继续: %s" % (
+                    code, exc))
         log.info(
             "[买入] %s 买入评分=%.0f 反转评分=%.0f 位置评分=%.0f "
             "趋势评分=%.0f 量能评分=%.0f stress=%.2f 目标金额=%.0f 股数=%d "

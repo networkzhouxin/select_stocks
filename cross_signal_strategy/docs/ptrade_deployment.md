@@ -20,7 +20,7 @@
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260820.1 业务配置=77e44d93d255 状态结构=7
+[发布指纹] 构建=20260822.1 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -416,7 +416,8 @@ submission.
 For `513100.SS`, `513500.SS`, `513880.SS`, and `513050.SS`, the adapter writes
 one `[IOPV观察]` line immediately before an actual buy submission. It reuses
 the same cached `get_snapshot()` record that supplied the live buy price and
-does not issue another market-data request.
+does not issue another market-data request. The premium numerator is the
+actual sell-five limit selected for the buy, not the snapshot latest price.
 
 The line records the callback time, code, execution reference price, positive
 IOPV when available, descriptive premium percentage, raw `hsTimeStamp`, and
@@ -424,10 +425,35 @@ snapshot age. `有效=False` means that a positive price/IOPV pair was not
 available. The observation return value is never consumed by candidate
 filtering, ranking, position sizing, or order submission.
 
+All live IOPV timestamps and snapshot ages use the PTrade server wall clock.
+They do not use `context.current_dt`, because capability probing proved that
+the callback context can remain at 09:10 during later scheduled callbacks.
+
 IOPV logging is failure-open and must never block or resize an order. Missing,
 zero, stale, malformed, or exception-producing IOPV data only changes the log.
 It does not reopen the rejected premium-filter experiment and must not be used
 to select a threshold from validation or early live results.
+
+Build `20260822.1` adds three explicitly non-binding shadow logs around this
+observation. They use a fixed, pre-declared `5%` classification boundary but
+do not feed that boundary into any trading decision:
+
+- `[IOPV影子买入]`: at the 09:35 main flow, labels a qualified QDII as
+  `拟延迟` when its sell-five price is at least 5% above IOPV. The real order
+  is still submitted unchanged.
+- `[IOPV影子复查]`: at the start of the already-existing 10:35 callback,
+  rechecks those labels with the current sell-five quote. It records
+  `拟恢复买入`, `拟继续放弃`, or `数据不可用` and never submits an order.
+- `[IOPV影子卖出]`: only after the minimum holding period and sell score of 30
+  have both been satisfied, but the formal price confirmation or ADX guard has
+  blocked the signal sell. It uses bid-one as the conservative immediate-sell
+  reference and records `拟加速卖出`, `不加速`, or `数据不可用`; it never
+  overrides the blocker or calls the sell executor.
+
+The 09:35-to-10:35 records are double-underscore runtime state. They are reset
+before each session, excluded from persistent strategy state, and may be lost
+on an intraday server restart. Such loss is missing evidence, not a trading
+signal. No fifth scheduled callback was added.
 
 ## Platform Evidence
 
