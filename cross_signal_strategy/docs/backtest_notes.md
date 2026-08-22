@@ -3367,6 +3367,14 @@ Interpretation and next step:
 - Official nominal gates versus the official `cross-v0.3.3` baseline: win rate +3 percentage points or more; at least 3 fewer positive-to-negative round trips; no worse maximum drawdown; at least 95% total-return retention; profit/loss ratio at least 3.0; and positive return in every training year. Run the unchanged rule under doubled friction only if all nominal gates pass.
 - Formal JoinQuant/PTrade `cross-v0.3.3` remains unchanged.
 
+Official JoinQuant outcome (2026-08-22):
+- The frozen build and fingerprint were confirmed as
+  `20260822.1-candidate` / `25783cc30ba4`.
+- Candidate total return was +111.14% versus the official baseline +129.25%; maximum drawdown was 6.29% versus 6.28%.
+- Candidate win rate was 49.0% versus 55.8%, profit/loss ratio was 3.904 versus 5.297, and positive-to-negative round trips increased from 31 to 39.
+- The added channel closed 4 winners and 15 losers; two large winners supplied about 88.5% of its gross profit.
+- Decision: `REJECT`. The family is exhausted, the standalone JoinQuant file is archived, and formal `cross-v0.3.3` remains unchanged. No doubled-friction or validation run is permitted because the nominal gates failed.
+
 
 
 

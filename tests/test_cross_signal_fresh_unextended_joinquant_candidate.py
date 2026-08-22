@@ -48,9 +48,8 @@ def candidate_score(code="FRESH", buy_score=55, **overrides):
 
 
 def test_joinquant_snapshot_enrichment_uses_only_visible_daily_closes():
-    from cross_signal_strategy import (
-        smart_trade_joinquant_cross_signal_etf_fresh_unextended_entry_candidate
-        as candidate,
+    from cross_signal_strategy.archive.candidates import (
+        smart_trade_joinquant_cross_signal_etf_fresh_unextended_entry_candidate as candidate,
     )
 
     snapshot = candidate_score()
@@ -64,9 +63,8 @@ def test_joinquant_snapshot_enrichment_uses_only_visible_daily_closes():
 
 
 def test_joinquant_buy_queue_preserves_primary_priority_and_fixed_fast_gate():
-    from cross_signal_strategy import (
-        smart_trade_joinquant_cross_signal_etf_fresh_unextended_entry_candidate
-        as candidate,
+    from cross_signal_strategy.archive.candidates import (
+        smart_trade_joinquant_cross_signal_etf_fresh_unextended_entry_candidate as candidate,
     )
 
     fresh = candidate.enrich_fresh_entry_snapshot(
@@ -97,9 +95,8 @@ def test_joinquant_buy_queue_preserves_primary_priority_and_fixed_fast_gate():
 
 
 def test_joinquant_fast_gate_rejects_missing_contributing_cross_age():
-    from cross_signal_strategy import (
-        smart_trade_joinquant_cross_signal_etf_fresh_unextended_entry_candidate
-        as candidate,
+    from cross_signal_strategy.archive.candidates import (
+        smart_trade_joinquant_cross_signal_etf_fresh_unextended_entry_candidate as candidate,
     )
 
     missing = candidate.enrich_fresh_entry_snapshot(

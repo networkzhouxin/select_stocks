@@ -7,18 +7,17 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 65 real ledger entries.
+- Recorded failed or non-adopted experiments: 66 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: zero. The fixed
-  `intraday_signal_clock_1445_user_authorized` candidate has been consumed and
-  rejected; no family is open.
-- The user-authorized `fresh_unextended_entry_user_authorized` family has
-  consumed its one fixed variant and is blocked pending the official JoinQuant
-  2019-2021 result. The local replay is recorded as a warning only and cannot
-  approve or reject the candidate; no neighboring score, age, ATR, or ETF rule
-  may be searched.
+- New open budget: zero. No family is open after the fixed
+  `fresh_unextended_entry_user_authorized` candidate was rejected by the
+  official JoinQuant training run.
+- The user-authorized `fresh_unextended_entry_user_authorized` family is
+  exhausted. Its official JoinQuant result reduced return from 129.25% to
+  111.14%, win rate from 55.8% to 49.0%, and profit/loss ratio from 5.297 to
+  3.904 while positive-to-negative round trips increased from 31 to 39.
 - The fixed `etf_share_flow_shadow` `positive_vs_non_positive` observation is
   complete and exhausted.
 - The completed fixed `MACD(6,13,5)` comparison remains closed.
@@ -78,7 +77,7 @@ it does not change any score, order, position, or risk rule.
 | `profit_gated_direct_sell_user_authorized` | exhausted | The fixed 4×3 direct-sell matrix (sell scores 32/35/38/40 crossed with profit bands 2-4%/3-5%/4-6%) was consumed with 0 of 12 variants passing the Step 0 gates. The 38/40 thresholds never fired (scores that high arrive only after profit leaves the band), and the 32/35 thresholds produced negative total per-share deltas because the 513050 +34% winner's mid-hold pullback satisfies the trigger and would be exited early. No candidate was created; no nearby thresholds, bands, or mechanism variants may be searched. |
 | `bullish_cross_age2_half_decay_user_authorized` | exhausted | The fixed buy-side age-2 multiplier 0.5 changed 64 filled-order days across all three years but cut return +125.00%→+87.35%, worsened drawdown 6.03%→8.79%, Sharpe, Sortino, profit/loss ratio, and every annual return. Keep full official weights for ages 0/1/2; no other decay coefficient, per-indicator age weight, exception, or compensating rule may be searched. |
 | `intraday_signal_clock_1445_user_authorized` | exhausted | The fixed causal 09:35+14:45 full signal candidate reduced return from +125.00% to +85.00%, raised drawdown from 6.03% to 7.49%, lowered win rate from 56.18% to 47.66%, lowered profit/loss ratio to 2.813, and increased positive-to-negative round trips from 31 to 40. Doubled friction also worsened return and drawdown. Retain the official single 09:35 path; no nearby-time, per-ETF, side-only, indicator-subset, threshold, hold, or cooldown search is allowed. |
-| `fresh_unextended_entry_user_authorized` | blocked | One frozen candidate appends 50-59 score entries only after the official primary queue when reversal score is at least 35, every contributing bullish cross is age 0/1, and T-1 close is no more than 1 ATR above the earliest contributing cross close. The local screen produced 19 fills across all three years but worsened directional metrics; only the official JoinQuant 2019-2021 run may decide it. Primary buys, all sells, and every existing filter remain unchanged; alternatives are prohibited. |
+| `fresh_unextended_entry_user_authorized` | exhausted | The official JoinQuant candidate reduced return 129.25%→111.14%, win rate 55.8%→49.0%, and profit/loss ratio 5.297→3.904, while positive-to-negative round trips rose 31→39. The fresh channel closed 4 winners and 15 losers. Reject and archive it; keep official score≥60 and do not search neighboring score, age, ATR, ETF, queue, or sell-compensation variants. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better

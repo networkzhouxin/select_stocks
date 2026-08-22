@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 65
-    assert report.expected_failed_experiment_count == 65
+    assert report.failed_experiment_count == 66
+    assert report.expected_failed_experiment_count == 66
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -329,7 +329,7 @@ def test_user_authorized_1445_signal_clock_is_consumed_and_rejected():
     assert "STOP" in report_text
 
 
-def test_fresh_unextended_entry_candidate_is_frozen_pending_joinquant():
+def test_fresh_unextended_entry_candidate_is_exhausted_after_joinquant_rejection():
     from cross_signal_strategy.research.research_budget import load_research_budget
 
     budget = load_research_budget(BUDGET)
@@ -341,7 +341,7 @@ def test_fresh_unextended_entry_candidate_is_frozen_pending_joinquant():
         if item["key"] == family.key
     )
 
-    assert family.status == "blocked"
+    assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert raw["candidate_variants"] == 1
@@ -354,7 +354,14 @@ def test_fresh_unextended_entry_candidate_is_frozen_pending_joinquant():
     assert raw["local_filled_fresh_buys"] == 19
     assert raw["local_fresh_buy_years"] == [2019, 2020, 2021]
     assert raw["candidate_created"] is True
-    assert raw["joinquant_status"] == "pending"
+    assert raw["joinquant_status"] == "rejected"
+    assert raw["joinquant_total_return"] == pytest.approx(1.1114)
+    assert raw["joinquant_max_drawdown"] == pytest.approx(0.0629)
+    assert raw["joinquant_win_rate"] == pytest.approx(0.490)
+    assert raw["joinquant_profit_loss_ratio"] == pytest.approx(3.904)
+    assert raw["joinquant_positive_to_negative_round_trips"] == 39
+    assert raw["joinquant_fresh_closed_wins"] == 4
+    assert raw["joinquant_fresh_closed_losses"] == 15
     assert raw["validation_influence"] == "none"
     assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
     assert raw["prohibit_alternatives"] is True
