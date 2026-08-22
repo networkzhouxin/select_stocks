@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 72 real ledger entries.
+- Recorded failed or non-adopted experiments: 73 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -84,6 +84,7 @@ it does not change any score, order, position, or risk rule.
 | `kdj_extreme_zone_score_user_authorized` | exhausted | The fixed K≤20 buy +5 / K≥80 sell +5 unified-score candidate changed zero filled orders. Of 93 oversold bonuses none crossed 60; 11 of 1,382 overbought bonuses crossed 30, but every event remained blocked by formal price/ADX protection. All normal and doubled-friction metrics were identical, so stop before JoinQuant. Historical point-in-time IOPV was unavailable; the live-only override remains untested and undeployed. |
 | `kdj_tiered_persistence_user_authorized` | exhausted | The fixed 10/5-point, three-session KDJ state rule changed 22 filled-order days but none in 2021. Win rate fell 56.18%→55.43%, return 125.00%→118.33%, profit/loss ratio 4.878→4.384, and doubled-friction win rate 51.69%→48.91%. Reject before JoinQuant/PTrade; do not search nearby points, zones, retention lengths, direction precedence, or protection overrides. |
 | `kdj_tiered_current_state_user_authorized` | exhausted | The fixed 10/5-point current-T-1-only KDJ state rule changed zero filled orders. All normal and doubled-friction metrics exactly matched the baseline, so accuracy did not improve. Reject before JoinQuant/PTrade; do not search nearby points, zones, state definitions, or protection overrides. |
+| `kdj_tiered_direct_exit_user_authorized` | exhausted | The fixed current-T-1 10/5-point tiers plus direct extreme exits changed 155 filled-order days and raised win rate 56.18%→58.21%, but cut return 125.00%→101.84%, profit/loss ratio 4.878→2.954, and doubled-friction return 108.15%→77.35%. Reject before JoinQuant/PTrade; do not search nearby tiers, thresholds, retention, protection, or hold variants. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better

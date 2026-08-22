@@ -184,6 +184,52 @@ def test_planner_blocks_signal_sell_before_minimum_trading_day_hold():
     assert allowed[0] == {"code": "510300", "target_value": 0.0, "reason": "signal_sell"}
 
 
+def test_planner_uses_injected_signal_sell_decider_after_minimum_hold():
+    from cross_signal_strategy.local.local_backtester import LocalBroker, Position
+    from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
+
+    held_sell = candidate("510300", buy_score=20, sell_score=35)
+    held_sell.update({
+        "sell_extreme_zone_score": 5.0,
+        "adx": 35.0,
+        "plus_di": 30.0,
+        "minus_di": 10.0,
+    })
+
+    def direct_extreme_sell(score, atr_stop_triggered=False, params=None):
+        return (
+            score.get("sell_extreme_zone_score", 0) > 0
+            and score.get("sell_score", 0) >= params["sell_threshold"]
+        )
+
+    planner = LocalCrossSignalOrderPlanner(
+        FakeSignalAdapter({"510300": held_sell}),
+        etf_pool=["510300"],
+        buy_dates={"510300": "2019-07-01"},
+        trade_dates=[
+            "2019-07-01",
+            "2019-07-02",
+            "2019-07-03",
+            "2019-07-04",
+            "2019-07-05",
+            "2019-07-08",
+        ],
+        signal_sell_decider=direct_extreme_sell,
+    )
+    broker = LocalBroker(initial_cash=12000.0)
+    broker.positions["510300"] = Position("510300", 1000, 3.0)
+
+    blocked = planner.plan_orders("2019-07-05", "2019-07-04", broker)
+    allowed = planner.plan_orders("2019-07-08", "2019-07-05", broker)
+
+    assert blocked == []
+    assert allowed[0] == {
+        "code": "510300",
+        "target_value": 0.0,
+        "reason": "signal_sell",
+    }
+
+
 def test_planner_atr_stop_ignores_minimum_signal_hold():
     from cross_signal_strategy.local.local_backtester import LocalBroker, Position
     from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner

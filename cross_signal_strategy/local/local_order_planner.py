@@ -26,6 +26,7 @@ class LocalCrossSignalOrderPlanner:
     atr_stop_history: List[str] = field(default_factory=list)
     last_scores: Dict[str, dict] = field(default_factory=dict)
     trade_dates: List[str] | None = None
+    signal_sell_decider: object | None = None
 
     def __post_init__(self) -> None:
         if self.params is None:
@@ -67,7 +68,7 @@ class LocalCrossSignalOrderPlanner:
                 trade_days=self.trade_dates,
             ):
                 continue
-            if strategy.should_force_sell(score, atr_stop_triggered=False, params=self.params):
+            if self._should_force_signal_sell(score):
                 orders.append({"code": code, "target_value": 0.0, "reason": "signal_sell"})
                 sold_codes.add(code)
 
@@ -101,6 +102,14 @@ class LocalCrossSignalOrderPlanner:
             bought += 1
 
         return orders
+
+    def _should_force_signal_sell(self, score: Mapping[str, object]) -> bool:
+        decider = self.signal_sell_decider or strategy.should_force_sell
+        return bool(decider(
+            score,
+            atr_stop_triggered=False,
+            params=self.params,
+        ))
 
     def _atr_stop_codes(self, broker, current_prices: Mapping[str, float]) -> set:
         stopped = set()
