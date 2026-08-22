@@ -746,3 +746,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The new buy channel had very low directional accuracy. A few large winners hid 15 losing entries and did not compensate for the resulting recycling and eight additional positive-to-negative round trips. Because the candidate changed only the appended buy path and left all sells unchanged, this result attributes the degradation to broadening entry eligibility, not to delayed exits.
 Can it be revisited? no as a 50-59 fresh-unextended fast-entry channel
 Conditions for revisiting: Keep the official score-at-least-60 entry threshold. Do not search nearby score bands, reversal thresholds, cross-age limits, ATR-extension limits, ETF/year exceptions, queue order, or sell-side compensation from this result. Reopening requires a genuinely independent entry mechanism and explicit authorization.
+
+Date: 2026-08-22
+Version: `cross-v0.3.3-late-macd-boll-upper-observation`
+Experiment: On official JoinQuant `cross-v0.3.3` filled buys only, count the exact T-1 shape where MACD bullish-cross age is 0, an active RSI bullish cross is age 1/2, an active KDJ bullish cross is age 1/2, and close is at or above the upper Bollinger band. Permit one new-buy veto candidate only if at least 3 matches span at least 2 training years. Keep every strategy rule unchanged during Step 0.
+Hypothesis: When RSI and KDJ have already crossed one or two completed bars earlier but MACD crosses only after price reaches the BOLL upper band, MACD confirmation is late and the resulting buy is an avoidable overheat entry.
+Training diagnostic result: The official baseline log contained 98 filled buys. Only 2 matched: 513100 bought 2019-03-15 from the 2019-03-14 T-1 snapshot (close 2.535, BOLL upper 2.524726, RSI age 2, KDJ age 1, MACD age 0) and 159928 bought 2019-12-31 from the 2019-12-30 snapshot (close 3.000, BOLL upper 2.997819, RSI age 1, KDJ age 1, MACD age 0). Both matches were in 2019.
+Candidate result: Not created. The pre-registered Step 0 gate required at least 3 events across at least 2 training years; observed counts were 2 events across 1 year.
+JoinQuant training result: Observation used the official filled-buy path from `cross-v0.3.3` build `20260820.1`, business fingerprint `77e44d93d255`; no order-changing JoinQuant candidate was run.
+Validation result: Not run. Reserved periods were not inspected.
+Why it failed: The exact mechanism is too sparse and concentrated in one training year to justify a general veto. Blocking buys from two isolated cases would fit anecdotes rather than establish a repeated cross-year failure mode.
+Can it be revisited? no as this late-MACD/BOLL-upper combination in the current framework
+Conditions for revisiting: Keep the formal buy path unchanged. Do not relax BOLL upper to near-upper, widen RSI/KDJ ages, drop either prior-cross requirement, use per-ETF/year exceptions, change MACD periods, add an overheat threshold, or compensate through sells. Reopening requires a genuinely independent mechanism and explicit authorization.

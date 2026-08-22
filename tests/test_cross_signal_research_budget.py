@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 66
-    assert report.expected_failed_experiment_count == 66
+    assert report.failed_experiment_count == 67
+    assert report.expected_failed_experiment_count == 67
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -227,6 +227,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     signal_clock.pop("planned_experiment", None)
+    late_filter = next(
+        item for item in payload["families"]
+        if item["key"] == "late_macd_boll_upper_filter_user_authorized"
+    )
+    late_filter.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    late_filter.pop("planned_experiment", None)
     synthetic_open = tmp_path / "open.json"
     synthetic_open.write_text(json.dumps(payload), encoding="utf-8")
     mined = evaluate_experiment_request(
@@ -364,6 +373,48 @@ def test_fresh_unextended_entry_candidate_is_exhausted_after_joinquant_rejection
     assert raw["joinquant_fresh_closed_losses"] == 15
     assert raw["validation_influence"] == "none"
     assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
+
+
+def test_late_macd_boll_upper_filter_is_exhausted_after_sparse_observation():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["late_macd_boll_upper_filter_user_authorized"]
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert budget.max_total_open_experiments == 0
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is False
+    assert raw["candidate_variants"] == 1
+    assert raw["eligible_side"] == "new_buy_only"
+    assert raw["event_source"] == "official_joinquant_filled_buys"
+    assert raw["macd_cross_up_age"] == 0
+    assert raw["prior_rsi_cross_age"] == [1, 2]
+    assert raw["prior_kdj_cross_age"] == [1, 2]
+    assert raw["price_location"] == "close_at_or_above_boll_upper"
+    assert raw["minimum_total_events"] == 3
+    assert raw["minimum_distinct_years"] == 2
+    assert raw["official_filled_buys"] == 98
+    assert raw["matched_events"] == 2
+    assert raw["matched_years"] == [2019]
+    assert raw["observation_gate_passed"] is False
+    assert raw["candidate_created"] is False
+    assert raw["primary_path_unchanged"] is True
+    assert raw["sell_path_unchanged"] is True
+    assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
 
 

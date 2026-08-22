@@ -5,7 +5,7 @@
     "end": "2021-12-31"
   },
   "validation_tuning_forbidden": true,
-  "expected_failed_experiment_count": 66,
+  "expected_failed_experiment_count": 67,
   "max_total_open_experiments": 0,
   "families": [
     {
@@ -641,6 +641,54 @@
       "joinquant_fresh_closed_losses": 15,
       "joinquant_fresh_net_pnl": 1853.8,
       "candidate_gate_passed": false,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
+    {
+      "key": "late_macd_boll_upper_filter_user_authorized",
+      "label": "User-authorized late-MACD BOLL-upper new-buy filter",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The fixed read-only observation found only 2 matches among 98 official filled buys, both in 2019: 513100 on 2019-03-15 and 159928 on 2019-12-31. It failed the pre-registered minimum of 3 events across at least 2 years, so no veto candidate was created and no nearby rule may be searched.",
+      "candidate_variants": 1,
+      "eligible_side": "new_buy_only",
+      "event_source": "official_joinquant_filled_buys",
+      "macd_cross_up_age": 0,
+      "prior_rsi_cross_age": [1, 2],
+      "prior_kdj_cross_age": [1, 2],
+      "price_location": "close_at_or_above_boll_upper",
+      "minimum_total_events": 3,
+      "minimum_distinct_years": 2,
+      "official_filled_buys": 98,
+      "matched_events": 2,
+      "matched_years": [2019],
+      "observed_events": [
+        {
+          "date": "2019-03-15",
+          "code": "513100",
+          "signal_date": "2019-03-14",
+          "close": 2.535,
+          "boll_upper": 2.524726,
+          "rsi_cross_age": 2,
+          "kdj_cross_age": 1,
+          "macd_cross_age": 0
+        },
+        {
+          "date": "2019-12-31",
+          "code": "159928",
+          "signal_date": "2019-12-30",
+          "close": 3.0,
+          "boll_upper": 2.997819,
+          "rsi_cross_age": 1,
+          "kdj_cross_age": 1,
+          "macd_cross_age": 0
+        }
+      ],
+      "observation_gate_passed": false,
+      "candidate_created": false,
+      "primary_path_unchanged": true,
+      "sell_path_unchanged": true,
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true

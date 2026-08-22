@@ -7,13 +7,13 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 66 real ledger entries.
+- Recorded failed or non-adopted experiments: 67 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: zero. No family is open after the fixed
-  `fresh_unextended_entry_user_authorized` candidate was rejected by the
-  official JoinQuant training run.
+- New open budget: zero. The user-authorized
+  `late_macd_boll_upper_filter_user_authorized` Step 0 observation found only
+  2 events in one year and is exhausted without a candidate.
 - The user-authorized `fresh_unextended_entry_user_authorized` family is
   exhausted. Its official JoinQuant result reduced return from 129.25% to
   111.14%, win rate from 55.8% to 49.0%, and profit/loss ratio from 5.297 to
@@ -78,6 +78,7 @@ it does not change any score, order, position, or risk rule.
 | `bullish_cross_age2_half_decay_user_authorized` | exhausted | The fixed buy-side age-2 multiplier 0.5 changed 64 filled-order days across all three years but cut return +125.00%→+87.35%, worsened drawdown 6.03%→8.79%, Sharpe, Sortino, profit/loss ratio, and every annual return. Keep full official weights for ages 0/1/2; no other decay coefficient, per-indicator age weight, exception, or compensating rule may be searched. |
 | `intraday_signal_clock_1445_user_authorized` | exhausted | The fixed causal 09:35+14:45 full signal candidate reduced return from +125.00% to +85.00%, raised drawdown from 6.03% to 7.49%, lowered win rate from 56.18% to 47.66%, lowered profit/loss ratio to 2.813, and increased positive-to-negative round trips from 31 to 40. Doubled friction also worsened return and drawdown. Retain the official single 09:35 path; no nearby-time, per-ETF, side-only, indicator-subset, threshold, hold, or cooldown search is allowed. |
 | `fresh_unextended_entry_user_authorized` | exhausted | The official JoinQuant candidate reduced return 129.25%→111.14%, win rate 55.8%→49.0%, and profit/loss ratio 5.297→3.904, while positive-to-negative round trips rose 31→39. The fresh channel closed 4 winners and 15 losers. Reject and archive it; keep official score≥60 and do not search neighboring score, age, ATR, ETF, queue, or sell-compensation variants. |
+| `late_macd_boll_upper_filter_user_authorized` | exhausted | Among 98 official filled buys, only 2 matched the exact late-MACD/BOLL-upper shape and both were in 2019 (`513100` 2019-03-15; `159928` 2019-12-31). The 3-event/2-year gate failed, so no candidate was created. Do not relax ages, BOLL location, cross requirements, ETF scope, or sell rules. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -85,7 +86,13 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-No research family is open. The user-authorized
+No research family is open. The fixed
+`late_macd_boll_upper_filter_user_authorized` observation was consumed on
+2026-08-22. It found 2 matches among 98 official filled buys, both in 2019,
+and failed the frozen minimum of 3 matches across at least 2 years. No
+candidate was created and the rule may not be relaxed.
+
+For historical context, the user-authorized
 `bullish_cross_age2_half_decay_user_authorized`
 family was consumed on 2026-08-17: the single frozen 0.5 multiplier changed
 64 filled-order days across 2019/2020/2021 but reduced return from +125.00% to

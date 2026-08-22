@@ -3375,6 +3375,14 @@ Official JoinQuant outcome (2026-08-22):
 - The added channel closed 4 winners and 15 losers; two large winners supplied about 88.5% of its gross profit.
 - Decision: `REJECT`. The family is exhausted, the standalone JoinQuant file is archived, and formal `cross-v0.3.3` remains unchanged. No doubled-friction or validation run is permitted because the nominal gates failed.
 
+## 2026-08-22 Late-MACD / BOLL-Upper Step 0 Observation
+
+- Source: 98 official filled buys from formal `cross-v0.3.3` build `20260820.1`, fingerprint `77e44d93d255`.
+- Frozen shape: T-1 MACD bullish-cross age 0; active RSI and KDJ bullish crosses each age 1/2; close at or above BOLL upper.
+- Frozen gate: at least 3 matches across at least 2 training years before one new-buy veto candidate may exist.
+- Observed matches: 2, both in 2019 — `513100` on 2019-03-15 and `159928` on 2019-12-31.
+- Decision: `STOP`. The 3-event/2-year gate failed; no candidate was created, no threshold was relaxed, and formal `cross-v0.3.3` remains unchanged.
+
 
 
 
