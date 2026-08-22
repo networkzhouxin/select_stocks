@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 67
-    assert report.expected_failed_experiment_count == 67
+    assert report.failed_experiment_count == 68
+    assert report.expected_failed_experiment_count == 68
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -376,7 +376,7 @@ def test_fresh_unextended_entry_candidate_is_exhausted_after_joinquant_rejection
     assert raw["prohibit_alternatives"] is True
 
 
-def test_late_macd_boll_upper_filter_is_frozen_pending_user_requested_joinquant():
+def test_late_macd_boll_upper_filter_is_exhausted_after_joinquant_rejection():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -392,7 +392,7 @@ def test_late_macd_boll_upper_filter_is_frozen_pending_user_requested_joinquant(
     )
 
     assert budget.max_total_open_experiments == 0
-    assert family.status == "blocked"
+    assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
@@ -413,7 +413,16 @@ def test_late_macd_boll_upper_filter_is_frozen_pending_user_requested_joinquant(
     assert raw["observation_gate_passed"] is False
     assert raw["candidate_created"] is True
     assert raw["user_override_after_sparse_gate"] is True
-    assert raw["joinquant_status"] == "pending"
+    assert raw["joinquant_status"] == "rejected"
+    assert raw["joinquant_total_return"] == pytest.approx(1.2409)
+    assert raw["joinquant_annual_return"] == pytest.approx(0.3183)
+    assert raw["joinquant_max_drawdown"] == pytest.approx(0.0628)
+    assert raw["joinquant_win_rate"] == pytest.approx(0.558)
+    assert raw["joinquant_profit_loss_ratio"] == pytest.approx(5.208)
+    assert raw["joinquant_sharpe"] == pytest.approx(2.185)
+    assert raw["joinquant_baseline_total_return"] == pytest.approx(1.2925)
+    assert raw["joinquant_baseline_win_rate"] == pytest.approx(0.558)
+    assert raw["candidate_gate_passed"] is False
     assert raw["candidate_version"] == (
         "cross-v0.3.3-late-macd-boll-filter-candidate"
     )
@@ -421,6 +430,55 @@ def test_late_macd_boll_upper_filter_is_frozen_pending_user_requested_joinquant(
     assert raw["candidate_fingerprint"] == "a46fff884685"
     assert raw["primary_path_unchanged"] is True
     assert raw["sell_path_unchanged"] is True
+    assert raw["validation_influence"] == "none"
+    assert raw["prohibit_alternatives"] is True
+
+
+def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["late_veto_early_pre_macd_user_authorized"]
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert family.status == "blocked"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is False
+    assert raw["candidate_variants"] == 1
+    assert raw["base_candidate"] == (
+        "cross-v0.3.3-late-macd-boll-filter-candidate"
+    )
+    assert raw["primary_minimum_buy_score"] == 60
+    assert raw["early_buy_score_band"] == [50, 59]
+    assert raw["maximum_rsi_cross_age"] == 1
+    assert raw["maximum_kdj_cross_age"] == 1
+    assert raw["macd_state"] == "not_crossed_negative_and_narrowing"
+    assert raw["price_location"] == "close_below_boll_upper"
+    assert raw["maximum_rsi6"] == 85
+    assert raw["queue_order"] == "primary_then_early"
+    assert raw["early_fills_leftover_slots_only"] is True
+    assert raw["late_veto_unchanged"] is True
+    assert raw["sell_path_unchanged"] is True
+    assert raw["candidate_version"] == (
+        "cross-v0.3.3-late-veto-early-pre-macd-candidate"
+    )
+    assert raw["candidate_build"] == "20260822.3-candidate"
+    assert raw["candidate_fingerprint"] == "f6b08195dd3d"
+    assert raw["joinquant_status"] == "pending"
+    assert raw["official_gate"][
+        "win_rate_must_improve_vs_formal_and_late_veto"
+    ] is True
     assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
 

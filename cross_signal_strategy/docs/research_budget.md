@@ -78,7 +78,8 @@ it does not change any score, order, position, or risk rule.
 | `bullish_cross_age2_half_decay_user_authorized` | exhausted | The fixed buy-side age-2 multiplier 0.5 changed 64 filled-order days across all three years but cut return +125.00%→+87.35%, worsened drawdown 6.03%→8.79%, Sharpe, Sortino, profit/loss ratio, and every annual return. Keep full official weights for ages 0/1/2; no other decay coefficient, per-indicator age weight, exception, or compensating rule may be searched. |
 | `intraday_signal_clock_1445_user_authorized` | exhausted | The fixed causal 09:35+14:45 full signal candidate reduced return from +125.00% to +85.00%, raised drawdown from 6.03% to 7.49%, lowered win rate from 56.18% to 47.66%, lowered profit/loss ratio to 2.813, and increased positive-to-negative round trips from 31 to 40. Doubled friction also worsened return and drawdown. Retain the official single 09:35 path; no nearby-time, per-ETF, side-only, indicator-subset, threshold, hold, or cooldown search is allowed. |
 | `fresh_unextended_entry_user_authorized` | exhausted | The official JoinQuant candidate reduced return 129.25%→111.14%, win rate 55.8%→49.0%, and profit/loss ratio 5.297→3.904, while positive-to-negative round trips rose 31→39. The fresh channel closed 4 winners and 15 losers. Reject and archive it; keep official score≥60 and do not search neighboring score, age, ATR, ETF, queue, or sell-compensation variants. |
-| `late_macd_boll_upper_filter_user_authorized` | blocked | Step 0 found only 2 matches in 2019 and failed its gate. After disclosure that they were 1 win/1 loss and vetoing both would have reduced direct realized PnL, the user explicitly requested the exact candidate anyway. One standalone JoinQuant candidate now blocks only this exact new-buy shape and is pending one official 2019-2021 run. No alternatives are allowed. |
+| `late_macd_boll_upper_filter_user_authorized` | exhausted | The exact standalone veto emitted 2 events but left win rate unchanged at 55.8% and reduced return 129.25%→124.09%, annual return 32.86%→31.83%, profit/loss ratio 5.297→5.208, Sharpe 2.275→2.185, and information ratio 0.839→0.790. It is rejected and retained only as a controlled comparison base; no nearby veto rule is allowed. |
+| `late_veto_early_pre_macd_user_authorized` | blocked | One user-authorized stacked candidate keeps the failed late veto, preserves the full ≥60 primary queue first, and lets only 50-59 entries with fresh RSI/KDJ crosses plus a negative but narrowing pre-cross MACD spread fill leftover slots. BOLL upper and RSI6≥85 remain hard exclusions; sells are unchanged. It is frozen pending one official 2019-2021 JoinQuant run; no alternatives are allowed. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
@@ -87,11 +88,12 @@ number from another nearby variant is not enough.
 ## Open Families
 
 No research family is open. The fixed
-`late_macd_boll_upper_filter_user_authorized` observation was consumed on
-2026-08-22 and failed the frozen minimum with 2 matches in one year. The user
-then explicitly overrode the no-candidate consequence for this exact rule.
-The single standalone JoinQuant candidate is blocked pending one official
-2019-2021 run; this does not reopen threshold, age, BOLL, ETF, or sell searches.
+`late_macd_boll_upper_filter_user_authorized` candidate completed its official
+2019-2021 JoinQuant run and was rejected because win rate stayed at 55.8% while
+return and all listed payoff/risk-adjusted metrics worsened. The separately
+authorized `late_veto_early_pre_macd_user_authorized` candidate is now blocked
+pending one official 2019-2021 JoinQuant run. Its exact 50-59 early-entry rule
+does not reopen threshold, age, MACD, BOLL, RSI, ETF, queue, or sell searches.
 
 For historical context, the user-authorized
 `bullish_cross_age2_half_decay_user_authorized`

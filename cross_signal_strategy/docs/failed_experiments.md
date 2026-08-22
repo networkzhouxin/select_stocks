@@ -758,3 +758,15 @@ Validation result: Not run. Reserved periods were not inspected.
 Why it failed: The exact mechanism is too sparse and concentrated in one training year to justify a general veto. Blocking buys from two isolated cases would fit anecdotes rather than establish a repeated cross-year failure mode.
 Can it be revisited? no as this late-MACD/BOLL-upper combination in the current framework
 Conditions for revisiting: Keep the formal buy path unchanged. Do not relax BOLL upper to near-upper, widen RSI/KDJ ages, drop either prior-cross requirement, use per-ETF/year exceptions, change MACD periods, add an overheat threshold, or compensate through sells. Reopening requires a genuinely independent mechanism and explicit authorization.
+
+Date: 2026-08-22
+Version: `cross-v0.3.3-late-macd-boll-filter-candidate`
+Experiment: Veto only a new buy whose T-1 snapshot has a current MACD bullish cross (age 0), an earlier active RSI bullish cross (age 1/2), an earlier active KDJ bullish cross (age 1/2), and close at or above the BOLL upper band. Keep all other buy filters, every sell, position sizing, pool, costs, and 09:35 execution unchanged.
+Hypothesis: Removing the two known late-confirmation upper-band entries may improve entry accuracy without sacrificing the strategy's return distribution.
+Training diagnostic result: The official JoinQuant run emitted exactly 2 veto events, both in 2019: 513100 on 2019-03-15 and 159928 on 2019-12-31. The candidate still made 98 filled buys and 95 filled sells because later or substitute candidates occupied the released slots. The 513100 veto delayed its next buy to 2019-04-02 at 2.619 rather than eliminating the late path; the 159928 veto promoted another candidate on the same day.
+Candidate result: Total return fell from +129.25% to +124.09%, annualized return from +32.86% to +31.83%, profit/loss ratio from 5.297 to 5.208, Sharpe from 2.275 to 2.185, Sortino from 3.245 to 3.028, and information ratio from 0.839 to 0.790. Win rate remained exactly 55.8% and maximum drawdown remained 6.28%. The frozen requirement that win rate improve therefore failed.
+JoinQuant training result: Completed once on the frozen 2019-2021 window with CNY 20,000 and daily frequency. Build `20260822.2-candidate`, business fingerprint `a46fff884685`, source-log SHA-256 `AF7E254A7F6C21F9AFA07778375A1922E948E2A6F9A00CBD17494C9989DB8A4E`.
+Validation result: Not run. Reserved periods and live cases were not inspected.
+Why it failed: A sparse veto does not guarantee removal of the unwanted exposure. The normal queue can buy the same ETF later at a worse price or promote another ETF, so both vetoes changed portfolio sequencing without improving directional accuracy. The exact rule reduced payoff while leaving win rate unchanged.
+Can it be revisited? no as a standalone late-MACD/BOLL-upper veto
+Conditions for revisiting: Retain this file only for controlled A/B comparison with the separately user-authorized stacked early-entry candidate. Do not search nearby BOLL distance, cross ages, RSI cutoffs, ETF exceptions, or sell compensation from this failed result.
