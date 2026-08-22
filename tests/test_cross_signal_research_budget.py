@@ -376,7 +376,7 @@ def test_fresh_unextended_entry_candidate_is_exhausted_after_joinquant_rejection
     assert raw["prohibit_alternatives"] is True
 
 
-def test_late_macd_boll_upper_filter_is_exhausted_after_sparse_observation():
+def test_late_macd_boll_upper_filter_is_frozen_pending_user_requested_joinquant():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -392,7 +392,7 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_sparse_observation():
     )
 
     assert budget.max_total_open_experiments == 0
-    assert family.status == "exhausted"
+    assert family.status == "blocked"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
@@ -411,7 +411,14 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_sparse_observation():
     assert raw["matched_events"] == 2
     assert raw["matched_years"] == [2019]
     assert raw["observation_gate_passed"] is False
-    assert raw["candidate_created"] is False
+    assert raw["candidate_created"] is True
+    assert raw["user_override_after_sparse_gate"] is True
+    assert raw["joinquant_status"] == "pending"
+    assert raw["candidate_version"] == (
+        "cross-v0.3.3-late-macd-boll-filter-candidate"
+    )
+    assert raw["candidate_build"] == "20260822.2-candidate"
+    assert raw["candidate_fingerprint"] == "a46fff884685"
     assert raw["primary_path_unchanged"] is True
     assert raw["sell_path_unchanged"] is True
     assert raw["validation_influence"] == "none"

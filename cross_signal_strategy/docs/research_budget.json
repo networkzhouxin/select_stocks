@@ -648,9 +648,9 @@
     {
       "key": "late_macd_boll_upper_filter_user_authorized",
       "label": "User-authorized late-MACD BOLL-upper new-buy filter",
-      "status": "exhausted",
+      "status": "blocked",
       "max_new_experiments": 0,
-      "rationale": "The fixed read-only observation found only 2 matches among 98 official filled buys, both in 2019: 513100 on 2019-03-15 and 159928 on 2019-12-31. It failed the pre-registered minimum of 3 events across at least 2 years, so no veto candidate was created and no nearby rule may be searched.",
+      "rationale": "The fixed read-only observation found only 2 matches among 98 official filled buys, both in 2019, and failed the pre-registered 3-event/2-year gate. After that result and the disclosed 1-win/1-loss attribution, the user explicitly instructed creation of the exact standalone JoinQuant veto candidate anyway. The single candidate is frozen and blocked pending one official 2019-2021 run; no nearby rule may be searched.",
       "candidate_variants": 1,
       "eligible_side": "new_buy_only",
       "event_source": "official_joinquant_filled_buys",
@@ -686,7 +686,20 @@
         }
       ],
       "observation_gate_passed": false,
-      "candidate_created": false,
+      "candidate_created": true,
+      "user_override_after_sparse_gate": true,
+      "candidate_version": "cross-v0.3.3-late-macd-boll-filter-candidate",
+      "candidate_build": "20260822.2-candidate",
+      "candidate_fingerprint": "a46fff884685",
+      "joinquant_status": "pending",
+      "official_gate": {
+        "win_rate_must_improve": true,
+        "positive_to_negative_round_trips_must_not_increase": true,
+        "minimum_return_retention": 0.95,
+        "maximum_drawdown_must_not_worsen": true,
+        "minimum_profit_loss_ratio": 3.0,
+        "every_training_year_positive": true
+      },
       "primary_path_unchanged": true,
       "sell_path_unchanged": true,
       "validation_influence": "none",

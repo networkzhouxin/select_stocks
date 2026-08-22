@@ -3383,6 +3383,12 @@ Official JoinQuant outcome (2026-08-22):
 - Observed matches: 2, both in 2019 — `513100` on 2019-03-15 and `159928` on 2019-12-31.
 - Decision: `STOP`. The 3-event/2-year gate failed; no candidate was created, no threshold was relaxed, and formal `cross-v0.3.3` remains unchanged.
 
+User-directed candidate override:
+- After disclosure that the two matched trades were 1 win/1 loss and that directly vetoing both would have reduced realized PnL by about CNY 355.20, the user explicitly requested the exact JoinQuant rule for a portfolio-path backtest.
+- Standalone candidate: `smart_trade_joinquant_cross_signal_etf_late_macd_boll_filter_candidate.py`.
+- Version/build/fingerprint: `cross-v0.3.3-late-macd-boll-filter-candidate` / `20260822.2-candidate` / `a46fff884685`.
+- This does not modify or promote formal `cross-v0.3.3`; no rule relaxation or neighboring variant is authorized.
+
 
 
 
