@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 73
-    assert report.expected_failed_experiment_count == 73
+    assert report.failed_experiment_count == 75
+    assert report.expected_failed_experiment_count == 75
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -79,6 +79,8 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].status == "exhausted"
     assert families["etf_microstructure"].max_new_experiments == 0
     assert families["etf_microstructure"].planned_experiment is None
+    assert families["sell_score_rebalance_user_authorized"].status == "exhausted"
+    assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
     assert open_families == []
