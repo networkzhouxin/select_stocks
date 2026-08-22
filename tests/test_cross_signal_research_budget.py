@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 69
-    assert report.expected_failed_experiment_count == 69
+    assert report.failed_experiment_count == 70
+    assert report.expected_failed_experiment_count == 70
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -481,6 +481,43 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant(
     ] is True
     assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
+
+
+def test_extreme_zone_score_candidate_is_exhausted_after_noop_local_screen():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    family = next(
+        item for item in budget.families
+        if item.key == "kdj_extreme_zone_score_user_authorized"
+    )
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert raw["oversold_k_max"] == pytest.approx(20.0)
+    assert raw["overbought_k_min"] == pytest.approx(80.0)
+    assert raw["extreme_zone_points"] == pytest.approx(5.0)
+    assert raw["cross_required"] is False
+    assert raw["oversold_bonus_events"] == 93
+    assert raw["overbought_bonus_events"] == 1382
+    assert raw["buy_threshold_crossings"] == 0
+    assert raw["sell_threshold_crossings"] == 11
+    assert raw["local_changed_days"] == 0
+    assert raw["candidate_gate_passed"] is False
+    assert raw["joinquant_status"] == "not_run_local_gate_failed"
+    assert raw["validation_influence"] == "none"
+    assert raw["prohibit_alternatives"] is True
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is False
 
 
 def test_user_authorized_reexpansion_observation_is_consumed_and_rejected():
