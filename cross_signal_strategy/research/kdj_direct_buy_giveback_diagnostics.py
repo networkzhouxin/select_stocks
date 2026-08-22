@@ -46,6 +46,7 @@ class SellDecisionState:
     signal_date: str
     max_data_date: str
     execution_price: float
+    execution_available: bool
     unrealized_return: float
     sell_score: float
     sell_reversal_score: float
@@ -135,11 +136,11 @@ def build_trade_giveback_diagnostic(
         score = dict(score)
         signal_date = _causal_date(score, "signal_date", decision_date)
         max_data_date = _causal_date(score, "max_data_date", decision_date)
-        execution_price = float(
-            loader.get_minute_bar(code, decision_date, "09:35")["close"]
-        )
+        execution_bar = loader.get_minute_bar(code, decision_date, "09:35")
+        execution_price = float(execution_bar["close"])
         if execution_price <= 0:
             raise ValueError("09:35 execution price must be positive")
+        execution_available = _bar_has_executable_trade(execution_bar)
         eligible = bool(strategy.can_sell_by_signal(
             buy_date,
             decision_date,
@@ -161,6 +162,7 @@ def build_trade_giveback_diagnostic(
             signal_date=signal_date,
             max_data_date=max_data_date,
             execution_price=execution_price,
+            execution_available=execution_available,
             unrealized_return=execution_price / buy_price - 1.0,
             sell_score=_number(score.get("sell_score")),
             sell_reversal_score=_number(score.get("sell_reversal_score")),
@@ -197,7 +199,10 @@ def build_trade_giveback_diagnostic(
     )
     peak_return = peak_close / buy_price - 1.0
     realized_return = sell_price / buy_price - 1.0
-    best_decision = max(states, key=lambda item: item.execution_price)
+    executable_states = [item for item in states if item.execution_available]
+    if not executable_states:
+        raise ValueError("holding period has no executable 09:35 decision bar")
+    best_decision = max(executable_states, key=lambda item: item.execution_price)
     best_decision_return = best_decision.execution_price / buy_price - 1.0
     return TradeGivebackDiagnostic(
         code=code,
@@ -346,7 +351,7 @@ def format_direct_kdj_buy_giveback_diagnostics(
         for state in item.states:
             lines.append(
                 "DAY code=%s decision=%s signal=%s price=%.4f unrealized=%.4f "
-                "sell=%.1f reversal=%.1f risk=%.1f extreme=%.1f k=%s "
+                "executable=%s sell=%.1f reversal=%.1f risk=%.1f extreme=%.1f k=%s "
                 "rsi_down=%s macd_down=%s kdj_k_down=%s kdj_j_down=%s "
                 "eligible=%s confirmation=%s adx_protected=%s official_sell=%s "
                 "below_ma20=%s below_boll_mid=%s below_falling_ma10=%s "
@@ -357,6 +362,7 @@ def format_direct_kdj_buy_giveback_diagnostics(
                     state.signal_date,
                     state.execution_price,
                     state.unrealized_return,
+                    state.execution_available,
                     state.sell_score,
                     state.sell_reversal_score,
                     state.sell_risk_score,
@@ -445,6 +451,16 @@ def _optional_text(value: str | None) -> str:
 
 def _optional_number(value: float | None) -> str:
     return "n/a" if value is None else "%.2f" % value
+
+
+def _bar_has_executable_trade(bar: Mapping[str, object]) -> bool:
+    def numeric(field: str) -> float:
+        try:
+            return float(bar.get(field, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return numeric("volume") > 0.0 or numeric("num_trades") > 0.0
 
 
 def main() -> None:

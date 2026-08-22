@@ -28,12 +28,18 @@ class ScoreSource:
 
 
 class PriceLoader:
-    def __init__(self, minute_prices, daily_closes):
+    def __init__(self, minute_prices, daily_closes, non_executable_dates=()):
         self.minute_prices = minute_prices
         self.daily_closes = daily_closes
+        self.non_executable_dates = set(non_executable_dates)
 
     def get_minute_bar(self, code, trade_date, trade_time="09:35"):
-        return {"close": self.minute_prices[(str(trade_date), str(code))]}
+        executable = str(trade_date) not in self.non_executable_dates
+        return {
+            "close": self.minute_prices[(str(trade_date), str(code))],
+            "volume": 100 if executable else 0,
+            "num_trades": 1 if executable else 0,
+        }
 
     def load_daily_frame(self, code, trade_date):
         code_text = str(code).split(".")[0]
@@ -193,6 +199,36 @@ def test_daily_states_separate_score_hold_confirmation_and_adx_bottlenecks():
     assert by_date[dates[5]].kdj_k_down_cross
     assert by_date[dates[5]].k_value == pytest.approx(82.0)
     assert by_date[dates[5]].sell_extreme_zone_score == pytest.approx(5.0)
+
+
+def test_zero_volume_quote_is_not_treated_as_an_executable_best_price():
+    module = _module()
+    dates = pd.bdate_range("2019-02-11", periods=4).strftime("%Y-%m-%d").tolist()
+    scores = {
+        (date, "AAA"): _score(dates[index - 1])
+        for index, date in enumerate(dates[1:], start=1)
+    }
+    loader = PriceLoader(
+        {
+            (dates[1], "AAA"): 10.5,
+            (dates[2], "AAA"): 12.0,
+            (dates[3], "AAA"): 9.8,
+        },
+        {(date, "AAA"): 10.0 for date in dates},
+        non_executable_dates=(dates[2],),
+    )
+
+    item = module.build_trade_giveback_diagnostic(
+        _trade(dates[0], dates[3]),
+        ScoreSource(scores),
+        loader,
+        dates,
+    )
+
+    by_date = {state.decision_date: state for state in item.states}
+    assert not by_date[dates[2]].execution_available
+    assert item.best_decision_date == dates[1]
+    assert item.best_decision_price == pytest.approx(10.5)
 
 
 @pytest.mark.parametrize("field", ["signal_date", "max_data_date"])
