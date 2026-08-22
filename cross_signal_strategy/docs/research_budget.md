@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 67 real ledger entries.
+- Recorded failed or non-adopted experiments: 69 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -80,6 +80,7 @@ it does not change any score, order, position, or risk rule.
 | `fresh_unextended_entry_user_authorized` | exhausted | The official JoinQuant candidate reduced return 129.25%→111.14%, win rate 55.8%→49.0%, and profit/loss ratio 5.297→3.904, while positive-to-negative round trips rose 31→39. The fresh channel closed 4 winners and 15 losers. Reject and archive it; keep official score≥60 and do not search neighboring score, age, ATR, ETF, queue, or sell-compensation variants. |
 | `late_macd_boll_upper_filter_user_authorized` | exhausted | The exact standalone veto emitted 2 events but left win rate unchanged at 55.8% and reduced return 129.25%→124.09%, annual return 32.86%→31.83%, profit/loss ratio 5.297→5.208, Sharpe 2.275→2.185, and information ratio 0.839→0.790. It is rejected and retained only as a controlled comparison base; no nearby veto rule is allowed. |
 | `late_veto_early_pre_macd_user_authorized` | blocked | One user-authorized stacked candidate keeps the failed late veto, preserves the full ≥60 primary queue first, and lets only 50-59 entries with fresh RSI/KDJ crosses plus a negative but narrowing pre-cross MACD spread fill leftover slots. BOLL upper and RSI6≥85 remain hard exclusions; sells are unchanged. It is frozen pending one official 2019-2021 JoinQuant run; no alternatives are allowed. |
+| `opportunity_replacement_user_authorized` | exhausted | The fixed full-capacity rule replaced only sell-score-at-least-30 holdings blocked by price/ADX when all three holdings had completed five sessions and a formal score-at-least-60 candidate existed. Nineteen replacements cut return +125.00%→+89.87%, win rate 56.18%→55.05%, worsened drawdown and every risk-adjusted/annual metric, and increased buys 92→112. Reject before JoinQuant; do not search thresholds, score spreads, ETF exceptions, rankings, hold periods, or cooldowns. |
 
 An exhausted family can reopen only after a new external market-structure reason
 or a proven strategy change creates a genuinely different failure mode. A better
