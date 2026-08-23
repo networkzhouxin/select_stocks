@@ -54,6 +54,14 @@ __pycache__/
 # Pytest runtime work directories
 pytest_tmp_*/
 .pytest-*/
+.pytest_cache/
+.pytest_tmp/
+.codex_pytest_*/
+.codex_tmp_*/
+.probe[0-9]*/
+.pt/
+.pt_*/
+test-tmp/
 cross_signal_strategy/reports/pytest_tmp_*/
 
 # Local Git worktrees
