@@ -3402,6 +3402,19 @@ User-directed candidate override:
 - Approved empirical status: not run. No corrected canonical report exists, no JoinQuant/PTrade candidate was created, and both formal `cross-v0.3.3` files remain unchanged.
 - Validation influence: none. No reserved period was read or used.
 
+## 2026-08-23 v0.4 Dimension-Capped Score Corrective Replay
+
+- Unique empirical command: `python -m cross_signal_strategy.research.dimension_capped_training_ab`, executed once. The same process ran to completion; the frozen CLI contract maps the emitted failed gate to exit `1`, which is the designed `STOP` status rather than a runtime error. Complete stdout was captured separately and normalizes exactly to the canonical report; PowerShell redirection stored CRLF line endings while the canonical writer stored LF.
+- Corrected canonical artifact: `cross_signal_strategy/reports/dimension_capped_score_v04_2019_2021.md`, 9,740,215 bytes, SHA-256 `14395dbf09f506c914bd5da241454b3af4291cf2e701e7653738f50f4840ccd6`. Approved rule fingerprint: `0493e7fbeb80cdaa6d8ab0fe9c47d3fa8ca8b680e6556ca805de4d6e742f7f63`.
+- Invalid provenance remains byte-preserved separately at `cross_signal_strategy/reports/dimension_capped_score_v04_invalid_implementation_2019_2021.md`, 6,606,607 bytes, SHA-256 `e4a1f30e02f2861b8cdb5f0740d27ef07acce002cb5b9307e86b8154aa7b8c76`. Both reports coexist; the invalid report does not determine the corrected conclusion.
+- Materiality: 196 changed filled-order days, split 62/64/70 across 2019/2020/2021. Closed trades were 89 baseline versus 85 candidate, retaining 95.51%.
+- Corrected nominal baseline/candidate: return +125.00%/+78.13%; annualized return 31.13%/21.29%; maximum drawdown 6.03%/6.37%; win rate 56.18%/51.76%; Sharpe 2.262/1.672; Sortino 3.581/2.533; profit/loss ratio 4.878/2.831; buys 92/88; sells and closed trades 89/85. Annual returns were +35.84%/+21.45% in 2019, +52.68%/+43.89% in 2020, and +8.49%/+1.93% in 2021.
+- Corrected doubled-friction baseline/candidate: return +108.15%/+63.32%; annualized return 27.77%/17.82%; maximum drawdown 6.39%/6.93%; win rate 51.69%/45.88%; Sharpe 2.039/1.422; Sortino 3.186/2.125; profit/loss ratio 3.966/2.347. Candidate annual returns were +18.61%/+39.44%/-1.26%.
+- Audit reconciliation: nominal and doubled-friction candidate arms each persisted 6,570 score attempts (6,111 scored, 459 skipped) and 186 planned orders (173 fills). Each arm reconciles independently against its own replay order sequence and buy/sell performance counts.
+- Failed gates: candidate win rate did not strictly improve; nominal return, Sharpe, Sortino, and profit/loss ratio each retained less than 95% of baseline; doubled-friction return retained less than 95%; doubled-friction win rate was below baseline.
+- Terminal action: `STOP`. The corrected failure is appended as a distinct ledger entry, failed/non-adopted count increases 78→79, the correction slot closes, and the v0.4 family is exhausted. No parameter, gate, threshold, pool, year, friction, ranking, hold, ATR, ADX, or protection rule was changed after seeing the result.
+- JoinQuant/PTrade status: no candidate created. Both formal `cross-v0.3.3` files remain unchanged. Validation influence: none; no reserved period was read or used.
+
 
 
 

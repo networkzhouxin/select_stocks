@@ -72,8 +72,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 78
-    assert report.expected_failed_experiment_count == 78
+    assert report.failed_experiment_count == 79
+    assert report.expected_failed_experiment_count == 79
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -96,10 +96,8 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert [family.key for family in open_families] == [
-        "dimension_capped_score_v04_user_authorized"
-    ]
-    assert budget.max_total_open_experiments == 1
+    assert open_families == []
+    assert budget.max_total_open_experiments == 0
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -283,7 +281,7 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
 
 
 def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption():
@@ -296,16 +294,14 @@ def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption(
     families = {family.key: family for family in budget.families}
     family = families["intraday_signal_clock_1445_user_authorized"]
 
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
     ).allowed is False
-    assert [item.key for item in budget.families if item.status == "open"] == [
-        "dimension_capped_score_v04_user_authorized"
-    ]
+    assert [item.key for item in budget.families if item.status == "open"] == []
 
     raw = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload = next(item for item in raw["families"] if item["key"] == family.key)
@@ -331,7 +327,7 @@ def test_user_authorized_1445_signal_clock_is_consumed_and_rejected():
     report_text = DUAL_TIMEPOINT_REPORT.read_text(encoding="utf-8")
     report_gate_passed = "ELIGIBLE_FOR_JOINQUANT_PLAN" in report_text
 
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -420,7 +416,7 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_joinquant_rejection():
         if item["key"] == family.key
     )
 
-    assert budget.max_total_open_experiments == 1
+    assert budget.max_total_open_experiments == 0
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -1174,7 +1170,7 @@ def test_readable_research_map_matches_the_structured_budget():
     assert "不得" in text and "验证期" in text
 
 
-def test_dimension_capped_v04_reopens_exactly_one_corrective_replay_slot():
+def test_dimension_capped_v04_correction_slot_cannot_reopen_after_consumption():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -1184,22 +1180,17 @@ def test_dimension_capped_v04_reopens_exactly_one_corrective_replay_slot():
     families = {item.key: item for item in budget.families}
     family = families["dimension_capped_score_v04_user_authorized"]
 
-    assert budget.max_total_open_experiments == 1
-    assert family.status == "open"
-    assert family.max_new_experiments == 1
-    assert family.planned_experiment == (
-        "one corrective replay of the same approved v0.4 dimension-capped "
-        "structure after implementation-only fixes"
-    )
+    assert budget.max_total_open_experiments == 0
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
-    ).allowed is True
+    ).allowed is False
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=2
     ).allowed is False
-    assert [item.key for item in budget.families if item.status == "open"] == [
-        family.key
-    ]
+    assert [item.key for item in budget.families if item.status == "open"] == []
 
     payload = json.loads(BUDGET.read_text(encoding="utf-8"))
     raw = next(item for item in payload["families"] if item["key"] == family.key)
@@ -1209,8 +1200,8 @@ def test_dimension_capped_v04_reopens_exactly_one_corrective_replay_slot():
     assert raw["ordinary_sell_threshold"] == 24
     assert raw["severe_damage_threshold"] == 18
     assert raw["correction_kind"] == "implementation_only"
-    assert raw["approved_rule_empirically_tested"] is False
-    assert raw["corrective_replay_completed"] is False
+    assert raw["approved_rule_empirically_tested"] is True
+    assert raw["corrective_replay_completed"] is True
     assert raw["invalid_implementation_classification"] == "invalid_implementation"
     assert raw["invalid_implementation_report"] == (
         "cross_signal_strategy/reports/"
@@ -1242,10 +1233,10 @@ def test_dimension_capped_invalid_run_keeps_provenance_without_consuming_a_failu
         if item["key"] == family.key
     )
 
-    assert budget.max_total_open_experiments == 1
-    assert payload["expected_failed_experiment_count"] == 78
-    assert family.status == "open"
-    assert family.max_new_experiments == 1
+    assert budget.max_total_open_experiments == 0
+    assert payload["expected_failed_experiment_count"] == 79
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
     assert raw["invalid_implementation_observed_gate_passed"] is False
     assert raw["invalid_implementation_terminal_action"] == "STOP"
     assert raw["invalid_implementation_local_changed_days"] == 196
@@ -1336,14 +1327,153 @@ def test_dimension_capped_invalid_run_keeps_provenance_without_consuming_a_failu
     assert raw["prohibit_alternatives"] is True
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
-    ).allowed is True
+    ).allowed is False
 
 
-def test_dimension_capped_invalid_report_is_byte_preserved_and_canonical_is_absent():
-    assert not DIMENSION_CAPPED_CANONICAL_REPORT.exists()
+def test_dimension_capped_invalid_and_corrected_reports_coexist():
+    assert DIMENSION_CAPPED_CANONICAL_REPORT.exists()
     assert DIMENSION_CAPPED_INVALID_REPORT.exists()
     payload = DIMENSION_CAPPED_INVALID_REPORT.read_bytes()
     assert len(payload) == 6606607
     assert hashlib.sha256(payload).hexdigest() == (
         "e4a1f30e02f2861b8cdb5f0740d27ef07acce002cb5b9307e86b8154aa7b8c76"
     )
+
+
+def test_dimension_capped_corrective_replay_is_rejected_and_closes_governance():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    family = next(
+        item
+        for item in budget.families
+        if item.key == "dimension_capped_score_v04_user_authorized"
+    )
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(
+        item for item in payload["families"] if item["key"] == family.key
+    )
+
+    assert budget.max_total_open_experiments == 0
+    assert payload["expected_failed_experiment_count"] == 79
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
+    assert family.planned_experiment is None
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is False
+
+    assert raw["correction_kind"] == "implementation_only"
+    assert raw["approved_rule_empirically_tested"] is True
+    assert raw["corrective_replay_completed"] is True
+    assert raw["corrected_report"] == (
+        "cross_signal_strategy/reports/"
+        "dimension_capped_score_v04_2019_2021.md"
+    )
+    assert raw["corrected_report_sha256"] == (
+        "14395dbf09f506c914bd5da241454b3af4291cf2e701e7653738f50f4840ccd6"
+    )
+    assert raw["corrected_report_bytes"] == 9740215
+    assert raw["candidate_rule_fingerprint"] == (
+        "0493e7fbeb80cdaa6d8ab0fe9c47d3fa8ca8b680e6556ca805de4d6e742f7f63"
+    )
+    assert raw["corrected_local_changed_days"] == 196
+    assert raw["corrected_changed_days_by_year"] == {
+        "2019": 62,
+        "2020": 64,
+        "2021": 70,
+    }
+    assert raw["corrected_closed_trade_retention"] == pytest.approx(0.9551)
+
+    assert raw["corrected_baseline_total_return"] == pytest.approx(1.2500)
+    assert raw["corrected_baseline_annualized_return"] == pytest.approx(0.3113)
+    assert raw["corrected_baseline_max_drawdown"] == pytest.approx(0.0603)
+    assert raw["corrected_baseline_sharpe"] == pytest.approx(2.262)
+    assert raw["corrected_baseline_sortino"] == pytest.approx(3.581)
+    assert raw["corrected_baseline_win_rate"] == pytest.approx(0.5618)
+    assert raw["corrected_baseline_profit_loss_ratio"] == pytest.approx(4.878)
+    assert raw["corrected_baseline_buys"] == 92
+    assert raw["corrected_baseline_sells"] == 89
+    assert raw["corrected_baseline_closed_trades"] == 89
+    assert raw["corrected_annual_baseline"] == {
+        "2019": pytest.approx(0.3584),
+        "2020": pytest.approx(0.5268),
+        "2021": pytest.approx(0.0849),
+    }
+
+    assert raw["corrected_candidate_total_return"] == pytest.approx(0.7813)
+    assert raw["corrected_candidate_annualized_return"] == pytest.approx(0.2129)
+    assert raw["corrected_candidate_max_drawdown"] == pytest.approx(0.0637)
+    assert raw["corrected_candidate_sharpe"] == pytest.approx(1.672)
+    assert raw["corrected_candidate_sortino"] == pytest.approx(2.533)
+    assert raw["corrected_candidate_win_rate"] == pytest.approx(0.5176)
+    assert raw["corrected_candidate_profit_loss_ratio"] == pytest.approx(2.831)
+    assert raw["corrected_candidate_buys"] == 88
+    assert raw["corrected_candidate_sells"] == 85
+    assert raw["corrected_candidate_closed_trades"] == 85
+    assert raw["corrected_annual_candidate"] == {
+        "2019": pytest.approx(0.2145),
+        "2020": pytest.approx(0.4389),
+        "2021": pytest.approx(0.0193),
+    }
+
+    assert raw["corrected_double_friction_baseline_total_return"] == pytest.approx(1.0815)
+    assert raw["corrected_double_friction_baseline_annualized_return"] == pytest.approx(0.2777)
+    assert raw["corrected_double_friction_baseline_max_drawdown"] == pytest.approx(0.0639)
+    assert raw["corrected_double_friction_baseline_sharpe"] == pytest.approx(2.039)
+    assert raw["corrected_double_friction_baseline_sortino"] == pytest.approx(3.186)
+    assert raw["corrected_double_friction_baseline_win_rate"] == pytest.approx(0.5169)
+    assert raw["corrected_double_friction_baseline_profit_loss_ratio"] == pytest.approx(3.966)
+    assert raw["corrected_double_friction_baseline_buys"] == 92
+    assert raw["corrected_double_friction_baseline_sells"] == 89
+    assert raw["corrected_double_friction_baseline_closed_trades"] == 89
+    assert raw["corrected_double_friction_annual_baseline"] == {
+        "2019": pytest.approx(0.3229),
+        "2020": pytest.approx(0.4962),
+        "2021": pytest.approx(0.0516),
+    }
+
+    assert raw["corrected_double_friction_candidate_total_return"] == pytest.approx(0.6332)
+    assert raw["corrected_double_friction_candidate_annualized_return"] == pytest.approx(0.1782)
+    assert raw["corrected_double_friction_candidate_max_drawdown"] == pytest.approx(0.0693)
+    assert raw["corrected_double_friction_candidate_sharpe"] == pytest.approx(1.422)
+    assert raw["corrected_double_friction_candidate_sortino"] == pytest.approx(2.125)
+    assert raw["corrected_double_friction_candidate_win_rate"] == pytest.approx(0.4588)
+    assert raw["corrected_double_friction_candidate_profit_loss_ratio"] == pytest.approx(2.347)
+    assert raw["corrected_double_friction_candidate_buys"] == 88
+    assert raw["corrected_double_friction_candidate_sells"] == 85
+    assert raw["corrected_double_friction_candidate_closed_trades"] == 85
+    assert raw["corrected_double_friction_annual_candidate"] == {
+        "2019": pytest.approx(0.1861),
+        "2020": pytest.approx(0.3944),
+        "2021": pytest.approx(-0.0126),
+    }
+
+    assert raw["candidate_gate_passed"] is False
+    assert raw["corrected_gate_reasons"] == [
+        "candidate win rate does not strictly improve",
+        "candidate retains less than 95% of baseline return",
+        "candidate Sharpe ratio retains less than 95%",
+        "candidate Sortino ratio retains less than 95%",
+        "candidate profit/loss ratio retains less than 95%",
+        "doubled-friction return retains less than 95%",
+        "doubled-friction win rate is below baseline",
+    ]
+    assert raw["terminal_action"] == "STOP"
+    assert raw["joinquant_status"] == "not_run_corrected_local_gate_failed"
+    assert raw["local_candidate_created"] is True
+    assert raw["joinquant_candidate_created"] is False
+    assert raw["ptrade_candidate_created"] is False
+    assert raw["formal_files_unchanged"] is True
+    assert raw["validation_influence"] == "none"
+    assert raw["prohibit_alternatives"] is True
+
+    assert DIMENSION_CAPPED_CANONICAL_REPORT.exists()
+    corrected_payload = DIMENSION_CAPPED_CANONICAL_REPORT.read_bytes()
+    assert len(corrected_payload) == raw["corrected_report_bytes"]
+    assert hashlib.sha256(corrected_payload).hexdigest() == raw[
+        "corrected_report_sha256"
+    ]
