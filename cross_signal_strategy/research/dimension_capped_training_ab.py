@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
+import inspect
+import json
 import math
 from pathlib import Path
 import sys
@@ -19,7 +23,7 @@ from cross_signal_strategy.local.local_data_loader import (
     APPROVED_WARMUP_ROOT,
     CrossSignalTrainingDataLoader,
 )
-from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
+from cross_signal_strategy.local.local_backtester import LocalBacktestEngine, LocalBroker
 from cross_signal_strategy.local_training_run import (
     build_training_signal_adapter,
     get_training_trade_dates,
@@ -30,8 +34,10 @@ from cross_signal_strategy.research.friction_diagnostics import (
 )
 from cross_signal_strategy.local.local_order_planner import LocalCrossSignalOrderPlanner
 from cross_signal_strategy.research.baseline_report import build_baseline_report
+from cross_signal_strategy.research import dimension_capped_score_candidate as candidate_rules
 from cross_signal_strategy.research.dimension_capped_score_candidate import (
     DimensionCappedScoreAdapter,
+    has_raw_sell_conflict,
     is_dimension_capped_buy_candidate,
     should_dimension_capped_signal_sell,
     sort_dimension_capped_candidates,
@@ -41,6 +47,8 @@ from cross_signal_strategy.research.dimension_capped_score_candidate import (
 TRAINING_START = "2019-01-01"
 TRAINING_END = "2021-12-31"
 TRAINING_YEARS = (2019, 2020, 2021)
+EXECUTION_TIME = "09:35"
+MIN_SIGNAL_HOLD_DAYS = 5
 DOUBLE_FRICTION = FrictionScenarioConfig(
     commission_rate=0.0006,
     min_commission=10.0,
@@ -51,6 +59,134 @@ REPORT_PATH = (
     / "reports"
     / "dimension_capped_score_v04_2019_2021.md"
 )
+
+
+APPROVED_CANDIDATE_RULE_MANIFEST = {
+    "scoring": {
+        "candidate_name": "cross-v0.4.0-dimension-capped-candidate",
+        "buy": {
+            "reversal": {
+                "cap": 25.0,
+                "minimum": 12.0,
+                "contributions": {
+                    "rsi_group": 12.0,
+                    "kdj_group": 6.0,
+                    "kdj_state_k_le_20": 10.0,
+                    "kdj_state_20_lt_k_le_30": 5.0,
+                    "macd_confirmation": 5.0,
+                },
+            },
+            "location": {
+                "cap": 10.0,
+                "minimum": 7.0,
+                "aggregation": "maximum_single_contribution",
+                "contributions": {
+                    "between_boll_lower_mid": 10.0,
+                    "cross_boll_mid_up": 8.0,
+                    "near_ma20": 7.0,
+                },
+            },
+            "trend": {
+                "cap": 20.0,
+                "minimum": 6.0,
+                "contributions": {
+                    "ma5_gt_ma10": 6.0,
+                    "ma10_gt_ma20": 6.0,
+                    "ma20_slope_non_negative": 5.0,
+                    "close_gt_ma60": 3.0,
+                },
+            },
+            "total_threshold": 40.0,
+            "raw_sell_conflict_required_absent": True,
+        },
+        "sell": {
+            "weakness": {
+                "cap": 20.0,
+                "ordinary_minimum": 10.0,
+                "severe_minimum": 6.0,
+                "contributions": {
+                    "rsi_group": 10.0,
+                    "kdj_group": 6.0,
+                    "kdj_state_k_ge_80": 8.0,
+                    "kdj_state_70_le_k_lt_80": 4.0,
+                    "macd_confirmation": 4.0,
+                },
+            },
+            "damage": {
+                "cap": 20.0,
+                "ordinary_minimum": 8.0,
+                "severe_minimum": 18.0,
+                "aggregation": "maximum_single_contribution",
+                "contributions": {
+                    "downside_continuation": 20.0,
+                    "below_falling_ma10": 18.0,
+                    "below_ma20": 15.0,
+                    "below_boll_mid": 12.0,
+                    "fell_back_inside_boll": 8.0,
+                },
+            },
+            "ordinary_total_threshold": 24.0,
+            "adx_protection": "held_position_soft_sell_only",
+        },
+        "ranking": [
+            "buy_total_desc",
+            "location_desc",
+            "reversal_desc",
+            "a_share_volume_desc",
+            "code_asc",
+        ],
+    },
+    "indicators": {
+        "rsi": [6, 12, 24],
+        "macd": [12, 26, 9],
+        "kdj": [9, 3, 3],
+        "boll": [20, 2.0],
+        "atr": 14,
+        "adx": 14,
+        "ma": [5, 10, 20, 60],
+        "cross_window": 3,
+    },
+    "portfolio": {
+        "pool": [
+            "159915", "512100", "159928", "513100", "513500",
+            "513880", "513050", "518880", "159985",
+        ],
+        "max_hold": 3,
+        "base_ratio": 0.95,
+        "cash_buffer": 0.05,
+        "target_weighting": "equal_weight",
+        "atr_stress_lookback_days": 15,
+        "atr_stress_min_stops": 3,
+        "atr_stress_buy_scale": 0.5,
+    },
+    "execution": {
+        "time": "09:35",
+        "min_signal_hold_days": 5,
+        "signal_boundary": "completed_daily_bars_through_T_minus_1",
+        "execution_price_boundary": "T_09:35_only",
+    },
+    "friction": {
+        "nominal": {
+            "commission_rate": 0.0003,
+            "min_commission": 5.0,
+            "slippage_rate": 0.001,
+        },
+        "doubled": {
+            "commission_rate": 0.0006,
+            "min_commission": 10.0,
+            "slippage_rate": 0.002,
+        },
+    },
+    "atr_stop": {
+        "period": 14,
+        "highest_anchor": "highest_completed_close_since_buy",
+        "trailing_multiplier": 2.5,
+        "floor": 0.05,
+        "cap": 0.15,
+        "decision_price": "T_09:35_execution_price",
+        "bypasses_signal_hold_and_adx": True,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -127,11 +263,124 @@ class DimensionCappedDecisionAudit:
 
 
 @dataclass(frozen=True)
+class DimensionCappedScoreAttemptAudit:
+    decision_date: str
+    code: str
+    status: str
+    causal_boundary: str
+    t_minus_one_date: str | None
+    signal_date: str | None
+    max_data_date: str | None
+    skip_reason: str | None
+
+
+@dataclass(frozen=True)
+class DimensionCappedExecutionAudit:
+    decision_date: str
+    plan_sequence: int
+    code: str
+    planned_side: str
+    planned_reason: str
+    target_value: float
+    status: str
+    filled_amount: int
+    execution_price: float | None
+    commission: float | None
+    unfilled_reason: str | None
+    atr_highest_close: float | None
+    atr_input: float | None
+    atr_position_cost: float | None
+    atr_decision_price: float | None
+    atr_stop_threshold: float | None
+
+
+@dataclass(frozen=True)
 class DimensionCappedComparisonReport:
     config: DimensionCappedTrainingConfig
     inputs: DimensionCappedGateInputs
     gate: DimensionCappedGateDecision
     decision_audits: tuple[DimensionCappedDecisionAudit, ...]
+    score_attempt_audits: tuple[DimensionCappedScoreAttemptAudit, ...] = ()
+    execution_audits: tuple[DimensionCappedExecutionAudit, ...] = ()
+
+
+def approved_candidate_rule_manifest() -> dict:
+    return deepcopy(APPROVED_CANDIDATE_RULE_MANIFEST)
+
+
+def _executable_candidate_rule_manifest() -> dict:
+    params = strategy.get_default_params()
+    broker_parameters = inspect.signature(LocalBroker.__init__).parameters
+    nominal = {
+        "commission_rate": float(broker_parameters["commission_rate"].default),
+        "min_commission": float(broker_parameters["min_commission"].default),
+        "slippage_rate": float(broker_parameters["slippage_rate"].default),
+    }
+    return {
+        "scoring": candidate_rules.executable_candidate_rule_manifest(),
+        "indicators": {
+            "rsi": [int(params["rsi_fast"]), int(params["rsi_mid"]), int(params["rsi_slow"])],
+            "macd": [int(params["macd_fast"]), int(params["macd_slow"]), int(params["macd_signal"])],
+            "kdj": [int(params["kdj_n"]), int(params["kdj_m1"]), int(params["kdj_m2"])],
+            "boll": [int(params["boll_period"]), float(params["boll_std"])],
+            "atr": int(params["atr_period"]),
+            "adx": int(params["adx_period"]),
+            "ma": [5, 10, 20, 60],
+            "cross_window": int(params["cross_window"]),
+        },
+        "portfolio": {
+            "pool": [str(code).split(".")[0] for code in strategy.get_default_etf_pool()],
+            "max_hold": int(params["max_hold"]),
+            "base_ratio": float(params["base_ratio"]),
+            "cash_buffer": round(1.0 - float(params["base_ratio"]), 12),
+            "target_weighting": "equal_weight",
+            "atr_stress_lookback_days": int(params["portfolio_atr_stress_lookback_days"]),
+            "atr_stress_min_stops": int(params["portfolio_atr_stress_min_stops"]),
+            "atr_stress_buy_scale": float(params["portfolio_atr_stress_buy_scale"]),
+        },
+        "execution": {
+            "time": EXECUTION_TIME,
+            "min_signal_hold_days": MIN_SIGNAL_HOLD_DAYS,
+            "signal_boundary": "completed_daily_bars_through_T_minus_1",
+            "execution_price_boundary": "T_09:35_only",
+        },
+        "friction": {
+            "nominal": nominal,
+            "doubled": {
+                "commission_rate": float(DOUBLE_FRICTION.commission_rate),
+                "min_commission": float(DOUBLE_FRICTION.min_commission),
+                "slippage_rate": float(DOUBLE_FRICTION.slippage_rate),
+            },
+        },
+        "atr_stop": {
+            "period": int(params["atr_period"]),
+            "highest_anchor": "highest_completed_close_since_buy",
+            "trailing_multiplier": float(params["trailing_atr_mult"]),
+            "floor": float(params["stop_floor"]),
+            "cap": float(params["stop_cap"]),
+            "decision_price": "T_09:35_execution_price",
+            "bypasses_signal_hold_and_adx": True,
+        },
+    }
+
+
+def _canonical_manifest_text(manifest: Mapping[str, object]) -> str:
+    return json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def candidate_rule_fingerprint(manifest: Mapping[str, object] | None = None) -> str:
+    payload = manifest if manifest is not None else approved_candidate_rule_manifest()
+    return hashlib.sha256(_canonical_manifest_text(payload).encode("utf-8")).hexdigest()
+
+
+def _assert_candidate_rule_manifest_matches_executable() -> None:
+    if _executable_candidate_rule_manifest() != APPROVED_CANDIDATE_RULE_MANIFEST:
+        raise ValueError("executable constants do not match approved candidate rule manifest")
 
 
 def dimension_capped_training_config() -> DimensionCappedTrainingConfig:
@@ -140,10 +389,10 @@ def dimension_capped_training_config() -> DimensionCappedTrainingConfig:
         training_start=TRAINING_START,
         training_end=TRAINING_END,
         initial_cash=20000.0,
-        execution_time="09:35",
-        buy_threshold=40.0,
-        ordinary_sell_threshold=24.0,
-        min_signal_hold_days=5,
+        execution_time=EXECUTION_TIME,
+        buy_threshold=candidate_rules.BUY_THRESHOLD,
+        ordinary_sell_threshold=candidate_rules.ORDINARY_SELL_THRESHOLD,
+        min_signal_hold_days=MIN_SIGNAL_HOLD_DAYS,
         max_hold=3,
         base_ratio=0.95,
         candidate_variants=1,
@@ -169,11 +418,14 @@ def evaluate_dimension_capped_gate(
         _append_performance_validation_reasons(reasons, performance, label)
     if reasons:
         return DimensionCappedGateDecision(False, tuple(reasons))
+    _append_materiality_validation_reasons(reasons, inputs)
+    if reasons:
+        return DimensionCappedGateDecision(False, tuple(reasons))
 
     if inputs.changed_order_days < 10:
         reasons.append("fewer than 10 changed filled-order days")
     for year in TRAINING_YEARS:
-        if int(inputs.changed_days_by_year.get(year, 0)) < 2:
+        if int(inputs.changed_days_by_year[year]) < 2:
             reasons.append(f"{year} has fewer than 2 changed filled-order days")
     if candidate.closed_trade_count < baseline.closed_trade_count * 0.80:
         reasons.append("candidate retains fewer than 80% of closed trades")
@@ -217,6 +469,48 @@ def evaluate_dimension_capped_gate(
     if candidate_x2.win_rate < baseline_x2.win_rate:
         reasons.append("doubled-friction win rate is below baseline")
     return DimensionCappedGateDecision(not reasons, tuple(reasons))
+
+
+def _append_materiality_validation_reasons(
+    reasons: list[str],
+    inputs: DimensionCappedGateInputs,
+) -> None:
+    total_valid = _is_non_negative_integer(inputs.changed_order_days)
+    if not total_valid:
+        reasons.append(
+            "changed_order_days must be a finite non-negative integer"
+        )
+
+    yearly_values: list[int] = []
+    yearly_valid = True
+    for year in TRAINING_YEARS:
+        if year not in inputs.changed_days_by_year:
+            reasons.append(f"{year} changed filled-order days metric is missing")
+            yearly_valid = False
+            continue
+        value = inputs.changed_days_by_year[year]
+        if not _is_non_negative_integer(value):
+            reasons.append(
+                f"{year} changed filled-order days must be a finite non-negative integer"
+            )
+            yearly_valid = False
+            continue
+        yearly_values.append(int(float(value)))
+
+    if total_valid and yearly_valid and int(float(inputs.changed_order_days)) != sum(yearly_values):
+        reasons.append(
+            "changed_order_days does not equal the 2019-2021 yearly total"
+        )
+
+
+def _is_non_negative_integer(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number >= 0.0 and number.is_integer()
 
 
 def _append_performance_validation_reasons(
@@ -398,7 +692,7 @@ def _run_arm(
     engine = LocalBacktestEngine(
         loader=loader,
         initial_cash=initial_cash,
-        execution_time="09:35",
+        execution_time=EXECUTION_TIME,
         broker_kwargs=broker_kwargs,
     )
     return engine.run(trade_dates, planner.plan_orders), planner
@@ -429,11 +723,73 @@ def _build_gate_inputs(
     )
 
 
+def _assert_score_attempt_audits_complete(
+    audits: Sequence[DimensionCappedScoreAttemptAudit],
+    *,
+    trade_dates: Sequence[str],
+    pool: Sequence[str],
+) -> None:
+    expected = {
+        (str(date), str(code).split(".")[0])
+        for date in trade_dates
+        for code in pool
+    }
+    actual = [(audit.decision_date, audit.code) for audit in audits]
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise ValueError("candidate replay lacks a complete pool scoring audit")
+    for audit in audits:
+        if audit.causal_boundary != "completed_daily_bars_through_T_minus_1":
+            raise ValueError("score attempt has an invalid T-1 causal boundary")
+        if audit.status == "skipped":
+            if not audit.skip_reason:
+                raise ValueError("skipped score attempt lacks an exact skip reason")
+            continue
+        if audit.status != "scored":
+            raise ValueError("score attempt has an unknown status")
+        if not audit.signal_date or not audit.max_data_date:
+            raise ValueError("scored attempt lacks causal data dates")
+        if not (
+            audit.max_data_date <= audit.signal_date < audit.decision_date
+        ):
+            raise ValueError("scored attempt violates the T-1 causal boundary")
+
+
+def _assert_execution_audits_reconcile(
+    candidate_days: Sequence[object],
+    audits: Sequence[DimensionCappedExecutionAudit],
+    performance: DimensionCappedPerformance,
+) -> None:
+    replay_orders = [
+        (str(day.date), order)
+        for day in candidate_days
+        for order in getattr(day, "orders", ())
+    ]
+    if len(replay_orders) != len(audits):
+        raise ValueError("planned execution audit count does not match replay orders")
+
+    filled_buys = 0
+    filled_sells = 0
+    for (day_date, order), audit in zip(replay_orders, audits):
+        amount = int(getattr(order, "amount_delta", 0))
+        filled = bool(getattr(order, "filled", False)) and amount != 0
+        if day_date != audit.decision_date or str(order.code).split(".")[0] != audit.code:
+            raise ValueError("execution audit order identity does not match replay order")
+        if filled != (audit.status == "filled") or amount != audit.filled_amount:
+            raise ValueError("execution audit fill status does not match replay order")
+        if filled:
+            filled_buys += int(amount > 0)
+            filled_sells += int(amount < 0)
+
+    if filled_buys != performance.buy_count or filled_sells != performance.sell_count:
+        raise ValueError("execution audit filled counts do not match replay metrics")
+
+
 def run_dimension_capped_training_ab(
     loader=None,
     initial_cash: float = 20000.0,
     warmup_root=APPROVED_WARMUP_ROOT,
 ):
+    _assert_candidate_rule_manifest_matches_executable()
     loader = loader or CrossSignalTrainingDataLoader()
     _assert_approved_loader(loader)
     _assert_approved_warmup_root(warmup_root)
@@ -443,9 +799,9 @@ def run_dimension_capped_training_ab(
     official_params = dict(strategy.get_default_params())
     candidate_params = dict(official_params)
     candidate_params.update({
-        "buy_threshold": 40.0,
-        "sell_threshold": 24.0,
-        "min_signal_hold_days": 5,
+        "buy_threshold": candidate_rules.BUY_THRESHOLD,
+        "sell_threshold": candidate_rules.ORDINARY_SELL_THRESHOLD,
+        "min_signal_hold_days": MIN_SIGNAL_HOLD_DAYS,
     })
     pool = [code.split(".")[0] for code in strategy.get_default_etf_pool()]
     official_source = build_training_signal_adapter(
@@ -506,12 +862,26 @@ def run_dimension_capped_training_ab(
         candidate_x2_days,
         initial_cash,
     )
+    score_attempt_audits = tuple(candidate_planner.score_attempt_audits)
+    execution_audits = tuple(candidate_planner.execution_audits)
+    _assert_score_attempt_audits_complete(
+        score_attempt_audits,
+        trade_dates=trade_dates,
+        pool=pool,
+    )
+    _assert_execution_audits_reconcile(
+        candidate_days,
+        execution_audits,
+        inputs.candidate,
+    )
     gate = evaluate_dimension_capped_gate(inputs)
     return DimensionCappedComparisonReport(
         config=dimension_capped_training_config(),
         inputs=inputs,
         gate=gate,
         decision_audits=tuple(candidate_planner.decision_audits),
+        score_attempt_audits=score_attempt_audits,
+        execution_audits=execution_audits,
     )
 
 
@@ -544,6 +914,10 @@ def format_dimension_capped_comparison(
             )
         ),
         "future_function_audit=T-1_only;causal_score_and_order_evidence_only",
+        "candidate_rule_manifest=%s" % _canonical_manifest_text(
+            approved_candidate_rule_manifest()
+        ),
+        "candidate_rule_fingerprint=%s" % candidate_rule_fingerprint(),
         "",
         "METRICS",
     ]
@@ -588,6 +962,31 @@ def format_dimension_capped_comparison(
         lines.append("audit=none")
     else:
         lines.extend(_audit_line(audit) for audit in report.decision_audits)
+    lines.extend(["", "SCORE_ATTEMPT_AUDIT"])
+    if not report.score_attempt_audits:
+        lines.append("score_attempt=none")
+    else:
+        lines.extend(
+            _score_attempt_audit_line(audit)
+            for audit in report.score_attempt_audits
+        )
+    filled_execution_count = sum(
+        audit.status == "filled" for audit in report.execution_audits
+    )
+    lines.extend([
+        "",
+        "EXECUTION_AUDIT planned_orders=%d filled_orders=%d" % (
+            len(report.execution_audits),
+            filled_execution_count,
+        ),
+    ])
+    if not report.execution_audits:
+        lines.append("execution=none")
+    else:
+        lines.extend(
+            _execution_audit_line(audit)
+            for audit in report.execution_audits
+        )
     lines.extend([
         "",
         "terminal_action=%s" % (
@@ -606,7 +1005,13 @@ def write_report_text(report_path: Path | str, text: str) -> None:
         if destination == root or root in destination.parents:
             raise ValueError("report path is under an immutable data root")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(text, encoding="utf-8")
+    try:
+        with destination.open("x", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            "report writer refuses to overwrite an existing report"
+        ) from exc
 
 
 def main(report_path: Path | str = REPORT_PATH) -> int:
@@ -694,6 +1099,55 @@ def _audit_line(audit: DimensionCappedDecisionAudit) -> str:
     )
 
 
+def _score_attempt_audit_line(audit: DimensionCappedScoreAttemptAudit) -> str:
+    return (
+        "decision_date=%s code=%s status=%s causal_boundary=%s "
+        "t_minus_one_date=%s signal_date=%s max_data_date=%s skip_reason=%s"
+        % (
+            audit.decision_date,
+            audit.code,
+            audit.status,
+            audit.causal_boundary,
+            audit.t_minus_one_date or "not_available",
+            audit.signal_date or "not_available",
+            audit.max_data_date or "not_available",
+            audit.skip_reason or "none",
+        )
+    )
+
+
+def _optional_float_text(value: float | None) -> str:
+    return "not_applicable" if value is None else "%.6f" % value
+
+
+def _execution_audit_line(audit: DimensionCappedExecutionAudit) -> str:
+    return (
+        "decision_date=%s plan_sequence=%d code=%s planned_side=%s "
+        "planned_reason=%s target_value=%.6f execution_status=%s "
+        "filled_amount=%d execution_price=%s commission=%s unfilled_reason=%s "
+        "atr_highest_close=%s atr_input=%s atr_position_cost=%s "
+        "atr_decision_price=%s atr_stop_threshold=%s"
+        % (
+            audit.decision_date,
+            audit.plan_sequence,
+            audit.code,
+            audit.planned_side,
+            audit.planned_reason,
+            audit.target_value,
+            audit.status,
+            audit.filled_amount,
+            _optional_float_text(audit.execution_price),
+            _optional_float_text(audit.commission),
+            audit.unfilled_reason or "none",
+            _optional_float_text(audit.atr_highest_close),
+            _optional_float_text(audit.atr_input),
+            _optional_float_text(audit.atr_position_cost),
+            _optional_float_text(audit.atr_decision_price),
+            _optional_float_text(audit.atr_stop_threshold),
+        )
+    )
+
+
 def _bool_text(value: bool) -> str:
     return "true" if value else "false"
 
@@ -704,17 +1158,46 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
     def __post_init__(self) -> None:
         super().__post_init__()
         self.params = dict(self.params)
-        self.params["min_signal_hold_days"] = 5
+        self.params["min_signal_hold_days"] = MIN_SIGNAL_HOLD_DAYS
         self.decision_audits: list[DimensionCappedDecisionAudit] = []
+        self.score_attempt_audits: list[DimensionCappedScoreAttemptAudit] = []
+        self.execution_audits: list[DimensionCappedExecutionAudit] = []
+        self._current_t_minus_one_date: str | None = None
+        self._pending_execution_plans: dict[str, list[dict[str, object]]] = {}
 
     def _score_pool(self, current_date: str) -> List[dict]:
         scores = []
         for code in self.etf_pool:
             score, reason = self.signal_adapter.score(code, current_date, return_reason=True)
+            normalized_code = str(code).split(".")[0]
             if score is None:
+                if not reason:
+                    raise ValueError("skipped score attempt lacks an exact skip reason")
+                self.score_attempt_audits.append(DimensionCappedScoreAttemptAudit(
+                    decision_date=str(current_date),
+                    code=normalized_code,
+                    status="skipped",
+                    causal_boundary="completed_daily_bars_through_T_minus_1",
+                    t_minus_one_date=self._current_t_minus_one_date,
+                    signal_date=None,
+                    max_data_date=None,
+                    skip_reason=str(reason),
+                ))
                 continue
             score = dict(score)
-            score["code"] = str(score.get("code", code)).split(".")[0]
+            score["code"] = str(score.get("code", normalized_code)).split(".")[0]
+            signal_date = str(score.get("signal_date", "")) or None
+            max_data_date = str(score.get("max_data_date", "")) or None
+            self.score_attempt_audits.append(DimensionCappedScoreAttemptAudit(
+                decision_date=str(current_date),
+                code=normalized_code,
+                status="scored",
+                causal_boundary="completed_daily_bars_through_T_minus_1",
+                t_minus_one_date=self._current_t_minus_one_date or signal_date,
+                signal_date=signal_date,
+                max_data_date=max_data_date,
+                skip_reason=None,
+            ))
             scores.append(score)
         return sort_dimension_capped_candidates(scores)
 
@@ -737,11 +1220,15 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
         current_prices: Mapping[str, float] | None = None,
     ) -> List[Mapping[str, float]]:
         prices = current_prices or {}
+        self._current_t_minus_one_date = (
+            str(previous_date) if previous_date is not None else None
+        )
         scores = self._score_pool(current_date)
         score_map = {score["code"]: score for score in scores}
         self.last_scores = score_map
 
         orders: List[Mapping[str, float]] = []
+        atr_contexts = self._atr_audit_contexts(broker, prices)
         sold_codes = self._atr_stop_codes(broker, prices)
         force_stopped = set(sold_codes)
         for code in sorted(sold_codes):
@@ -833,7 +1320,86 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
                 ),
                 order_reason=order_reasons.get(code),
             ))
+        self._pending_execution_plans[str(current_date)] = [
+            {
+                "code": str(order["code"]).split(".")[0],
+                "target_value": float(order["target_value"]),
+                "reason": str(order["reason"]),
+                "planned_side": (
+                    "sell" if float(order["target_value"]) <= 0.0 else "buy"
+                ),
+                "atr_context": (
+                    atr_contexts.get(str(order["code"]).split(".")[0], {})
+                    if str(order["reason"]) == "atr_stop"
+                    else {}
+                ),
+            }
+            for order in orders
+        ]
         return orders
+
+    def _atr_audit_contexts(
+        self,
+        broker,
+        current_prices: Mapping[str, float],
+    ) -> dict[str, dict[str, float]]:
+        contexts: dict[str, dict[str, float]] = {}
+        for code, position in broker.positions.items():
+            if code not in current_prices:
+                continue
+            highest = self.highest_since_buy.get(code)
+            atr_input = self.entry_atr.get(code)
+            decision_price = float(current_prices[code])
+            if highest is None or atr_input is None or decision_price <= 0.0:
+                continue
+            stop_threshold = strategy.calc_stop_price(
+                float(highest),
+                float(atr_input),
+                float(position.avg_cost),
+                self.params,
+            )
+            contexts[str(code).split(".")[0]] = {
+                "atr_highest_close": float(highest),
+                "atr_input": float(atr_input),
+                "atr_position_cost": float(position.avg_cost),
+                "atr_decision_price": decision_price,
+                "atr_stop_threshold": float(stop_threshold),
+            }
+        return contexts
+
+    def on_orders_filled(self, current_date: str, orders) -> None:
+        pending = self._pending_execution_plans.pop(str(current_date), None)
+        if pending is None or len(pending) != len(orders):
+            raise ValueError("planned execution audit count does not match broker results")
+        for sequence, (plan, order) in enumerate(zip(pending, orders)):
+            code = str(order.code).split(".")[0]
+            if code != plan["code"]:
+                raise ValueError("planned execution audit order identity mismatch")
+            amount = int(getattr(order, "amount_delta", 0))
+            filled = bool(getattr(order, "filled", False)) and amount != 0
+            unfilled_reason = None if filled else str(getattr(order, "reason", "") or "")
+            if not filled and not unfilled_reason:
+                raise ValueError("unfilled planned order lacks an exact broker reason")
+            atr_context = dict(plan["atr_context"])
+            self.execution_audits.append(DimensionCappedExecutionAudit(
+                decision_date=str(current_date),
+                plan_sequence=sequence,
+                code=code,
+                planned_side=str(plan["planned_side"]),
+                planned_reason=str(plan["reason"]),
+                target_value=float(plan["target_value"]),
+                status="filled" if filled else "unfilled",
+                filled_amount=amount,
+                execution_price=float(order.exec_price) if filled else None,
+                commission=float(order.commission) if filled else None,
+                unfilled_reason=unfilled_reason,
+                atr_highest_close=atr_context.get("atr_highest_close"),
+                atr_input=atr_context.get("atr_input"),
+                atr_position_cost=atr_context.get("atr_position_cost"),
+                atr_decision_price=atr_context.get("atr_decision_price"),
+                atr_stop_threshold=atr_context.get("atr_stop_threshold"),
+            ))
+        super().on_orders_filled(current_date, orders)
 
 
 def _kdj_tier(value: object) -> str:
@@ -898,8 +1464,15 @@ def _is_adx_protected(
     weakness = float(score.get("sell_weakness_score", 0.0) or 0.0)
     damage = float(score.get("sell_damage_score", 0.0) or 0.0)
     total = float(score.get("sell_score", 0.0) or 0.0)
-    ordinary = weakness >= 10.0 and damage >= 8.0 and total >= 24.0
-    severe = weakness >= 6.0 and damage >= 18.0
+    ordinary = (
+        weakness >= candidate_rules.SELL_WEAKNESS_MIN
+        and damage >= candidate_rules.SELL_DAMAGE_MIN
+        and total >= candidate_rules.ORDINARY_SELL_THRESHOLD
+    )
+    severe = (
+        weakness >= candidate_rules.SEVERE_WEAKNESS_MIN
+        and damage >= candidate_rules.SEVERE_DAMAGE_MIN
+    )
     return ordinary and not severe and strategy.is_strong_adx_uptrend(score)
 
 
@@ -918,15 +1491,27 @@ def _hard_block_reasons(
         reasons.append("downside_continuation")
     if bool(score.get("weak_repair_blocked")):
         reasons.append("weak_repair_blocked")
-    if float(score.get("reversal_score", 0.0) or 0.0) < 12.0:
+    if (
+        float(score.get("reversal_score", 0.0) or 0.0)
+        < candidate_rules.BUY_REVERSAL_MIN
+    ):
         reasons.append("buy_reversal_below_12")
-    if float(score.get("location_score", 0.0) or 0.0) < 7.0:
+    if (
+        float(score.get("location_score", 0.0) or 0.0)
+        < candidate_rules.BUY_LOCATION_MIN
+    ):
         reasons.append("buy_location_below_7")
-    if float(score.get("trend_score", 0.0) or 0.0) < 6.0:
+    if (
+        float(score.get("trend_score", 0.0) or 0.0)
+        < candidate_rules.BUY_TREND_MIN
+    ):
         reasons.append("buy_trend_below_6")
-    if float(score.get("buy_score", 0.0) or 0.0) < 40.0:
+    if (
+        float(score.get("buy_score", 0.0) or 0.0)
+        < candidate_rules.BUY_THRESHOLD
+    ):
         reasons.append("buy_total_below_40")
-    if should_dimension_capped_signal_sell(dict(score)):
+    if has_raw_sell_conflict(dict(score)):
         reasons.append("sell_conflict")
     if held:
         reasons.append("already_held")

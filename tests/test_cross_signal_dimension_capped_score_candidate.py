@@ -123,6 +123,71 @@ def test_same_direction_multiple_crosses_count_once():
     assert score["reversal_score"] == 25
 
 
+def test_frozen_buy_and_sell_contributions_and_caps_match_the_approved_rule():
+    module = _candidate_module()
+
+    bullish = module.score_snapshot(_snapshot(
+        rsi6_cross_rsi12_up=True,
+        kdj_k_cross_up=True,
+        k=20.0,
+        macd_cross_up=True,
+        close_between_boll_lower_mid=True,
+        close_cross_boll_mid_up=True,
+        close_near_ma20=True,
+        ma5_gt_ma10=True,
+        ma10_gt_ma20=True,
+        ma20_slope_non_negative=True,
+        close_gt_ma60=True,
+    ))
+    assert bullish["raw_buy_reversal_contributions"] == {
+        "rsi_group": 12.0,
+        "kdj_group": 6.0,
+        "kdj_state": 10.0,
+        "macd_confirmation": 5.0,
+    }
+    assert bullish["reversal_score"] == 25.0
+    assert bullish["raw_location_contributions"] == {
+        "between_boll_lower_mid": 10.0,
+        "cross_boll_mid_up": 8.0,
+        "near_ma20": 7.0,
+    }
+    assert bullish["location_score"] == 10.0
+    assert bullish["raw_trend_contributions"] == {
+        "ma5_gt_ma10": 6.0,
+        "ma10_gt_ma20": 6.0,
+        "ma20_slope_non_negative": 5.0,
+        "close_gt_ma60": 3.0,
+    }
+    assert bullish["trend_score"] == 20.0
+
+    bearish = module.score_snapshot(_snapshot(
+        rsi6_cross_rsi12_down=True,
+        kdj_k_cross_down=True,
+        k=80.0,
+        macd_cross_down=True,
+        downside_continuation=True,
+        close_below_falling_ma10=True,
+        close_below_ma20=True,
+        close_below_boll_mid=True,
+        fell_back_inside_boll=True,
+    ))
+    assert bearish["raw_sell_weakness_contributions"] == {
+        "rsi_group": 10.0,
+        "kdj_group": 6.0,
+        "kdj_state": 8.0,
+        "macd_confirmation": 4.0,
+    }
+    assert bearish["sell_weakness_score"] == 20.0
+    assert bearish["raw_sell_damage_contributions"] == {
+        "downside_continuation": 20.0,
+        "below_falling_ma10": 18.0,
+        "below_ma20": 15.0,
+        "below_boll_mid": 12.0,
+        "fell_back_inside_boll": 8.0,
+    }
+    assert bearish["sell_damage_score"] == 20.0
+
+
 def test_location_and_damage_take_the_strongest_item_instead_of_accumulating():
     module = _candidate_module()
     score = module.score_snapshot(_snapshot(
@@ -183,6 +248,63 @@ def test_buy_hard_blocks_chasing_downside_weak_repair_and_sell_conflict():
     for index, item in enumerate(cases):
         held = {"513100"} if index == len(cases) - 1 else set()
         assert not module.is_dimension_capped_buy_candidate(item, held)
+
+
+def test_raw_sell_conflict_blocks_new_buy_even_when_adx_protects_held_soft_sell():
+    module = _candidate_module()
+    ordinary_conflict = dict(
+        module.score_snapshot(_eligible_snapshot()),
+        sell_weakness_score=10.0,
+        sell_damage_score=14.0,
+        sell_score=24.0,
+        adx=30.0,
+        plus_di=35.0,
+        minus_di=10.0,
+        ma20_slope_non_negative=True,
+    )
+
+    assert module.has_raw_sell_conflict(ordinary_conflict)
+    assert not module.should_dimension_capped_signal_sell(ordinary_conflict)
+    assert not module.is_dimension_capped_buy_candidate(
+        ordinary_conflict,
+        held_codes=set(),
+    )
+
+
+def test_frozen_rule_manifest_and_fingerprint_are_deterministic():
+    module = _candidate_module()
+    manifest = module.executable_candidate_rule_manifest()
+
+    assert manifest["candidate_name"] == "cross-v0.4.0-dimension-capped-candidate"
+    assert manifest["buy"]["reversal"] == {
+        "cap": 25.0,
+        "minimum": 12.0,
+        "contributions": {
+            "rsi_group": 12.0,
+            "kdj_group": 6.0,
+            "kdj_state_k_le_20": 10.0,
+            "kdj_state_20_lt_k_le_30": 5.0,
+            "macd_confirmation": 5.0,
+        },
+    }
+    assert manifest["sell"]["weakness"] == {
+        "cap": 20.0,
+        "ordinary_minimum": 10.0,
+        "severe_minimum": 6.0,
+        "contributions": {
+            "rsi_group": 10.0,
+            "kdj_group": 6.0,
+            "kdj_state_k_ge_80": 8.0,
+            "kdj_state_70_le_k_lt_80": 4.0,
+            "macd_confirmation": 4.0,
+        },
+    }
+    first = module.candidate_rule_fingerprint(manifest)
+    second = module.candidate_rule_fingerprint(
+        module.executable_candidate_rule_manifest()
+    )
+    assert first == second
+    assert len(first) == 64
 
 
 def test_ranking_uses_only_the_frozen_keys():

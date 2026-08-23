@@ -3,6 +3,8 @@
 
 from copy import deepcopy
 from dataclasses import replace
+import hashlib
+import json
 import pathlib
 import sys
 from types import SimpleNamespace
@@ -14,7 +16,12 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from cross_signal_strategy.local.local_backtester import LocalBroker, OrderResult, Position
+from cross_signal_strategy.local.local_backtester import (
+    LocalBacktestEngine,
+    LocalBroker,
+    OrderResult,
+    Position,
+)
 
 
 class FakeSignalAdapter:
@@ -127,6 +134,95 @@ def test_dimension_capped_training_configuration_is_exact():
     assert config.warmup_root == pathlib.Path(
         r"G:\financial\history_data\cross_signal_warmup_2018"
     )
+
+
+def test_rule_manifest_enumerates_the_complete_approved_execution_contract():
+    module = _training_module()
+    module._assert_candidate_rule_manifest_matches_executable()
+    manifest = module.approved_candidate_rule_manifest()
+
+    assert manifest["scoring"]["buy"]["total_threshold"] == 40.0
+    assert manifest["scoring"]["sell"]["ordinary_total_threshold"] == 24.0
+    assert manifest["scoring"]["sell"]["weakness"]["contributions"] == {
+        "rsi_group": 10.0,
+        "kdj_group": 6.0,
+        "kdj_state_k_ge_80": 8.0,
+        "kdj_state_70_le_k_lt_80": 4.0,
+        "macd_confirmation": 4.0,
+    }
+    assert manifest["indicators"] == {
+        "rsi": [6, 12, 24],
+        "macd": [12, 26, 9],
+        "kdj": [9, 3, 3],
+        "boll": [20, 2.0],
+        "atr": 14,
+        "adx": 14,
+        "ma": [5, 10, 20, 60],
+        "cross_window": 3,
+    }
+    assert manifest["portfolio"] == {
+        "pool": [
+            "159915", "512100", "159928", "513100", "513500",
+            "513880", "513050", "518880", "159985",
+        ],
+        "max_hold": 3,
+        "base_ratio": 0.95,
+        "cash_buffer": 0.05,
+        "target_weighting": "equal_weight",
+        "atr_stress_lookback_days": 15,
+        "atr_stress_min_stops": 3,
+        "atr_stress_buy_scale": 0.5,
+    }
+    assert manifest["execution"] == {
+        "time": "09:35",
+        "min_signal_hold_days": 5,
+        "signal_boundary": "completed_daily_bars_through_T_minus_1",
+        "execution_price_boundary": "T_09:35_only",
+    }
+    assert manifest["friction"] == {
+        "nominal": {
+            "commission_rate": 0.0003,
+            "min_commission": 5.0,
+            "slippage_rate": 0.001,
+        },
+        "doubled": {
+            "commission_rate": 0.0006,
+            "min_commission": 10.0,
+            "slippage_rate": 0.002,
+        },
+    }
+    assert manifest["atr_stop"] == {
+        "period": 14,
+        "highest_anchor": "highest_completed_close_since_buy",
+        "trailing_multiplier": 2.5,
+        "floor": 0.05,
+        "cap": 0.15,
+        "decision_price": "T_09:35_execution_price",
+        "bypasses_signal_hold_and_adx": True,
+    }
+
+
+def test_runner_rejects_rule_drift_before_touching_the_data_loader(monkeypatch):
+    module = _training_module()
+    from cross_signal_strategy.research import dimension_capped_score_candidate
+
+    touched = []
+
+    class ProbeLoader:
+        @property
+        def root(self):
+            touched.append("root")
+            return module.APPROVED_TRAINING_ROOT
+
+    monkeypatch.setattr(
+        dimension_capped_score_candidate,
+        "SELL_RSI_GROUP_POINTS",
+        11.0,
+    )
+
+    with pytest.raises(ValueError, match="approved candidate rule manifest"):
+        module.run_dimension_capped_training_ab(loader=ProbeLoader())
+    assert touched == []
 
 
 def _performance(**overrides):
@@ -275,6 +371,78 @@ def test_training_gate_allows_mutually_undefined_ratio(field):
         candidate=replace(inputs.candidate, **{field: None}),
     )
     assert _training_module().evaluate_dimension_capped_gate(inputs).passed
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive_inf"),
+        pytest.param(float("-inf"), id="negative_inf"),
+        pytest.param(10.5, id="fractional"),
+        pytest.param(-1, id="negative"),
+    ),
+)
+def test_training_gate_rejects_malformed_changed_order_days(value):
+    inputs = replace(_passing_inputs(), changed_order_days=value)
+
+    decision = _training_module().evaluate_dimension_capped_gate(inputs)
+
+    assert not decision.passed
+    assert (
+        "changed_order_days must be a finite non-negative integer"
+        in decision.reasons
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive_inf"),
+        pytest.param(float("-inf"), id="negative_inf"),
+        pytest.param(3.5, id="fractional"),
+        pytest.param(-1, id="negative"),
+    ),
+)
+def test_training_gate_rejects_malformed_changed_days_by_year(value):
+    inputs = _passing_inputs()
+    by_year = dict(inputs.changed_days_by_year)
+    by_year[2020] = value
+    inputs = replace(inputs, changed_days_by_year=by_year)
+
+    decision = _training_module().evaluate_dimension_capped_gate(inputs)
+
+    assert not decision.passed
+    assert (
+        "2020 changed filled-order days must be a finite non-negative integer"
+        in decision.reasons
+    )
+
+
+def test_training_gate_rejects_missing_or_internally_inconsistent_materiality():
+    inputs = _passing_inputs()
+    missing = dict(inputs.changed_days_by_year)
+    del missing[2020]
+
+    missing_decision = _training_module().evaluate_dimension_capped_gate(
+        replace(inputs, changed_days_by_year=missing)
+    )
+    mismatch_decision = _training_module().evaluate_dimension_capped_gate(
+        replace(
+            inputs,
+            changed_order_days=11,
+            changed_days_by_year={2019: 4, 2020: 3, 2021: 3},
+        )
+    )
+
+    assert not missing_decision.passed
+    assert "2020 changed filled-order days metric is missing" in missing_decision.reasons
+    assert not mismatch_decision.passed
+    assert (
+        "changed_order_days does not equal the 2019-2021 yearly total"
+        in mismatch_decision.reasons
+    )
 
 
 _PERFORMANCE_ARMS = (
@@ -529,7 +697,9 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
         planner = SimpleNamespace(
             decision_audits=["nominal_candidate_audit"]
             if planner_class is module.DimensionCappedOrderPlanner and friction is None
-            else ["ignored_audit"]
+            else ["ignored_audit"],
+            score_attempt_audits=[],
+            execution_audits=[],
         )
         arm_calls.append((
             signal_adapter,
@@ -550,8 +720,23 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
         lambda loader, warmup_root: official_source,
     )
     monkeypatch.setattr(module, "PrecomputedSignalAdapter", FakePrecomputedSignalAdapter)
+    monkeypatch.setattr(
+        module,
+        "_assert_candidate_rule_manifest_matches_executable",
+        lambda: None,
+    )
     monkeypatch.setattr(module, "_run_arm", fake_run_arm)
     monkeypatch.setattr(module, "_build_gate_inputs", lambda *args: _passing_inputs())
+    monkeypatch.setattr(
+        module,
+        "_assert_score_attempt_audits_complete",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        module,
+        "_assert_execution_audits_reconcile",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(
         module.strategy,
         "get_default_params",
@@ -756,6 +941,177 @@ def test_planner_audits_buy_adx_protection_severe_sell_and_atr_stop_causally():
         assert not hasattr(audit, "gate_result")
 
 
+def test_planner_records_every_pool_score_attempt_and_exact_skip_reason():
+    module = _training_module()
+    scored = _candidate_score(
+        "510300",
+        signal_date="2019-07-05",
+        max_data_date="2019-07-05",
+    )
+
+    class MixedAdapter(FakeSignalAdapter):
+        def score(self, code, current_date, return_reason=False):
+            if code == "513100":
+                result = (None, "insufficient_history:42<61")
+                return result if return_reason else None
+            return super().score(code, current_date, return_reason=return_reason)
+
+    planner = module.DimensionCappedOrderPlanner(
+        MixedAdapter({"510300": scored}),
+        etf_pool=["510300", "513100"],
+        trade_dates=_six_trade_dates(),
+    )
+    planner.plan_orders(
+        "2019-07-08",
+        "2019-07-05",
+        LocalBroker(initial_cash=20000.0),
+    )
+
+    attempts = {row.code: row for row in planner.score_attempt_audits}
+    assert set(attempts) == {"510300", "513100"}
+    assert attempts["510300"].status == "scored"
+    assert attempts["510300"].decision_date == "2019-07-08"
+    assert attempts["510300"].t_minus_one_date == "2019-07-05"
+    assert attempts["510300"].signal_date == "2019-07-05"
+    assert attempts["510300"].max_data_date == "2019-07-05"
+    assert attempts["510300"].skip_reason is None
+    assert attempts["513100"].status == "skipped"
+    assert attempts["513100"].causal_boundary == (
+        "completed_daily_bars_through_T_minus_1"
+    )
+    assert attempts["513100"].t_minus_one_date == "2019-07-05"
+    assert attempts["513100"].signal_date is None
+    assert attempts["513100"].max_data_date is None
+    assert attempts["513100"].skip_reason == "insufficient_history:42<61"
+    for row in attempts.values():
+        assert not hasattr(row, "post_decision_return")
+
+
+def test_score_attempt_reconciliation_rejects_any_missing_date_code_row():
+    module = _training_module()
+    complete = (
+        module.DimensionCappedScoreAttemptAudit(
+            decision_date="2019-07-08",
+            code="510300",
+            status="scored",
+            causal_boundary="completed_daily_bars_through_T_minus_1",
+            t_minus_one_date="2019-07-05",
+            signal_date="2019-07-05",
+            max_data_date="2019-07-05",
+            skip_reason=None,
+        ),
+        module.DimensionCappedScoreAttemptAudit(
+            decision_date="2019-07-08",
+            code="513100",
+            status="skipped",
+            causal_boundary="completed_daily_bars_through_T_minus_1",
+            t_minus_one_date="2019-07-05",
+            signal_date=None,
+            max_data_date=None,
+            skip_reason="no_data",
+        ),
+    )
+
+    module._assert_score_attempt_audits_complete(
+        complete,
+        trade_dates=["2019-07-08"],
+        pool=["510300", "513100"],
+    )
+    with pytest.raises(ValueError, match="complete pool scoring audit"):
+        module._assert_score_attempt_audits_complete(
+            complete[:-1],
+            trade_dates=["2019-07-08"],
+            pool=["510300", "513100"],
+        )
+
+
+def test_engine_links_each_planned_order_to_filled_or_exact_unfilled_result():
+    module = _training_module()
+
+    class AuditLoader:
+        def get_minute_bar(self, code, date, time):
+            if code == "513100":
+                raise KeyError(code)
+            return {"close": 10.0, "volume": 1000.0}
+
+        def load_daily_frame(self, code, end_date):
+            return pd.DataFrame([{"date": end_date, "close": 10.0}])
+
+    score_metadata = {
+        "signal_date": "2019-07-05",
+        "max_data_date": "2019-07-05",
+    }
+    planner = module.DimensionCappedOrderPlanner(
+        FakeSignalAdapter({
+            "510300": _candidate_score("510300", **score_metadata),
+            "513100": _candidate_score("513100", **score_metadata),
+        }),
+        etf_pool=["510300", "513100"],
+        trade_dates=["2019-07-08"],
+    )
+    engine = LocalBacktestEngine(AuditLoader(), initial_cash=20000.0)
+
+    days = engine.run(["2019-07-08"], planner.plan_orders)
+
+    audits = planner.execution_audits
+    assert len(audits) == 2
+    filled = next(row for row in audits if row.code == "510300")
+    unfilled = next(row for row in audits if row.code == "513100")
+    assert filled.plan_sequence == 0
+    assert filled.planned_side == "buy"
+    assert filled.planned_reason == "dimension_capped_buy"
+    assert filled.status == "filled"
+    assert filled.filled_amount > 0
+    assert filled.execution_price == pytest.approx(10.01)
+    assert filled.commission == pytest.approx(5.0)
+    assert filled.unfilled_reason is None
+    assert unfilled.plan_sequence == 1
+    assert unfilled.status == "unfilled"
+    assert unfilled.filled_amount == 0
+    assert unfilled.execution_price is None
+    assert unfilled.commission is None
+    assert unfilled.unfilled_reason == "missing execution bar at 09:35"
+
+    performance = _performance(buy_count=1, sell_count=0)
+    module._assert_execution_audits_reconcile(days, audits, performance)
+    with pytest.raises(ValueError, match="planned execution audit count"):
+        module._assert_execution_audits_reconcile(days, audits[:-1], performance)
+
+
+def test_atr_execution_audit_keeps_only_causal_trigger_inputs_and_threshold():
+    planner, broker = _held_atr_stop_fixture(buy_date="2019-07-01")
+    planner.etf_pool = ["510300"]
+    orders = planner.plan_orders(
+        "2019-07-02",
+        "2019-07-01",
+        broker,
+        current_prices={"510300": 8.0, "159915": 4.0},
+    )
+    planner.on_orders_filled(
+        "2019-07-02",
+        [
+            OrderResult(
+                code=orders[0]["code"],
+                amount_delta=-1000,
+                exec_price=7.992,
+                commission=5.0,
+                side_time="2019-07-02 09:35",
+                filled=True,
+                reason="atr_stop",
+            )
+        ],
+    )
+
+    audit = planner.execution_audits[0]
+    assert audit.planned_reason == "atr_stop"
+    assert audit.atr_highest_close == pytest.approx(10.0)
+    assert audit.atr_input == pytest.approx(1.0)
+    assert audit.atr_position_cost == pytest.approx(9.0)
+    assert audit.atr_decision_price == pytest.approx(8.0)
+    assert audit.atr_stop_threshold == pytest.approx(8.5)
+    assert not hasattr(audit, "post_stop_return")
+
+
 @pytest.mark.parametrize("planner_state", (
     "unheld",
     "minimum_hold_blocked",
@@ -860,6 +1216,92 @@ def test_formatter_emits_one_terminal_action_and_causal_audit():
         assert token in passed
 
 
+def test_formatter_persists_the_deterministic_rule_manifest_and_fingerprint():
+    rendered = _training_module().format_dimension_capped_comparison(
+        _comparison_report(True)
+    )
+    manifest_line = next(
+        line for line in rendered.splitlines()
+        if line.startswith("candidate_rule_manifest=")
+    )
+    fingerprint_line = next(
+        line for line in rendered.splitlines()
+        if line.startswith("candidate_rule_fingerprint=")
+    )
+    manifest_text = manifest_line.split("=", 1)[1]
+    manifest = json.loads(manifest_text)
+    expected_fingerprint = hashlib.sha256(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert manifest["scoring"]["buy"]["reversal"]["cap"] == 25.0
+    assert manifest["scoring"]["sell"]["weakness"]["cap"] == 20.0
+    assert fingerprint_line == f"candidate_rule_fingerprint={expected_fingerprint}"
+
+
+def test_formatter_emits_complete_score_attempt_and_execution_audits():
+    module = _training_module()
+    score_attempt = module.DimensionCappedScoreAttemptAudit(
+        decision_date="2019-07-01",
+        code="513100",
+        status="skipped",
+        causal_boundary="completed_daily_bars_through_T_minus_1",
+        t_minus_one_date="2019-06-28",
+        signal_date=None,
+        max_data_date=None,
+        skip_reason="insufficient_history:42<61",
+    )
+    execution = module.DimensionCappedExecutionAudit(
+        decision_date="2019-07-01",
+        plan_sequence=0,
+        code="510300",
+        planned_side="buy",
+        planned_reason="dimension_capped_buy",
+        target_value=6333.333,
+        status="unfilled",
+        filled_amount=0,
+        execution_price=None,
+        commission=None,
+        unfilled_reason="missing execution bar at 09:35",
+        atr_highest_close=None,
+        atr_input=None,
+        atr_position_cost=None,
+        atr_decision_price=None,
+        atr_stop_threshold=None,
+    )
+    report = replace(
+        _comparison_report(False),
+        score_attempt_audits=(score_attempt,),
+        execution_audits=(execution,),
+    )
+
+    rendered = module.format_dimension_capped_comparison(report)
+
+    for token in (
+        "SCORE_ATTEMPT_AUDIT",
+        "status=skipped",
+        "causal_boundary=completed_daily_bars_through_T_minus_1",
+        "t_minus_one_date=2019-06-28",
+        "skip_reason=insufficient_history:42<61",
+        "EXECUTION_AUDIT planned_orders=1 filled_orders=0",
+        "plan_sequence=0",
+        "planned_side=buy",
+        "planned_reason=dimension_capped_buy",
+        "execution_status=unfilled",
+        "filled_amount=0",
+        "execution_price=not_applicable",
+        "commission=not_applicable",
+        "unfilled_reason=missing execution bar at 09:35",
+    ):
+        assert token in rendered
+    assert "post_decision_return" not in rendered
+
+
 def test_formatter_includes_frozen_gate_evidence_and_every_causal_audit_field():
     module = _training_module()
     report = _comparison_report(False)
@@ -947,27 +1389,43 @@ def test_formatter_reports_missing_annual_return_without_inventing_zero():
     assert "BASELINE_ANNUAL_RETURNS=2019:20.00%,2020:0.00%" not in rendered
 
 
-def test_cli_writes_exact_report_once_and_returns_gate_status(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "passed, expected_status",
+    ((True, 0), (False, 1)),
+)
+def test_cli_stdout_matches_persisted_text_and_runs_once_for_each_gate_branch(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    passed,
+    expected_status,
+):
     module = _training_module()
     calls = []
-    passing = _comparison_report(True)
+    report = _comparison_report(passed)
 
     def fake_run():
         calls.append("run")
-        return passing
+        return report
 
     monkeypatch.setattr(module, "run_dimension_capped_training_ab", fake_run)
     output = tmp_path / "report.md"
-    assert module.main(report_path=output) == 0
+    assert module.main(report_path=output) == expected_status
     assert calls == ["run"]
-    assert output.read_text(encoding="utf-8") == (
-        module.format_dimension_capped_comparison(passing) + "\n"
-    )
+    expected_text = module.format_dimension_capped_comparison(report) + "\n"
+    assert output.read_text(encoding="utf-8") == expected_text
+    assert capsys.readouterr().out == expected_text
 
-    monkeypatch.setattr(
-        module, "run_dimension_capped_training_ab", lambda: _comparison_report(False)
-    )
-    assert module.main(report_path=tmp_path / "failed.md") == 1
+
+def test_report_writer_refuses_to_overwrite_an_existing_report(tmp_path):
+    module = _training_module()
+    output = tmp_path / "existing.md"
+    output.write_text("immutable first result\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="refuses to overwrite"):
+        module.write_report_text(output, "replacement\n")
+
+    assert output.read_text(encoding="utf-8") == "immutable first result\n"
 
 
 def test_formatter_leaves_final_newline_ownership_to_the_cli_writer():

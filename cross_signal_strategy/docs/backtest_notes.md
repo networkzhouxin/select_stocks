@@ -3389,16 +3389,17 @@ User-directed candidate override:
 - Version/build/fingerprint: `cross-v0.3.3-late-macd-boll-filter-candidate` / `20260822.2-candidate` / `a46fff884685`.
 - This does not modify or promote formal `cross-v0.3.3`; no rule relaxation or neighboring variant is authorized.
 
-## 2026-08-23 v0.4 Dimension-Capped Score Local Gate
+## 2026-08-23 v0.4 Dimension-Capped Score Invalid-Implementation Provenance
 
-- Candidate: `cross-v0.4.0-dimension-capped-candidate`; exactly one frozen structure and one parameter set were run on the approved read-only 2018 warm-up plus 2019-2021 training roots.
-- Causality: every 09:35 score used T-1 or earlier completed daily bars; execution and marks used T-day prices only. The emitted report contains causal decision audits and no reserved-window or future-outcome fields.
-- Materiality: 196 filled-order days changed, with 62/64/70 changes in 2019/2020/2021. Closed trades were 89 baseline versus 85 candidate, a 95.51% retention rate.
-- Nominal baseline/candidate: return +125.00%/+78.13%; annualized return 31.13%/21.29%; maximum drawdown 6.03%/6.37%; win rate 56.18%/51.76%; Sharpe 2.262/1.672; Sortino 3.581/2.533; profit/loss ratio 4.878/2.831; buys 92/88; sells and closed trades 89/85.
-- Annual baseline/candidate: 2019 +35.84%/+21.45%; 2020 +52.68%/+43.89%; 2021 +8.49%/+1.93%.
-- Doubled-friction baseline/candidate: return +108.15%/+63.32%; annualized return 27.77%/17.82%; maximum drawdown 6.39%/6.93%; win rate 51.69%/45.88%; Sharpe 2.039/1.422; Sortino 3.186/2.125; profit/loss ratio 3.966/2.347. Candidate annual returns were +18.61%/+39.44%/-1.26%.
-- Failed gates: candidate win rate does not strictly improve; candidate return, Sharpe, Sortino, and profit/loss ratio each retain less than 95% of baseline; doubled-friction return retains less than 95%; doubled-friction win rate is below baseline.
-- Decision: `STOP`. Exhaust the family, create no JoinQuant/PTrade candidate, keep both formal `cross-v0.3.3` files unchanged, and prohibit nearby scores, thresholds, filters, ranking variants, indicator deletion, ETF/year exceptions, friction changes, and protection variants.
+- Classification: `invalid_implementation`. The first local run did not execute the approved frozen rule: sell RSI contributed 12 instead of 10, sell MACD contributed 5 instead of 4, and an ordinary raw sell conflict on a buy candidate could be suppressed by ADX instead of blocking the buy independently of ADX and holding period.
+- Preserved artifact: `cross_signal_strategy/reports/dimension_capped_score_v04_invalid_implementation_2019_2021.md`, 6,606,607 bytes, SHA-256 `e4a1f30e02f2861b8cdb5f0740d27ef07acce002cb5b9307e86b8154aa7b8c76`. This is provenance only and is not the canonical corrected report.
+- Observed invalid-run materiality: 196 filled-order days changed, with 62/64/70 changes in 2019/2020/2021. Closed trades were 89 baseline versus 85 candidate, a 95.51% retention rate.
+- Observed invalid-run nominal baseline/candidate: return +125.00%/+78.13%; annualized return 31.13%/21.29%; maximum drawdown 6.03%/6.37%; win rate 56.18%/51.76%; Sharpe 2.262/1.672; Sortino 3.581/2.533; profit/loss ratio 4.878/2.831; buys 92/88; sells and closed trades 89/85.
+- Observed invalid-run annual baseline/candidate: 2019 +35.84%/+21.45%; 2020 +52.68%/+43.89%; 2021 +8.49%/+1.93%.
+- Observed invalid-run doubled-friction baseline/candidate: return +108.15%/+63.32%; annualized return 27.77%/17.82%; maximum drawdown 6.39%/6.93%; win rate 51.69%/45.88%; Sharpe 2.039/1.422; Sortino 3.186/2.125; profit/loss ratio 3.966/2.347. Candidate annual returns were +18.61%/+39.44%/-1.26%.
+- Observed invalid-run gate reasons: candidate win rate did not strictly improve; candidate return, Sharpe, Sortino, and profit/loss ratio each retained less than 95% of baseline; doubled-friction return retained less than 95%; doubled-friction win rate was below baseline. These observations do not approve or reject the approved rule.
+- Governance correction: retract the former `STOP`/exhausted conclusion for the approved v0.4 family. Exactly one corrective replay of the same rule is pending after the implementation-only fixes; no nearby score, threshold, filter, ranking, indicator, ETF/year, friction, protection, hold, or portfolio variant is permitted.
+- Approved empirical status: not run. No corrected canonical report exists, no JoinQuant/PTrade candidate was created, and both formal `cross-v0.3.3` files remain unchanged.
 - Validation influence: none. No reserved period was read or used.
 
 
