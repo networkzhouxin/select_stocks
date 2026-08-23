@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 75
-    assert report.expected_failed_experiment_count == 75
+    assert report.failed_experiment_count == 76
+    assert report.expected_failed_experiment_count == 76
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -83,7 +83,10 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
+    assert [family.key for family in open_families] == [
+        "t1_price_reversal_pre_macd_user_authorized"
+    ]
+    assert budget.max_total_open_experiments == 1
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -436,7 +439,7 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_joinquant_rejection():
     assert raw["prohibit_alternatives"] is True
 
 
-def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant():
+def test_stacked_late_veto_early_pre_macd_candidate_is_rejected_after_joinquant():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -451,7 +454,7 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant(
         if item["key"] == family.key
     )
 
-    assert family.status == "blocked"
+    assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
@@ -477,10 +480,63 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant(
     )
     assert raw["candidate_build"] == "20260822.3-candidate"
     assert raw["candidate_fingerprint"] == "f6b08195dd3d"
-    assert raw["joinquant_status"] == "pending"
+    assert raw["joinquant_status"] == "completed_rejected"
+    assert raw["joinquant_total_return"] == pytest.approx(0.9765)
+    assert raw["joinquant_annualized_return"] == pytest.approx(0.2628)
+    assert raw["joinquant_max_drawdown"] == pytest.approx(0.0675)
+    assert raw["joinquant_win_rate"] == pytest.approx(0.515)
+    assert raw["joinquant_profit_loss_ratio"] == pytest.approx(3.7)
+    assert raw["joinquant_early_fill_count"] == 20
+    assert raw["candidate_gate_passed"] is False
     assert raw["official_gate"][
         "win_rate_must_improve_vs_formal_and_late_veto"
     ] is True
+    assert raw["validation_influence"] == "none"
+    assert raw["prohibit_alternatives"] is True
+
+
+def test_t1_price_reversal_pre_macd_candidate_is_exactly_preregistered():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    family = next(
+        item for item in budget.families
+        if item.key == "t1_price_reversal_pre_macd_user_authorized"
+    )
+    raw = next(
+        item
+        for item in json.loads(BUDGET.read_text(encoding="utf-8"))["families"]
+        if item["key"] == family.key
+    )
+
+    assert family.status == "open"
+    assert family.max_new_experiments == 1
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is True
+    assert raw["candidate_variants"] == 1
+    assert raw["eligible_side"] == "new_buy_leftover_slots_only"
+    assert raw["primary_minimum_buy_score"] == 60
+    assert raw["alternative_requires_official_score_below"] == 60
+    assert raw["rsi_bullish_cross_required"] is True
+    assert raw["kdj_bullish_cross_required"] is True
+    assert raw["official_cross_window_sessions"] == 3
+    assert raw["macd_bullish_cross_required_absent"] is True
+    assert raw["t1_low_must_be_at_least_t2_low"] is True
+    assert raw["t1_close_must_exceed_t2_high"] is True
+    assert raw["queue_order"] == "official_primary_then_alternative"
+    assert raw["alternative_fills_leftover_slots_only"] is True
+    assert raw["score_inflation"] == "none"
+    assert raw["sell_path_unchanged"] is True
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["frozen_gate"]["minimum_direct_alternative_fills"] == 3
+    assert raw["frozen_gate"]["minimum_direct_fill_years"] == 2
+    assert raw["frozen_gate"]["minimum_return_retention"] == pytest.approx(0.95)
+    assert raw["frozen_gate"]["maximum_drawdown_addition"] == pytest.approx(0.005)
+    assert raw["frozen_gate"]["doubled_friction_return_retention"] == pytest.approx(0.95)
     assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
 
