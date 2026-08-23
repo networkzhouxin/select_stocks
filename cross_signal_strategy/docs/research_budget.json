@@ -6,8 +6,24 @@
   },
   "validation_tuning_forbidden": true,
   "expected_failed_experiment_count": 77,
-  "max_total_open_experiments": 0,
+  "max_total_open_experiments": 1,
   "families": [
+    {
+      "key": "dimension_capped_score_v04_user_authorized",
+      "label": "User-authorized v0.4 dimension-capped score structure",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "The user approved one independent score architecture that caps correlated indicator dimensions and separates sell weakness from price damage. This does not reopen exhausted indicator, threshold, extreme-zone, ADX, or ranking searches.",
+      "planned_experiment": "one fixed v0.4 dimension-capped buy/sell score structure with 40-point buy and 24-point ordinary sell gates",
+      "candidate_name": "cross-v0.4.0-dimension-capped-candidate",
+      "candidate_variants": 1,
+      "buy_threshold": 40,
+      "ordinary_sell_threshold": 24,
+      "severe_damage_threshold": 18,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
+      "prohibit_alternatives": true
+    },
     {
       "key": "cross_signal_definition",
       "label": "Cross detection and signal correctness",

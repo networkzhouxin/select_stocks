@@ -92,7 +92,16 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-No research family is open. The fixed
+Exactly one research family is open:
+`dimension_capped_score_v04_user_authorized`, allowing only the single fixed
+candidate `cross-v0.4.0-dimension-capped-candidate`. Its structure caps
+correlated indicator dimensions and separates sell weakness from price damage,
+with a 40-point buy gate, a 24-point ordinary sell gate, and an 18-point
+severe-damage gate. KDJ tier variants, direct extreme exits, MACD changes,
+score rebalance, indicator deletion, and nearby thresholds remain exhausted;
+none may be used as alternatives or additional variants.
+
+The fixed
 `late_macd_boll_upper_filter_user_authorized` candidate completed its official
 2019-2021 JoinQuant run and was rejected because win rate stayed at 55.8% while
 return and all listed payoff/risk-adjusted metrics worsened. The separately

@@ -83,8 +83,10 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
-    assert budget.max_total_open_experiments == 0
+    assert [family.key for family in open_families] == [
+        "dimension_capped_score_v04_user_authorized"
+    ]
+    assert budget.max_total_open_experiments == 1
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -259,7 +261,7 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
 
 
 def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption():
@@ -272,14 +274,16 @@ def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption(
     families = {family.key: family for family in budget.families}
     family = families["intraday_signal_clock_1445_user_authorized"]
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
     ).allowed is False
-    assert [item.key for item in budget.families if item.status == "open"] == []
+    assert [item.key for item in budget.families if item.status == "open"] == [
+        "dimension_capped_score_v04_user_authorized"
+    ]
 
     raw = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload = next(item for item in raw["families"] if item["key"] == family.key)
@@ -305,7 +309,7 @@ def test_user_authorized_1445_signal_clock_is_consumed_and_rejected():
     report_text = DUAL_TIMEPOINT_REPORT.read_text(encoding="utf-8")
     report_gate_passed = "ELIGIBLE_FOR_JOINQUANT_PLAN" in report_text
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -394,7 +398,7 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_joinquant_rejection():
         if item["key"] == family.key
     )
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -1146,3 +1150,42 @@ def test_readable_research_map_matches_the_structured_budget():
     assert "MA20" in text and "10%" in text
     assert "MACD(6,13,5)" in text
     assert "不得" in text and "验证期" in text
+
+
+def test_dimension_capped_v04_is_the_only_open_research_family():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {item.key: item for item in budget.families}
+    family = families["dimension_capped_score_v04_user_authorized"]
+
+    assert budget.max_total_open_experiments == 1
+    assert family.status == "open"
+    assert family.max_new_experiments == 1
+    assert family.planned_experiment == (
+        "one fixed v0.4 dimension-capped buy/sell score structure with "
+        "40-point buy and 24-point ordinary sell gates"
+    )
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=1
+    ).allowed is True
+    assert evaluate_experiment_request(
+        budget, family.key, planned_variants=2
+    ).allowed is False
+    assert [item.key for item in budget.families if item.status == "open"] == [
+        "dimension_capped_score_v04_user_authorized"
+    ]
+
+    payload = json.loads(BUDGET.read_text(encoding="utf-8"))
+    raw = next(item for item in payload["families"] if item["key"] == family.key)
+    assert raw["candidate_name"] == "cross-v0.4.0-dimension-capped-candidate"
+    assert raw["candidate_variants"] == 1
+    assert raw["buy_threshold"] == 40
+    assert raw["ordinary_sell_threshold"] == 24
+    assert raw["severe_damage_threshold"] == 18
+    assert raw["validation_influence"] == "none"
+    assert raw["data_scope"] == "2018_warmup_plus_2019_2021_training_only"
+    assert raw["prohibit_alternatives"] is True
