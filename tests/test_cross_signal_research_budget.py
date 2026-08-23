@@ -137,6 +137,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
 
     payload = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload["max_total_open_experiments"] = 1
+    v04 = next(
+        item for item in payload["families"]
+        if item["key"] == "dimension_capped_score_v04_user_authorized"
+    )
+    v04.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    v04.pop("planned_experiment", None)
     horizontal = next(
         item for item in payload["families"]
         if item["key"] == "horizontal_price_structure"
