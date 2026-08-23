@@ -277,6 +277,117 @@ def test_training_gate_allows_mutually_undefined_ratio(field):
     assert _training_module().evaluate_dimension_capped_gate(inputs).passed
 
 
+_PERFORMANCE_ARMS = (
+    ("baseline", "baseline"),
+    ("candidate", "candidate"),
+    ("baseline_double_friction", "baseline doubled-friction"),
+    ("candidate_double_friction", "candidate doubled-friction"),
+)
+_REQUIRED_PERFORMANCE_SCALARS = (
+    "total_return",
+    "annualized_return",
+    "max_drawdown",
+    "win_rate",
+    "buy_count",
+    "sell_count",
+    "closed_trade_count",
+)
+_OPTIONAL_PERFORMANCE_RATIOS = (
+    ("sharpe_ratio", "Sharpe ratio"),
+    ("sortino_ratio", "Sortino ratio"),
+    ("profit_loss_ratio", "profit/loss ratio"),
+)
+_NON_FINITE_VALUES = (
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive_inf"),
+    pytest.param(float("-inf"), id="negative_inf"),
+)
+
+
+@pytest.mark.parametrize("arm, arm_label", _PERFORMANCE_ARMS)
+@pytest.mark.parametrize("field", _REQUIRED_PERFORMANCE_SCALARS)
+@pytest.mark.parametrize("non_finite", _NON_FINITE_VALUES)
+def test_training_gate_rejects_non_finite_required_scalar(
+    arm,
+    arm_label,
+    field,
+    non_finite,
+):
+    inputs = _passing_inputs()
+    malformed = replace(getattr(inputs, arm), **{field: non_finite})
+    inputs = replace(inputs, **{arm: malformed})
+
+    decision = _training_module().evaluate_dimension_capped_gate(inputs)
+
+    assert not decision.passed
+    assert f"{arm_label} {field} metric is non-finite" in decision.reasons
+
+
+@pytest.mark.parametrize("arm, arm_label", _PERFORMANCE_ARMS)
+@pytest.mark.parametrize("field, field_label", _OPTIONAL_PERFORMANCE_RATIOS)
+@pytest.mark.parametrize("non_finite", _NON_FINITE_VALUES)
+def test_training_gate_rejects_non_finite_optional_ratio(
+    arm,
+    arm_label,
+    field,
+    field_label,
+    non_finite,
+):
+    inputs = _passing_inputs()
+    malformed = replace(getattr(inputs, arm), **{field: non_finite})
+    inputs = replace(inputs, **{arm: malformed})
+
+    decision = _training_module().evaluate_dimension_capped_gate(inputs)
+
+    assert not decision.passed
+    assert (
+        f"{arm_label} {field_label} metric is non-finite"
+        in decision.reasons
+    )
+
+
+@pytest.mark.parametrize("arm, arm_label", _PERFORMANCE_ARMS)
+@pytest.mark.parametrize("year", (2019, 2020, 2021))
+@pytest.mark.parametrize("non_finite", _NON_FINITE_VALUES)
+def test_training_gate_rejects_non_finite_annual_return(
+    arm,
+    arm_label,
+    year,
+    non_finite,
+):
+    inputs = _passing_inputs()
+    annual_returns = dict(getattr(inputs, arm).annual_returns)
+    annual_returns[year] = non_finite
+    malformed = replace(getattr(inputs, arm), annual_returns=annual_returns)
+    inputs = replace(inputs, **{arm: malformed})
+
+    decision = _training_module().evaluate_dimension_capped_gate(inputs)
+
+    assert not decision.passed
+    assert (
+        f"{arm_label} {year} annual return metric is non-finite"
+        in decision.reasons
+    )
+
+
+@pytest.mark.parametrize("arm, arm_label", _PERFORMANCE_ARMS)
+@pytest.mark.parametrize("year", (2019, 2020, 2021))
+def test_training_gate_rejects_missing_annual_return(arm, arm_label, year):
+    inputs = _passing_inputs()
+    annual_returns = dict(getattr(inputs, arm).annual_returns)
+    del annual_returns[year]
+    malformed = replace(getattr(inputs, arm), annual_returns=annual_returns)
+    inputs = replace(inputs, **{arm: malformed})
+
+    decision = _training_module().evaluate_dimension_capped_gate(inputs)
+
+    assert not decision.passed
+    assert (
+        f"{arm_label} {year} annual return metric is missing"
+        in decision.reasons
+    )
+
+
 def _replay_day(date, total_value, orders=()):
     return SimpleNamespace(
         date=date,
@@ -645,6 +756,56 @@ def test_planner_audits_buy_adx_protection_severe_sell_and_atr_stop_causally():
         assert not hasattr(audit, "gate_result")
 
 
+@pytest.mark.parametrize("planner_state", (
+    "unheld",
+    "minimum_hold_blocked",
+    "atr_stopped",
+))
+def test_adx_protection_requires_an_actual_signal_sell_veto(planner_state):
+    module = _training_module()
+    code = "513100"
+    planner = module.DimensionCappedOrderPlanner(
+        FakeSignalAdapter({
+            code: _candidate_score(
+                code,
+                buy_score=10.0,
+                sell_score=24.0,
+                sell_weakness_score=10.0,
+                sell_damage_score=8.0,
+                adx=30.0,
+            ),
+        }),
+        etf_pool=[code],
+        buy_dates={
+            code: (
+                "2019-07-05"
+                if planner_state == "minimum_hold_blocked"
+                else "2019-06-20"
+            ),
+        },
+        trade_dates=_six_trade_dates(),
+    )
+    broker = LocalBroker(initial_cash=20000.0)
+    current_prices = {}
+    if planner_state != "unheld":
+        broker.positions[code] = Position(code, 100, 9.0)
+    if planner_state == "atr_stopped":
+        planner.highest_since_buy[code] = 10.0
+        planner.entry_atr[code] = 1.0
+        current_prices[code] = 8.0
+
+    planner.plan_orders(
+        "2019-07-08",
+        "2019-07-05",
+        broker,
+        current_prices=current_prices,
+    )
+
+    audit = planner.decision_audits[-1]
+    assert audit.code == code
+    assert not audit.adx_protected
+
+
 def _comparison_report(passed):
     module = _training_module()
     audit = module.DimensionCappedDecisionAudit(
@@ -764,6 +925,26 @@ def test_formatter_reports_mutually_undefined_ratios_as_not_applicable():
     report = replace(_comparison_report(True), inputs=inputs)
     rendered = module.format_dimension_capped_comparison(report)
     assert rendered.count("not_applicable") >= 6
+
+
+def test_formatter_reports_missing_annual_return_without_inventing_zero():
+    module = _training_module()
+    inputs = _passing_inputs()
+    annual_returns = dict(inputs.baseline.annual_returns)
+    del annual_returns[2020]
+    inputs = replace(
+        inputs,
+        baseline=replace(inputs.baseline, annual_returns=annual_returns),
+    )
+    report = replace(_comparison_report(False), inputs=inputs)
+
+    rendered = module.format_dimension_capped_comparison(report)
+
+    assert (
+        "BASELINE_ANNUAL_RETURNS=2019:20.00%,2020:missing,2021:15.00%"
+        in rendered
+    )
+    assert "BASELINE_ANNUAL_RETURNS=2019:20.00%,2020:0.00%" not in rendered
 
 
 def test_candidate_planner_sells_first_then_buys_ranked_empty_slots():

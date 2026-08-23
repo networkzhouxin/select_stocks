@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 import sys
 import types
@@ -154,6 +155,16 @@ def evaluate_dimension_capped_gate(
     baseline = inputs.baseline
     candidate = inputs.candidate
     reasons: list[str] = []
+    for performance, label in (
+        (baseline, "baseline"),
+        (candidate, "candidate"),
+        (inputs.baseline_double_friction, "baseline doubled-friction"),
+        (inputs.candidate_double_friction, "candidate doubled-friction"),
+    ):
+        _append_performance_validation_reasons(reasons, performance, label)
+    if reasons:
+        return DimensionCappedGateDecision(False, tuple(reasons))
+
     if inputs.changed_order_days < 10:
         reasons.append("fewer than 10 changed filled-order days")
     for year in TRAINING_YEARS:
@@ -201,6 +212,47 @@ def evaluate_dimension_capped_gate(
     if candidate_x2.win_rate < baseline_x2.win_rate:
         reasons.append("doubled-friction win rate is below baseline")
     return DimensionCappedGateDecision(not reasons, tuple(reasons))
+
+
+def _append_performance_validation_reasons(
+    reasons: list[str],
+    performance: DimensionCappedPerformance,
+    label: str,
+) -> None:
+    for field in (
+        "total_return",
+        "annualized_return",
+        "max_drawdown",
+        "win_rate",
+        "buy_count",
+        "sell_count",
+        "closed_trade_count",
+    ):
+        if not _is_finite_number(getattr(performance, field)):
+            reasons.append(f"{label} {field} metric is non-finite")
+    for field, field_label in (
+        ("sharpe_ratio", "Sharpe ratio"),
+        ("sortino_ratio", "Sortino ratio"),
+        ("profit_loss_ratio", "profit/loss ratio"),
+    ):
+        value = getattr(performance, field)
+        if value is not None and not _is_finite_number(value):
+            reasons.append(f"{label} {field_label} metric is non-finite")
+    annual_returns = performance.annual_returns
+    for year in TRAINING_YEARS:
+        if year not in annual_returns or annual_returns[year] is None:
+            reasons.append(f"{label} {year} annual return metric is missing")
+        elif not _is_finite_number(annual_returns[year]):
+            reasons.append(
+                f"{label} {year} annual return metric is non-finite"
+            )
+
+
+def _is_finite_number(value: object) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _append_ratio_gate_reason(
@@ -496,10 +548,7 @@ def format_dimension_capped_comparison(
             "%s_ANNUAL_RETURNS=%s" % (
                 label,
                 ",".join(
-                    "%d:%.2f%%" % (
-                        year,
-                        performance.annual_returns.get(year, 0.0) * 100.0,
-                    )
+                    "%d:%s" % (year, _annual_return_text(performance, year))
                     for year in TRAINING_YEARS
                 ),
             )
@@ -569,6 +618,14 @@ def _performance_line(
 
 def _format_optional_ratio(value: float | None) -> str:
     return "not_applicable" if value is None else "%.3f" % value
+
+
+def _annual_return_text(
+    performance: DimensionCappedPerformance,
+    year: int,
+) -> str:
+    value = performance.annual_returns.get(year)
+    return "missing" if value is None else "%.2f%%" % (value * 100.0)
 
 
 def _audit_line(audit: DimensionCappedDecisionAudit) -> str:
@@ -734,7 +791,12 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
                 kdj_tier=_kdj_tier(score.get("k")),
                 macd_confirmation=_macd_confirmation(score),
                 raw_contributions=_raw_contributions(score),
-                adx_protected=_is_adx_protected(score),
+                adx_protected=_is_adx_protected(
+                    score,
+                    held=held,
+                    sell_allowed=sell_allowed,
+                    atr_stop=code in force_stopped,
+                ),
                 atr_stop=code in force_stopped,
                 min_hold_blocked=held and not sell_allowed,
                 hard_block_reasons=_hard_block_reasons(
@@ -797,7 +859,15 @@ def _raw_contributions(
     return tuple(rows)
 
 
-def _is_adx_protected(score: Mapping[str, object]) -> bool:
+def _is_adx_protected(
+    score: Mapping[str, object],
+    *,
+    held: bool,
+    sell_allowed: bool,
+    atr_stop: bool,
+) -> bool:
+    if not held or not sell_allowed or atr_stop:
+        return False
     weakness = float(score.get("sell_weakness_score", 0.0) or 0.0)
     damage = float(score.get("sell_damage_score", 0.0) or 0.0)
     total = float(score.get("sell_score", 0.0) or 0.0)
