@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 DOCS_DIR = ROOT / "cross_signal_strategy" / "docs"
 LEDGER_PATH = DOCS_DIR / "failed_experiments.md"
+BUDGET_PATH = DOCS_DIR / "research_budget.json"
 ANNOTATIONS_PATH = DOCS_DIR / "failure_year_fragility_annotations.json"
 REPORT_PATH = DOCS_DIR / "failure_year_fragility_atlas.md"
 README_PATH = DOCS_DIR / "README.md"
@@ -20,11 +21,13 @@ DECISIONS_PATH = DOCS_DIR / "decisions.md"
 
 def test_parser_excludes_template_and_preserves_all_real_ledger_entries():
     from cross_signal_strategy.research.failure_year_atlas import parse_failed_experiments
+    from cross_signal_strategy.research.research_budget import load_research_budget
 
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
+    budget = load_research_budget(BUDGET_PATH)
 
-    assert len(records) == 72
-    assert len({record.record_id for record in records}) == 72
+    assert len(records) == budget.expected_failed_experiment_count
+    assert len({record.record_id for record in records}) == len(records)
     assert all(record.date.startswith("2026-") for record in records)
     assert all(record.experiment for record in records)
 
@@ -59,7 +62,7 @@ def test_atlas_counts_only_explicit_annual_contradictions():
     records = parse_failed_experiments(LEDGER_PATH.read_text(encoding="utf-8"))
     atlas = build_failure_year_atlas(records, load_annotations(ANNOTATIONS_PATH))
 
-    assert atlas.total_experiments == 72
+    assert atlas.total_experiments == len(records)
     assert atlas.annotated_experiments < atlas.total_experiments
     assert atlas.unreported_annual_experiments == (
         atlas.total_experiments - atlas.annotated_experiments

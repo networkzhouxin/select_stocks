@@ -483,6 +483,8 @@ def test_training_runner_uses_identical_official_replay_configuration_for_both_a
 
 
 def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
+    from cross_signal_strategy.research.research_budget import audit_research_budget
+
     report_path = (
         ROOT
         / "cross_signal_strategy"
@@ -504,6 +506,7 @@ def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
     failed = failed_path.read_text(encoding="utf-8")
     budget = json.loads(budget_path.read_text(encoding="utf-8"))
     guide = guide_path.read_text(encoding="utf-8")
+    ledger = audit_research_budget(failed_path, budget_path)
     family = next(
         item
         for item in budget["families"]
@@ -524,7 +527,8 @@ def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
     assert "Validation result: Not run" in failed
     assert "Do not search other decay coefficients" in failed
 
-    assert budget["expected_failed_experiment_count"] == 72
+    assert ledger.errors == ()
+    assert budget["expected_failed_experiment_count"] == ledger.failed_experiment_count
     assert family["status"] == "exhausted"
     assert family["max_new_experiments"] == 0
     assert family["age2_multiplier"] == 0.5
@@ -533,6 +537,9 @@ def test_rejected_experiment_is_recorded_without_a_joinquant_candidate():
     assert family["candidate_gate_passed"] is False
     assert family["candidate_created"] is False
     assert family["prohibit_alternatives"] is True
-    assert "Recorded failed or non-adopted experiments: 72" in guide
+    assert (
+        "Recorded failed or non-adopted experiments: %d"
+        % ledger.failed_experiment_count
+    ) in guide
     assert "bullish_cross_age2_half_decay_user_authorized" in guide
     assert not candidate_path.exists()

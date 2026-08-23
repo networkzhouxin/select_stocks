@@ -244,13 +244,17 @@ def test_candidate_uses_official_five_day_hold_and_three_day_cross_window():
 
 
 def test_failed_candidate_is_closed_in_research_budget_and_ledger():
+    from cross_signal_strategy.research.research_budget import audit_research_budget
+
     root = Path(__file__).resolve().parents[1]
     budget_path = root / "cross_signal_strategy" / "docs" / "research_budget.json"
     ledger_path = root / "cross_signal_strategy" / "docs" / "failed_experiments.md"
     budget = json.loads(budget_path.read_text(encoding="utf-8"))
+    audit = audit_research_budget(ledger_path, budget_path)
     families = {item["key"]: item for item in budget["families"]}
 
-    assert budget["expected_failed_experiment_count"] == 72
+    assert audit.errors == ()
+    assert budget["expected_failed_experiment_count"] == audit.failed_experiment_count
     family = families["macd_fast_exit_user_authorized"]
     assert family["status"] == "exhausted"
     assert family["max_new_experiments"] == 0
