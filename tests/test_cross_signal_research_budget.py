@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 76
-    assert report.expected_failed_experiment_count == 76
+    assert report.failed_experiment_count == 77
+    assert report.expected_failed_experiment_count == 77
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -83,10 +83,8 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert [family.key for family in open_families] == [
-        "t1_price_reversal_pre_macd_user_authorized"
-    ]
-    assert budget.max_total_open_experiments == 1
+    assert open_families == []
+    assert budget.max_total_open_experiments == 0
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
 
 
@@ -495,7 +493,7 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_rejected_after_joinquant(
     assert raw["prohibit_alternatives"] is True
 
 
-def test_t1_price_reversal_pre_macd_candidate_is_exactly_preregistered():
+def test_t1_price_reversal_pre_macd_candidate_is_exhausted_after_failed_gate():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -512,11 +510,11 @@ def test_t1_price_reversal_pre_macd_candidate_is_exactly_preregistered():
         if item["key"] == family.key
     )
 
-    assert family.status == "open"
-    assert family.max_new_experiments == 1
+    assert family.status == "exhausted"
+    assert family.max_new_experiments == 0
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
-    ).allowed is True
+    ).allowed is False
     assert raw["candidate_variants"] == 1
     assert raw["eligible_side"] == "new_buy_leftover_slots_only"
     assert raw["primary_minimum_buy_score"] == 60
@@ -537,6 +535,20 @@ def test_t1_price_reversal_pre_macd_candidate_is_exactly_preregistered():
     assert raw["frozen_gate"]["minimum_return_retention"] == pytest.approx(0.95)
     assert raw["frozen_gate"]["maximum_drawdown_addition"] == pytest.approx(0.005)
     assert raw["frozen_gate"]["doubled_friction_return_retention"] == pytest.approx(0.95)
+    assert raw["direct_alternative_fills"] == 26
+    assert raw["direct_fill_years"] == [2019, 2020, 2021]
+    assert raw["direct_closed_trades"] == 25
+    assert raw["direct_closed_wins"] == 8
+    assert raw["direct_closed_losses"] == 17
+    assert raw["official_total_return"] == pytest.approx(1.250025)
+    assert raw["candidate_total_return"] == pytest.approx(0.7042, abs=0.0001)
+    assert raw["official_win_rate"] == pytest.approx(0.561798)
+    assert raw["candidate_win_rate"] == pytest.approx(0.474747)
+    assert raw["official_double_friction_total_return"] == pytest.approx(1.0815, abs=0.0001)
+    assert raw["candidate_double_friction_total_return"] == pytest.approx(0.5462, abs=0.0001)
+    assert raw["candidate_gate_passed"] is False
+    assert raw["joinquant_status"] == "not_run_local_gate_failed"
+    assert raw["candidate_created"] is False
     assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
 
