@@ -46,6 +46,11 @@ DOUBLE_FRICTION = FrictionScenarioConfig(
     min_commission=10.0,
     slippage_rate=0.002,
 )
+REPORT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "reports"
+    / "dimension_capped_score_v04_2019_2021.md"
+)
 
 
 @dataclass(frozen=True)
@@ -589,7 +594,29 @@ def format_dimension_capped_comparison(
             "ELIGIBLE_FOR_JOINQUANT_PLAN" if report.gate.passed else "STOP"
         ),
     ])
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
+
+
+def write_report_text(report_path: Path | str, text: str) -> None:
+    """Write a report outside both immutable market-data roots."""
+
+    destination = Path(report_path).expanduser().resolve()
+    for immutable_root in (APPROVED_TRAINING_ROOT, APPROVED_WARMUP_ROOT):
+        root = Path(immutable_root).expanduser().resolve()
+        if destination == root or root in destination.parents:
+            raise ValueError("report path is under an immutable data root")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(text, encoding="utf-8")
+
+
+def main(report_path: Path | str = REPORT_PATH) -> int:
+    """Run the one fixed local screen, persist its report, and return gate status."""
+
+    report = run_dimension_capped_training_ab()
+    text = format_dimension_capped_comparison(report) + "\n"
+    write_report_text(report_path, text)
+    sys.stdout.write(text)
+    return 0 if report.gate.passed else 1
 
 
 def _performance_line(
@@ -906,3 +933,7 @@ def _hard_block_reasons(
     if force_stopped:
         reasons.append("same_day_atr_stop")
     return tuple(reasons)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

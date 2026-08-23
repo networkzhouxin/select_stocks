@@ -947,6 +947,47 @@ def test_formatter_reports_missing_annual_return_without_inventing_zero():
     assert "BASELINE_ANNUAL_RETURNS=2019:20.00%,2020:0.00%" not in rendered
 
 
+def test_cli_writes_exact_report_once_and_returns_gate_status(tmp_path, monkeypatch):
+    module = _training_module()
+    calls = []
+    passing = _comparison_report(True)
+
+    def fake_run():
+        calls.append("run")
+        return passing
+
+    monkeypatch.setattr(module, "run_dimension_capped_training_ab", fake_run)
+    output = tmp_path / "report.md"
+    assert module.main(report_path=output) == 0
+    assert calls == ["run"]
+    assert output.read_text(encoding="utf-8") == (
+        module.format_dimension_capped_comparison(passing) + "\n"
+    )
+
+    monkeypatch.setattr(
+        module, "run_dimension_capped_training_ab", lambda: _comparison_report(False)
+    )
+    assert module.main(report_path=tmp_path / "failed.md") == 1
+
+
+def test_formatter_leaves_final_newline_ownership_to_the_cli_writer():
+    rendered = _training_module().format_dimension_capped_comparison(
+        _comparison_report(False)
+    )
+
+    assert not rendered.endswith("\n")
+
+
+def test_report_writer_rejects_both_immutable_data_roots():
+    module = _training_module()
+    for root in (
+        pathlib.Path(r"G:\financial\history_data\cross_signal_train_2019_2021"),
+        pathlib.Path(r"G:\financial\history_data\cross_signal_warmup_2018"),
+    ):
+        with pytest.raises(ValueError, match="immutable data root"):
+            module.write_report_text(root / "forbidden.md", "text")
+
+
 def test_candidate_planner_sells_first_then_buys_ranked_empty_slots():
     module = _training_module()
     planner = module.DimensionCappedOrderPlanner(

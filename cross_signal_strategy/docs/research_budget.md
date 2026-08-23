@@ -7,13 +7,14 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 73 real ledger entries.
+- Recorded failed or non-adopted experiments: 78 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: zero. The sparse Step 0 gate failed, but the user then
-  explicitly requested the exact standalone JoinQuant veto candidate. That
-  one candidate is frozen and blocked pending its official 2019-2021 run.
+- New open budget: zero. The single v0.4 dimension-capped candidate has been
+  consumed and rejected by the frozen local gate; no JoinQuant/PTrade candidate
+  was generated. The separate late-veto/early-pre-MACD family remains blocked,
+  not open.
 - The user-authorized `fresh_unextended_entry_user_authorized` family is
   exhausted. Its official JoinQuant result reduced return from 129.25% to
   111.14%, win rate from 55.8% to 49.0%, and profit/loss ratio from 5.297 to
@@ -46,6 +47,7 @@ it does not change any score, order, position, or risk rule.
 
 | Family key | Status | Decision |
 | --- | --- | --- |
+| `dimension_capped_score_v04_user_authorized` | exhausted | The one fixed candidate changed 196 filled-order days across 2019/2020/2021, but win rate fell 56.18%→51.76%, return fell 125.00%→78.13%, every frozen payoff/risk-adjusted ratio failed retention, and doubled-friction return/win rate worsened. `STOP`; no JoinQuant/PTrade candidate and no nearby variants. |
 | `cross_signal_definition` | adopted | Positional cross alignment, T-1 timing, and the three-day window remain frozen. |
 | `indicator_enumeration` | exhausted | Traditional indicator coverage is already broad; adding more now creates multiple-testing bias. |
 | `threshold_and_period_search` | exhausted | Do not fine-tune indicator periods, score thresholds, ATR multipliers, or hold days. |
@@ -92,14 +94,14 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-Exactly one research family is open:
-`dimension_capped_score_v04_user_authorized`, allowing only the single fixed
-candidate `cross-v0.4.0-dimension-capped-candidate`. Its structure caps
-correlated indicator dimensions and separates sell weakness from price damage,
-with a 40-point buy gate, a 24-point ordinary sell gate, and an 18-point
-severe-damage gate. KDJ tier variants, direct extreme exits, MACD changes,
-score rebalance, indicator deletion, and nearby thresholds remain exhausted;
-none may be used as alternatives or additional variants.
+No research family is open. The single authorized
+`dimension_capped_score_v04_user_authorized` candidate is exhausted after its
+one fixed local run. It changed 196 filled-order days but reduced nominal win
+rate from 56.18% to 51.76%, return from 125.00% to 78.13%, and doubled-friction
+return from 108.15% to 63.32%. The terminal action is `STOP`: no JoinQuant or
+PTrade candidate was generated. KDJ tier variants, direct extreme exits, MACD
+changes, score rebalance, indicator deletion, nearby thresholds, score floors,
+ADX changes, rankings, and ETF/year exceptions remain exhausted and prohibited.
 
 The fixed
 `late_macd_boll_upper_filter_user_authorized` candidate completed its official
