@@ -2,7 +2,7 @@
 
 Date: 2026-08-23
 
-Status: COMPLETE — implementation and governance are prepared for independent review. The corrective empirical replay has not been consumed.
+Status: REVIEW ROUND 1 FIXED — awaiting another independent pre-run review. The corrective empirical replay has not been consumed.
 
 ## Boundary honored
 
@@ -22,6 +22,15 @@ Status: COMPLETE — implementation and governance are prepared for independent 
 6. Added execution audits linking every candidate plan to its same-engine fill result, including amount, price/commission only for fills, exact reason for non-fills, and decision-time ATR inputs/threshold for ATR orders. Planned/fill counts reconcile against replay orders and aggregate buy/sell metrics.
 7. Strengthened CLI/writer behavior: the runner is invoked exactly once on pass and fail paths, stdout equals persisted bytes, immutable data roots are rejected, and an existing report is never overwritten.
 
+## Independent pre-run review round 1 correction
+
+- Review result for `ba0b3bd..bd5c685`: not approved because the independently stateful doubled-friction candidate planner was discarded, leaving only nominal candidate score/execution audits, and because existing-output refusal occurred after the one-shot runner returned.
+- Root cause: the runner retained `candidate_planner` but assigned the doubled-friction candidate planner to `_`; the audit dataclasses and formatter also had no arm identity. The writer used exclusive creation, but `main` reached it only after running the replay.
+- Added explicit immutable arm identities: `candidate_nominal` and `candidate_double_friction`.
+- The runner now retains both candidate planners. A pure collector independently validates complete pool/date score attempts for each arm, reconciles each arm's planned/fill sequence against that arm's replay days, and checks filled buy/sell counts against that arm's own metrics. Missing x2 evidence and nominal evidence substituted for x2 both fail closed.
+- Score-attempt and execution rows now persist `arm=...`; formatter summaries separately report attempts/scored/skipped and planned/filled counts for both candidate arms. No future outcome fields were added.
+- Added a preflight destination guard and a pure `_run_cli_once` orchestration seam. An existing or immutable output path is rejected before the injected one-shot runner can be called; exclusive creation remains as the race-safe second guard.
+
 ## TDD evidence
 
 - Scoring/raw-conflict/score-manifest RED: 3 expected failures; GREEN: 15 passed.
@@ -30,6 +39,8 @@ Status: COMPLETE — implementation and governance are prepared for independent 
 - Score-attempt/execution audit RED: 5 expected failures; GREEN after causal reconciliation was implemented.
 - CLI/no-overwrite RED: the new existing-report refusal test failed while the pass/fail stdout tests already passed; GREEN: 4 passed.
 - Governance RED: the former exhausted/zero-budget state and canonical report location failed the new contract; GREEN: 31 passed after reclassification and exact one-slot reopening.
+- Review round 1 RED: 5 expected failures — missing audit arm fields/collector/formatter separation and missing preflight orchestration.
+- Review round 1 GREEN: 4 double-arm audit tests plus 1 zero-runner-call preflight test; the training-module pure suite passed `232` tests with all empirical runner/main nodes deselected.
 
 ## Invalid first-run provenance
 
@@ -52,7 +63,8 @@ Status: COMPLETE — implementation and governance are prepared for independent 
 
 ## Verification
 
-- Prescribed focused suite: `323 passed in 5.06s`.
+- Original prescribed focused suite: `323 passed in 5.06s`.
+- Review round 1 prescribed pure focused suite: `323 passed, 6 deselected in 3.84s`; every node that invokes `run_dimension_capped_training_ab` or `main` was explicitly deselected, including the newly added main preflight contract test.
 - Focused files: candidate score, training comparison, local order planner, research budget, local signal adapter, local backtester, and baseline report.
 - `git diff --check`: passed (only Git line-ending notices).
 - `research_budget.json`: parsed successfully with `python -m json.tool`.

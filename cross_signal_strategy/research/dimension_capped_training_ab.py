@@ -49,6 +49,12 @@ TRAINING_END = "2021-12-31"
 TRAINING_YEARS = (2019, 2020, 2021)
 EXECUTION_TIME = "09:35"
 MIN_SIGNAL_HOLD_DAYS = 5
+CANDIDATE_NOMINAL_ARM = "candidate_nominal"
+CANDIDATE_DOUBLE_FRICTION_ARM = "candidate_double_friction"
+CANDIDATE_AUDIT_ARMS = (
+    CANDIDATE_NOMINAL_ARM,
+    CANDIDATE_DOUBLE_FRICTION_ARM,
+)
 DOUBLE_FRICTION = FrictionScenarioConfig(
     commission_rate=0.0006,
     min_commission=10.0,
@@ -264,6 +270,7 @@ class DimensionCappedDecisionAudit:
 
 @dataclass(frozen=True)
 class DimensionCappedScoreAttemptAudit:
+    arm: str
     decision_date: str
     code: str
     status: str
@@ -276,6 +283,7 @@ class DimensionCappedScoreAttemptAudit:
 
 @dataclass(frozen=True)
 class DimensionCappedExecutionAudit:
+    arm: str
     decision_date: str
     plan_sequence: int
     code: str
@@ -675,6 +683,7 @@ def _run_arm(
     trade_dates: Sequence[str],
     initial_cash: float,
     friction: FrictionScenarioConfig | None,
+    audit_arm: str | None = None,
 ):
     planner = planner_class(
         signal_adapter,
@@ -682,6 +691,12 @@ def _run_arm(
         params=dict(params),
         trade_dates=list(trade_dates),
     )
+    if audit_arm is not None:
+        if audit_arm not in CANDIDATE_AUDIT_ARMS or not hasattr(
+            planner, "audit_arm"
+        ):
+            raise ValueError("candidate audit arm is invalid for this planner")
+        planner.audit_arm = audit_arm
     broker_kwargs = None
     if friction is not None:
         broker_kwargs = {
@@ -728,15 +743,22 @@ def _assert_score_attempt_audits_complete(
     *,
     trade_dates: Sequence[str],
     pool: Sequence[str],
+    expected_arm: str,
 ) -> None:
     expected = {
         (str(date), str(code).split(".")[0])
         for date in trade_dates
         for code in pool
     }
+    if expected_arm not in CANDIDATE_AUDIT_ARMS:
+        raise ValueError(f"{expected_arm} is not an approved candidate audit arm")
+    if any(audit.arm != expected_arm for audit in audits):
+        raise ValueError(f"{expected_arm} score audit contains another arm")
     actual = [(audit.decision_date, audit.code) for audit in audits]
     if len(actual) != len(expected) or set(actual) != expected:
-        raise ValueError("candidate replay lacks a complete pool scoring audit")
+        raise ValueError(
+            f"{expected_arm} candidate replay lacks a complete pool scoring audit"
+        )
     for audit in audits:
         if audit.causal_boundary != "completed_daily_bars_through_T_minus_1":
             raise ValueError("score attempt has an invalid T-1 causal boundary")
@@ -758,14 +780,22 @@ def _assert_execution_audits_reconcile(
     candidate_days: Sequence[object],
     audits: Sequence[DimensionCappedExecutionAudit],
     performance: DimensionCappedPerformance,
+    *,
+    expected_arm: str,
 ) -> None:
+    if expected_arm not in CANDIDATE_AUDIT_ARMS:
+        raise ValueError(f"{expected_arm} is not an approved candidate audit arm")
+    if any(audit.arm != expected_arm for audit in audits):
+        raise ValueError(f"{expected_arm} execution audit contains another arm")
     replay_orders = [
         (str(day.date), order)
         for day in candidate_days
         for order in getattr(day, "orders", ())
     ]
     if len(replay_orders) != len(audits):
-        raise ValueError("planned execution audit count does not match replay orders")
+        raise ValueError(
+            f"{expected_arm} planned execution audit count does not match replay orders"
+        )
 
     filled_buys = 0
     filled_sells = 0
@@ -781,7 +811,58 @@ def _assert_execution_audits_reconcile(
             filled_sells += int(amount < 0)
 
     if filled_buys != performance.buy_count or filled_sells != performance.sell_count:
-        raise ValueError("execution audit filled counts do not match replay metrics")
+        raise ValueError(
+            f"{expected_arm} execution audit filled counts do not match replay metrics"
+        )
+
+
+def _collect_candidate_arm_audits(
+    *,
+    nominal_days: Sequence[object],
+    nominal_planner,
+    nominal_performance: DimensionCappedPerformance,
+    doubled_days: Sequence[object],
+    doubled_planner,
+    doubled_performance: DimensionCappedPerformance,
+    trade_dates: Sequence[str],
+    pool: Sequence[str],
+) -> tuple[
+    tuple[DimensionCappedScoreAttemptAudit, ...],
+    tuple[DimensionCappedExecutionAudit, ...],
+]:
+    score_attempts: list[DimensionCappedScoreAttemptAudit] = []
+    executions: list[DimensionCappedExecutionAudit] = []
+    for arm, days, planner, performance in (
+        (
+            CANDIDATE_NOMINAL_ARM,
+            nominal_days,
+            nominal_planner,
+            nominal_performance,
+        ),
+        (
+            CANDIDATE_DOUBLE_FRICTION_ARM,
+            doubled_days,
+            doubled_planner,
+            doubled_performance,
+        ),
+    ):
+        arm_score_attempts = tuple(planner.score_attempt_audits)
+        arm_executions = tuple(planner.execution_audits)
+        _assert_score_attempt_audits_complete(
+            arm_score_attempts,
+            trade_dates=trade_dates,
+            pool=pool,
+            expected_arm=arm,
+        )
+        _assert_execution_audits_reconcile(
+            days,
+            arm_executions,
+            performance,
+            expected_arm=arm,
+        )
+        score_attempts.extend(arm_score_attempts)
+        executions.extend(arm_executions)
+    return tuple(score_attempts), tuple(executions)
 
 
 def run_dimension_capped_training_ab(
@@ -834,6 +915,7 @@ def run_dimension_capped_training_ab(
         trade_dates,
         initial_cash,
         None,
+        audit_arm=CANDIDATE_NOMINAL_ARM,
     )
     baseline_x2_days, _ = _run_arm(
         loader,
@@ -845,7 +927,7 @@ def run_dimension_capped_training_ab(
         initial_cash,
         DOUBLE_FRICTION,
     )
-    candidate_x2_days, _ = _run_arm(
+    candidate_x2_days, candidate_x2_planner = _run_arm(
         loader,
         candidate_source,
         DimensionCappedOrderPlanner,
@@ -854,6 +936,7 @@ def run_dimension_capped_training_ab(
         trade_dates,
         initial_cash,
         DOUBLE_FRICTION,
+        audit_arm=CANDIDATE_DOUBLE_FRICTION_ARM,
     )
     inputs = _build_gate_inputs(
         baseline_days,
@@ -862,17 +945,15 @@ def run_dimension_capped_training_ab(
         candidate_x2_days,
         initial_cash,
     )
-    score_attempt_audits = tuple(candidate_planner.score_attempt_audits)
-    execution_audits = tuple(candidate_planner.execution_audits)
-    _assert_score_attempt_audits_complete(
-        score_attempt_audits,
+    score_attempt_audits, execution_audits = _collect_candidate_arm_audits(
+        nominal_days=candidate_days,
+        nominal_planner=candidate_planner,
+        nominal_performance=inputs.candidate,
+        doubled_days=candidate_x2_days,
+        doubled_planner=candidate_x2_planner,
+        doubled_performance=inputs.candidate_double_friction,
         trade_dates=trade_dates,
         pool=pool,
-    )
-    _assert_execution_audits_reconcile(
-        candidate_days,
-        execution_audits,
-        inputs.candidate,
     )
     gate = evaluate_dimension_capped_gate(inputs)
     return DimensionCappedComparisonReport(
@@ -962,31 +1043,45 @@ def format_dimension_capped_comparison(
         lines.append("audit=none")
     else:
         lines.extend(_audit_line(audit) for audit in report.decision_audits)
-    lines.extend(["", "SCORE_ATTEMPT_AUDIT"])
+    lines.append("")
     if not report.score_attempt_audits:
+        lines.append("SCORE_ATTEMPT_AUDIT")
         lines.append("score_attempt=none")
     else:
-        lines.extend(
-            _score_attempt_audit_line(audit)
-            for audit in report.score_attempt_audits
-        )
-    filled_execution_count = sum(
-        audit.status == "filled" for audit in report.execution_audits
-    )
-    lines.extend([
-        "",
-        "EXECUTION_AUDIT planned_orders=%d filled_orders=%d" % (
-            len(report.execution_audits),
-            filled_execution_count,
-        ),
-    ])
+        for arm in CANDIDATE_AUDIT_ARMS:
+            arm_rows = tuple(
+                audit for audit in report.score_attempt_audits
+                if audit.arm == arm
+            )
+            lines.append(
+                "SCORE_ATTEMPT_AUDIT arm=%s attempts=%d scored=%d skipped=%d"
+                % (
+                    arm,
+                    len(arm_rows),
+                    sum(audit.status == "scored" for audit in arm_rows),
+                    sum(audit.status == "skipped" for audit in arm_rows),
+                )
+            )
+            lines.extend(_score_attempt_audit_line(audit) for audit in arm_rows)
+    lines.append("")
     if not report.execution_audits:
+        lines.append("EXECUTION_AUDIT")
         lines.append("execution=none")
     else:
-        lines.extend(
-            _execution_audit_line(audit)
-            for audit in report.execution_audits
-        )
+        for arm in CANDIDATE_AUDIT_ARMS:
+            arm_rows = tuple(
+                audit for audit in report.execution_audits
+                if audit.arm == arm
+            )
+            lines.append(
+                "EXECUTION_AUDIT arm=%s planned_orders=%d filled_orders=%d"
+                % (
+                    arm,
+                    len(arm_rows),
+                    sum(audit.status == "filled" for audit in arm_rows),
+                )
+            )
+            lines.extend(_execution_audit_line(audit) for audit in arm_rows)
     lines.extend([
         "",
         "terminal_action=%s" % (
@@ -996,14 +1091,25 @@ def format_dimension_capped_comparison(
     return "\n".join(lines)
 
 
-def write_report_text(report_path: Path | str, text: str) -> None:
-    """Write a report outside both immutable market-data roots."""
+def _preflight_report_destination(report_path: Path | str) -> Path:
+    """Resolve a safe, absent output path before consuming a one-shot replay."""
 
     destination = Path(report_path).expanduser().resolve()
     for immutable_root in (APPROVED_TRAINING_ROOT, APPROVED_WARMUP_ROOT):
         root = Path(immutable_root).expanduser().resolve()
         if destination == root or root in destination.parents:
             raise ValueError("report path is under an immutable data root")
+    if destination.exists():
+        raise FileExistsError(
+            "report writer refuses to overwrite an existing report"
+        )
+    return destination
+
+
+def write_report_text(report_path: Path | str, text: str) -> None:
+    """Write a report outside both immutable market-data roots."""
+
+    destination = _preflight_report_destination(report_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         with destination.open("x", encoding="utf-8", newline="") as handle:
@@ -1014,14 +1120,22 @@ def write_report_text(report_path: Path | str, text: str) -> None:
         ) from exc
 
 
+def _run_cli_once(report_path: Path | str, runner) -> tuple[int, str]:
+    """Preflight output, call the injected one-shot runner, and persist once."""
+
+    destination = _preflight_report_destination(report_path)
+    report = runner()
+    text = format_dimension_capped_comparison(report) + "\n"
+    write_report_text(destination, text)
+    return (0 if report.gate.passed else 1), text
+
+
 def main(report_path: Path | str = REPORT_PATH) -> int:
     """Run the one fixed local screen, persist its report, and return gate status."""
 
-    report = run_dimension_capped_training_ab()
-    text = format_dimension_capped_comparison(report) + "\n"
-    write_report_text(report_path, text)
+    status, text = _run_cli_once(report_path, run_dimension_capped_training_ab)
     sys.stdout.write(text)
-    return 0 if report.gate.passed else 1
+    return status
 
 
 def _performance_line(
@@ -1101,9 +1215,10 @@ def _audit_line(audit: DimensionCappedDecisionAudit) -> str:
 
 def _score_attempt_audit_line(audit: DimensionCappedScoreAttemptAudit) -> str:
     return (
-        "decision_date=%s code=%s status=%s causal_boundary=%s "
+        "arm=%s decision_date=%s code=%s status=%s causal_boundary=%s "
         "t_minus_one_date=%s signal_date=%s max_data_date=%s skip_reason=%s"
         % (
+            audit.arm,
             audit.decision_date,
             audit.code,
             audit.status,
@@ -1122,12 +1237,13 @@ def _optional_float_text(value: float | None) -> str:
 
 def _execution_audit_line(audit: DimensionCappedExecutionAudit) -> str:
     return (
-        "decision_date=%s plan_sequence=%d code=%s planned_side=%s "
+        "arm=%s decision_date=%s plan_sequence=%d code=%s planned_side=%s "
         "planned_reason=%s target_value=%.6f execution_status=%s "
         "filled_amount=%d execution_price=%s commission=%s unfilled_reason=%s "
         "atr_highest_close=%s atr_input=%s atr_position_cost=%s "
         "atr_decision_price=%s atr_stop_threshold=%s"
         % (
+            audit.arm,
             audit.decision_date,
             audit.plan_sequence,
             audit.code,
@@ -1162,6 +1278,7 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
         self.decision_audits: list[DimensionCappedDecisionAudit] = []
         self.score_attempt_audits: list[DimensionCappedScoreAttemptAudit] = []
         self.execution_audits: list[DimensionCappedExecutionAudit] = []
+        self.audit_arm = CANDIDATE_NOMINAL_ARM
         self._current_t_minus_one_date: str | None = None
         self._pending_execution_plans: dict[str, list[dict[str, object]]] = {}
 
@@ -1174,6 +1291,7 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
                 if not reason:
                     raise ValueError("skipped score attempt lacks an exact skip reason")
                 self.score_attempt_audits.append(DimensionCappedScoreAttemptAudit(
+                    arm=self.audit_arm,
                     decision_date=str(current_date),
                     code=normalized_code,
                     status="skipped",
@@ -1189,6 +1307,7 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
             signal_date = str(score.get("signal_date", "")) or None
             max_data_date = str(score.get("max_data_date", "")) or None
             self.score_attempt_audits.append(DimensionCappedScoreAttemptAudit(
+                arm=self.audit_arm,
                 decision_date=str(current_date),
                 code=normalized_code,
                 status="scored",
@@ -1382,6 +1501,7 @@ class DimensionCappedOrderPlanner(LocalCrossSignalOrderPlanner):
                 raise ValueError("unfilled planned order lacks an exact broker reason")
             atr_context = dict(plan["atr_context"])
             self.execution_audits.append(DimensionCappedExecutionAudit(
+                arm=self.audit_arm,
                 decision_date=str(current_date),
                 plan_sequence=sequence,
                 code=code,

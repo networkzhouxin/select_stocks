@@ -669,6 +669,7 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
     cached_source = object()
     cache_calls = []
     arm_calls = []
+    collector_calls = []
     official_defaults = {
         "buy_threshold": 45.0,
         "sell_threshold": 28.0,
@@ -693,6 +694,7 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
         dates,
         initial_cash,
         friction,
+        audit_arm=None,
     ):
         planner = SimpleNamespace(
             decision_audits=["nominal_candidate_audit"]
@@ -710,8 +712,16 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
             initial_cash,
             friction,
             planner,
+            audit_arm,
         ))
         return [_replay_day(date, initial_cash) for date in dates], planner
+
+    def fake_collect_candidate_arm_audits(**kwargs):
+        collector_calls.append(kwargs)
+        return (
+            ("nominal_score_audit", "x2_score_audit"),
+            ("nominal_execution_audit", "x2_execution_audit"),
+        )
 
     monkeypatch.setattr(module, "get_training_trade_dates", lambda loader: trade_dates)
     monkeypatch.setattr(
@@ -729,13 +739,8 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
     monkeypatch.setattr(module, "_build_gate_inputs", lambda *args: _passing_inputs())
     monkeypatch.setattr(
         module,
-        "_assert_score_attempt_audits_complete",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        module,
-        "_assert_execution_audits_reconcile",
-        lambda *args, **kwargs: None,
+        "_collect_candidate_arm_audits",
+        fake_collect_candidate_arm_audits,
     )
     monkeypatch.setattr(
         module.strategy,
@@ -770,6 +775,18 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
     assert [call[6] for call in arm_calls] == [
         None, None, module.DOUBLE_FRICTION, module.DOUBLE_FRICTION,
     ]
+    assert [call[8] for call in arm_calls] == [
+        None,
+        module.CANDIDATE_NOMINAL_ARM,
+        None,
+        module.CANDIDATE_DOUBLE_FRICTION_ARM,
+    ]
+    assert len(collector_calls) == 1
+    assert collector_calls[0]["nominal_planner"] is arm_calls[1][7]
+    assert collector_calls[0]["doubled_planner"] is arm_calls[3][7]
+    assert collector_calls[0]["nominal_planner"] is not collector_calls[0][
+        "doubled_planner"
+    ]
     assert arm_calls[0][2] == official_defaults
     assert arm_calls[1][2] == {
         **official_defaults,
@@ -779,6 +796,14 @@ def test_runner_builds_one_official_cache_and_four_independent_arms(monkeypatch)
     }
     assert official_defaults["buy_threshold"] == 45.0
     assert report.decision_audits == ("nominal_candidate_audit",)
+    assert report.score_attempt_audits == (
+        "nominal_score_audit",
+        "x2_score_audit",
+    )
+    assert report.execution_audits == (
+        "nominal_execution_audit",
+        "x2_execution_audit",
+    )
 
 
 def test_run_arm_applies_doubled_friction_to_an_independent_engine():
@@ -991,6 +1016,7 @@ def test_score_attempt_reconciliation_rejects_any_missing_date_code_row():
     module = _training_module()
     complete = (
         module.DimensionCappedScoreAttemptAudit(
+            arm="candidate_nominal",
             decision_date="2019-07-08",
             code="510300",
             status="scored",
@@ -1001,6 +1027,7 @@ def test_score_attempt_reconciliation_rejects_any_missing_date_code_row():
             skip_reason=None,
         ),
         module.DimensionCappedScoreAttemptAudit(
+            arm="candidate_nominal",
             decision_date="2019-07-08",
             code="513100",
             status="skipped",
@@ -1016,12 +1043,124 @@ def test_score_attempt_reconciliation_rejects_any_missing_date_code_row():
         complete,
         trade_dates=["2019-07-08"],
         pool=["510300", "513100"],
+        expected_arm="candidate_nominal",
     )
     with pytest.raises(ValueError, match="complete pool scoring audit"):
         module._assert_score_attempt_audits_complete(
             complete[:-1],
             trade_dates=["2019-07-08"],
             pool=["510300", "513100"],
+            expected_arm="candidate_nominal",
+        )
+
+
+def _candidate_arm_audit_fixture(module, arm, amount):
+    side = "buy" if amount > 0 else "sell"
+    reason = "dimension_capped_buy" if amount > 0 else "dimension_capped_signal_sell"
+    score_attempt = module.DimensionCappedScoreAttemptAudit(
+        arm=arm,
+        decision_date="2019-07-08",
+        code="510300",
+        status="scored",
+        causal_boundary="completed_daily_bars_through_T_minus_1",
+        t_minus_one_date="2019-07-05",
+        signal_date="2019-07-05",
+        max_data_date="2019-07-05",
+        skip_reason=None,
+    )
+    execution = module.DimensionCappedExecutionAudit(
+        arm=arm,
+        decision_date="2019-07-08",
+        plan_sequence=0,
+        code="510300",
+        planned_side=side,
+        planned_reason=reason,
+        target_value=6000.0 if amount > 0 else 0.0,
+        status="filled",
+        filled_amount=amount,
+        execution_price=10.0,
+        commission=5.0,
+        unfilled_reason=None,
+        atr_highest_close=None,
+        atr_input=None,
+        atr_position_cost=None,
+        atr_decision_price=None,
+        atr_stop_threshold=None,
+    )
+    planner = SimpleNamespace(
+        score_attempt_audits=[score_attempt],
+        execution_audits=[execution],
+    )
+    day = _replay_day(
+        "2019-07-08",
+        20000.0,
+        [_filled_order("2019-07-08", "510300", amount, reason)],
+    )
+    return planner, [day]
+
+
+def test_candidate_arm_audits_persist_and_reconcile_nominal_and_x2_independently():
+    module = _training_module()
+    nominal_planner, nominal_days = _candidate_arm_audit_fixture(
+        module,
+        "candidate_nominal",
+        100,
+    )
+    x2_planner, x2_days = _candidate_arm_audit_fixture(
+        module,
+        "candidate_double_friction",
+        -200,
+    )
+
+    score_attempts, executions = module._collect_candidate_arm_audits(
+        nominal_days=nominal_days,
+        nominal_planner=nominal_planner,
+        nominal_performance=_performance(buy_count=1, sell_count=0),
+        doubled_days=x2_days,
+        doubled_planner=x2_planner,
+        doubled_performance=_performance(buy_count=0, sell_count=1),
+        trade_dates=["2019-07-08"],
+        pool=["510300"],
+    )
+
+    assert [row.arm for row in score_attempts] == [
+        "candidate_nominal",
+        "candidate_double_friction",
+    ]
+    assert [(row.arm, row.filled_amount) for row in executions] == [
+        ("candidate_nominal", 100),
+        ("candidate_double_friction", -200),
+    ]
+
+
+@pytest.mark.parametrize("defect", ("missing_x2", "nominal_substituted_for_x2"))
+def test_candidate_arm_audit_collection_rejects_missing_or_substituted_x2(defect):
+    module = _training_module()
+    nominal_planner, nominal_days = _candidate_arm_audit_fixture(
+        module,
+        "candidate_nominal",
+        100,
+    )
+    x2_planner, x2_days = _candidate_arm_audit_fixture(
+        module,
+        "candidate_double_friction",
+        -200,
+    )
+    if defect == "missing_x2":
+        x2_planner = SimpleNamespace(score_attempt_audits=[], execution_audits=[])
+    else:
+        x2_planner = nominal_planner
+
+    with pytest.raises(ValueError, match="candidate_double_friction"):
+        module._collect_candidate_arm_audits(
+            nominal_days=nominal_days,
+            nominal_planner=nominal_planner,
+            nominal_performance=_performance(buy_count=1, sell_count=0),
+            doubled_days=x2_days,
+            doubled_planner=x2_planner,
+            doubled_performance=_performance(buy_count=0, sell_count=1),
+            trade_dates=["2019-07-08"],
+            pool=["510300"],
         )
 
 
@@ -1073,9 +1212,19 @@ def test_engine_links_each_planned_order_to_filled_or_exact_unfilled_result():
     assert unfilled.unfilled_reason == "missing execution bar at 09:35"
 
     performance = _performance(buy_count=1, sell_count=0)
-    module._assert_execution_audits_reconcile(days, audits, performance)
+    module._assert_execution_audits_reconcile(
+        days,
+        audits,
+        performance,
+        expected_arm="candidate_nominal",
+    )
     with pytest.raises(ValueError, match="planned execution audit count"):
-        module._assert_execution_audits_reconcile(days, audits[:-1], performance)
+        module._assert_execution_audits_reconcile(
+            days,
+            audits[:-1],
+            performance,
+            expected_arm="candidate_nominal",
+        )
 
 
 def test_atr_execution_audit_keeps_only_causal_trigger_inputs_and_threshold():
@@ -1247,6 +1396,7 @@ def test_formatter_persists_the_deterministic_rule_manifest_and_fingerprint():
 def test_formatter_emits_complete_score_attempt_and_execution_audits():
     module = _training_module()
     score_attempt = module.DimensionCappedScoreAttemptAudit(
+        arm="candidate_nominal",
         decision_date="2019-07-01",
         code="513100",
         status="skipped",
@@ -1257,6 +1407,7 @@ def test_formatter_emits_complete_score_attempt_and_execution_audits():
         skip_reason="insufficient_history:42<61",
     )
     execution = module.DimensionCappedExecutionAudit(
+        arm="candidate_nominal",
         decision_date="2019-07-01",
         plan_sequence=0,
         code="510300",
@@ -1288,7 +1439,7 @@ def test_formatter_emits_complete_score_attempt_and_execution_audits():
         "causal_boundary=completed_daily_bars_through_T_minus_1",
         "t_minus_one_date=2019-06-28",
         "skip_reason=insufficient_history:42<61",
-        "EXECUTION_AUDIT planned_orders=1 filled_orders=0",
+        "EXECUTION_AUDIT arm=candidate_nominal planned_orders=1 filled_orders=0",
         "plan_sequence=0",
         "planned_side=buy",
         "planned_reason=dimension_capped_buy",
@@ -1300,6 +1451,52 @@ def test_formatter_emits_complete_score_attempt_and_execution_audits():
     ):
         assert token in rendered
     assert "post_decision_return" not in rendered
+
+
+def test_formatter_keeps_nominal_and_x2_audit_rows_explicitly_separate():
+    module = _training_module()
+    nominal_planner, _ = _candidate_arm_audit_fixture(
+        module,
+        "candidate_nominal",
+        100,
+    )
+    x2_planner, _ = _candidate_arm_audit_fixture(
+        module,
+        "candidate_double_friction",
+        -200,
+    )
+    report = replace(
+        _comparison_report(False),
+        score_attempt_audits=tuple(
+            nominal_planner.score_attempt_audits + x2_planner.score_attempt_audits
+        ),
+        execution_audits=tuple(
+            nominal_planner.execution_audits + x2_planner.execution_audits
+        ),
+    )
+
+    rendered = module.format_dimension_capped_comparison(report)
+
+    assert (
+        "SCORE_ATTEMPT_AUDIT arm=candidate_nominal attempts=1 scored=1 skipped=0"
+        in rendered
+    )
+    assert (
+        "SCORE_ATTEMPT_AUDIT arm=candidate_double_friction attempts=1 scored=1 skipped=0"
+        in rendered
+    )
+    assert (
+        "EXECUTION_AUDIT arm=candidate_nominal planned_orders=1 filled_orders=1"
+        in rendered
+    )
+    assert (
+        "EXECUTION_AUDIT arm=candidate_double_friction planned_orders=1 filled_orders=1"
+        in rendered
+    )
+    assert "arm=candidate_nominal decision_date=2019-07-08" in rendered
+    assert "arm=candidate_double_friction decision_date=2019-07-08" in rendered
+    assert "post_decision_return" not in rendered
+    assert "post_stop_return" not in rendered
 
 
 def test_formatter_includes_frozen_gate_evidence_and_every_causal_audit_field():
@@ -1426,6 +1623,46 @@ def test_report_writer_refuses_to_overwrite_an_existing_report(tmp_path):
         module.write_report_text(output, "replacement\n")
 
     assert output.read_text(encoding="utf-8") == "immutable first result\n"
+
+
+def test_cli_preflight_refuses_existing_output_before_injected_runner_call(tmp_path):
+    module = _training_module()
+    output = tmp_path / "existing.md"
+    output.write_text("preserve me\n", encoding="utf-8")
+    calls = []
+
+    def fake_runner():
+        calls.append("runner_called")
+        return _comparison_report(False)
+
+    with pytest.raises(FileExistsError, match="refuses to overwrite"):
+        module._run_cli_once(output, fake_runner)
+
+    assert calls == []
+    assert output.read_text(encoding="utf-8") == "preserve me\n"
+
+
+def test_main_refuses_existing_output_before_runner_call(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = _training_module()
+    output = tmp_path / "existing.md"
+    output.write_text("preserve me\n", encoding="utf-8")
+    calls = []
+
+    def fake_runner():
+        calls.append("runner_called")
+        return _comparison_report(False)
+
+    monkeypatch.setattr(module, "run_dimension_capped_training_ab", fake_runner)
+    with pytest.raises(FileExistsError, match="refuses to overwrite"):
+        module.main(report_path=output)
+
+    assert calls == []
+    assert capsys.readouterr().out == ""
+    assert output.read_text(encoding="utf-8") == "preserve me\n"
 
 
 def test_formatter_leaves_final_newline_ownership_to_the_cli_writer():
