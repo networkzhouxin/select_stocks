@@ -96,11 +96,13 @@ def rsi_series_ending(r2, r1, r0):
     return fake_rsi
 
 
-def calculate_formal_background_from_same_frame(root: Path) -> dict[str, float]:
+def calculate_formal_background_from_same_frame(root: Path, through: str | None = None) -> dict[str, float]:
     # The formal JoinQuant module is allowed only here, after a test-local stub.
     sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
     formal = importlib.import_module("cross_signal_strategy.smart_trade_joinquant_cross_signal_etf")
     frame = pd.read_csv(root / "daily" / "513100.csv")
+    if through is not None:
+        frame = frame.loc[frame["date"] <= through].copy()
     close = frame["close"]
     high = frame["high"]
     low = frame["low"]
@@ -126,7 +128,7 @@ def test_root_must_equal_separately_approved_root(tmp_path):
 
 
 @pytest.mark.parametrize("name", [
-    "cross_signal_train_2019_2021", "cross_signal_warmup_2018", "按年份合并", "validation_2022_2023",
+    "cross_signal_train_2019_2021", "cross_signal_warmup_2018", "按年份合并", "merged", "validation_2022_2023",
 ])
 def test_forbidden_roots_are_refused(tmp_path, name):
     root = write_manifest(tmp_path / name, VALID_MANIFEST)
@@ -154,11 +156,42 @@ def test_loader_uses_t_minus_one_and_exact_0935_open(tmp_path):
     assert item.price_proved is True
 
 
+def test_code_cannot_escape_approved_source_subdirectories(tmp_path):
+    root = build_valid_source(tmp_path)
+    with pytest.raises(SourceContractError, match="code"):
+        load_arrival_input(root, root, "../../outside", ARRIVAL_2026_08_26)
+
+
 def test_t_day_daily_and_late_available_rows_are_invisible(tmp_path):
     root = build_source_with_future_rows(tmp_path)
     item = load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
     assert item.signal_date == date(2026, 8, 25)
     assert len(item.source_hashes) == 3
+
+
+def test_late_t_minus_one_publication_is_invisible_to_signal_and_background(tmp_path):
+    root = build_valid_source(tmp_path)
+    path = root / "daily" / "513100.csv"
+    frame = pd.read_csv(path)
+    frame.loc[len(frame) - 1, "available_at"] = "2026-08-26T09:36:00+08:00"
+    frame.to_csv(path, index=False)
+    item = load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
+    assert item.signal_date == date(2026, 8, 24)
+    expected = calculate_formal_background_from_same_frame(root, through="2026-08-24")
+    assert item.background == pytest.approx(expected)
+
+
+def test_late_or_duplicate_0935_evidence_is_not_a_valid_price_proof(tmp_path):
+    late_root = build_valid_source(tmp_path / "late", {"available_at": "2026-08-26T09:36:00+08:00"})
+    with pytest.raises(SourceContractError, match="exact timely"):
+        load_arrival_input(late_root, late_root, "513100", ARRIVAL_2026_08_26)
+
+    duplicate_root = build_valid_source(tmp_path / "duplicate")
+    minute_path = duplicate_root / "minute_0935" / "513100.csv"
+    minute = pd.read_csv(minute_path)
+    pd.concat([minute, minute], ignore_index=True).to_csv(minute_path, index=False)
+    with pytest.raises(SourceContractError, match="exact timely"):
+        load_arrival_input(duplicate_root, duplicate_root, "513100", ARRIVAL_2026_08_26)
 
 
 def test_loader_rejects_non_0935_or_non_shanghai_arrival(tmp_path):

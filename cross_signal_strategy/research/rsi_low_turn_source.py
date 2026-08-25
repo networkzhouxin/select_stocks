@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -55,7 +56,7 @@ def validate_root(data_root: Path, approved_root: Path) -> Path:
     if data != approved:
         raise SourceContractError("data root does not equal approved root")
     forbidden = (
-        "cross_signal_train_2019_2021", "cross_signal_warmup_2018", "按年份合并", "validation",
+        "cross_signal_train_2019_2021", "cross_signal_warmup_2018", "按年份合并", "merged", "validation",
     )
     rendered = str(data).casefold()
     if any(token.casefold() in rendered for token in forbidden):
@@ -121,6 +122,22 @@ def _read_csv(path: Path, expected_columns: list[str], label: str) -> pd.DataFra
     if frame.columns.tolist() != expected_columns:
         raise SourceContractError("%s columns do not match the source contract" % label)
     return frame
+
+
+def _require_code(code: str) -> None:
+    if not isinstance(code, str) or re.fullmatch(r"\d{6}", code) is None:
+        raise SourceContractError("code must be a supported six-digit ETF code")
+
+
+def _source_file(subdir: Path, code: str, label: str) -> Path:
+    try:
+        approved_subdir = subdir.resolve(strict=True)
+        candidate = (subdir / (code + ".csv")).resolve(strict=False)
+    except OSError as exc:
+        raise SourceContractError("%s source subdirectory is unavailable" % label) from exc
+    if not approved_subdir.is_dir() or not candidate.is_relative_to(approved_subdir):
+        raise SourceContractError("%s source path escapes approved subdirectory" % label)
+    return candidate
 
 
 def _aware_timestamp(value: object, label: str) -> pd.Timestamp:
@@ -198,12 +215,13 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.S
 
 def load_arrival_input(data_root: Path, approved_root: Path, code: str, arrival_dt: datetime) -> RsiTurnInput:
     """Load only data whose session and publication time precede the 09:35 arrival."""
+    _require_code(code)
     _require_arrival(arrival_dt)
     manifest = load_manifest(data_root, approved_root)
     if arrival_dt.date() < manifest.collection_start:
         raise SourceContractError("arrival precedes manifest collection_start")
-    daily_path = manifest.root / manifest.daily_subdir / (code + ".csv")
-    minute_path = manifest.root / manifest.minute_subdir / (code + ".csv")
+    daily_path = _source_file(manifest.root / manifest.daily_subdir, code, "daily")
+    minute_path = _source_file(manifest.root / manifest.minute_subdir, code, "minute")
     daily = _read_csv(daily_path, _DAILY_COLUMNS, "daily")
     minute = _read_csv(minute_path, _MINUTE_COLUMNS, "minute")
     if not daily["code"].astype(str).eq(code).all() or not minute["code"].astype(str).eq(code).all():
