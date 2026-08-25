@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import calendar
 import math
 from statistics import median
 from typing import Iterable, Mapping, Protocol
@@ -197,6 +198,7 @@ def wilson_interval(
 def evaluate_gate(records: Iterable[EventOutcomeRecord]) -> GateDecision:
     """Apply the pre-registered evidence gate to mature shadow outcomes."""
     materialized = tuple(records)
+    _validate_records(materialized)
     five_day = _matured_returns(materialized, 5, "doubled")
     ten_day = _matured_returns(materialized, 10, "doubled")
     five_returns = tuple(item[1] for item in five_day)
@@ -209,7 +211,7 @@ def evaluate_gate(records: Iterable[EventOutcomeRecord]) -> GateDecision:
         )
 
     reasons = []
-    if metrics["observation_month_span"] < 6:
+    if metrics["elapsed_calendar_months"] < 6:
         reasons.append("observation_span_under_six_months")
     if metrics["distinct_etf_count"] < 5:
         reasons.append("fewer_than_five_etfs")
@@ -247,6 +249,7 @@ def build_summary(
         raise ValueError("version must be a non-empty string")
 
     materialized = tuple(records)
+    _validate_records(materialized)
     decision = evaluate_gate(materialized)
     five_day = _matured_returns(materialized, 5, "doubled")
     dates = [item[0].arrival_date for item in five_day]
@@ -263,7 +266,7 @@ def build_summary(
         "date_span": {
             "start": min(dates).isoformat() if dates else None,
             "end": max(dates).isoformat() if dates else None,
-            "natural_months": _natural_month_span(dates),
+            "elapsed_calendar_months": _completed_elapsed_calendar_months(dates),
         },
         "etf_distribution": distribution,
         "return_metrics": {
@@ -295,6 +298,33 @@ def _matured_returns(
     return tuple(outcomes)
 
 
+def _validate_records(records: Iterable[EventOutcomeRecord]) -> None:
+    event_ids = set()
+    for record in records:
+        if record.event_id in event_ids:
+            raise ValueError("duplicate event_id")
+        event_ids.add(record.event_id)
+        for horizon, label in record.labels.items():
+            if label.horizon != horizon:
+                raise ValueError("label horizon does not match mapping key")
+            if label.event_id != record.event_id:
+                raise ValueError("label event_id does not match record event_id")
+            if label.status == "matured":
+                _validate_matured_return(label.nominal)
+                _validate_matured_return(label.doubled)
+
+
+def _validate_matured_return(result: RoundTripResult | None) -> None:
+    if result is None:
+        return
+    try:
+        finite = math.isfinite(float(result.net_return))
+    except (TypeError, ValueError):
+        finite = False
+    if not finite:
+        raise ValueError("non-finite matured net_return")
+
+
 def _gate_metrics(
     five_day: tuple[tuple[EventOutcomeRecord, float], ...], ten_returns: tuple[float, ...],
 ) -> dict[str, float | int]:
@@ -304,7 +334,9 @@ def _gate_metrics(
     return {
         "matured_five_day_events": len(five_returns),
         "matured_ten_day_events": len(ten_returns),
-        "observation_month_span": _natural_month_span([item[0].arrival_date for item in five_day]),
+        "elapsed_calendar_months": _completed_elapsed_calendar_months(
+            [item[0].arrival_date for item in five_day]
+        ),
         "distinct_etf_count": len(_etf_distribution(item[0] for item in five_day)),
         "max_single_etf_share": _max_etf_share(item[0] for item in five_day),
         "five_day_double_wins": wins,
@@ -343,12 +375,22 @@ def _max_etf_share(records: Iterable[EventOutcomeRecord]) -> float:
     return max(distribution.values()) / total if total else 0.0
 
 
-def _natural_month_span(dates: Iterable[date]) -> int:
+def _completed_elapsed_calendar_months(dates: Iterable[date]) -> int:
     values = tuple(dates)
     if not values:
         return 0
     first, last = min(values), max(values)
-    return (last.year - first.year) * 12 + last.month - first.month + 1
+    months = (last.year - first.year) * 12 + last.month - first.month
+    if last < _add_calendar_months(first, months):
+        months -= 1
+    return months
+
+
+def _add_calendar_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, min(value.day, calendar.monthrange(year, month)[1]))
 
 
 def _mean_or_zero(values: tuple[float, ...]) -> float:

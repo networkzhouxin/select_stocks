@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+import json
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -139,6 +140,11 @@ def _with_horizon_returns(records, horizon, returns):
     ) for record, value in zip(records, returns))
 
 
+def _with_date_span(records, first, last):
+    return tuple(replace(record, arrival_date=first if index < len(records) - 1 else last)
+                 for index, record in enumerate(records))
+
+
 def test_round_trip_matches_local_broker_and_integer_lots():
     result = calculate_round_trip("513100", 2.000, 2.100, NOMINAL)
     broker = LocalBroker(
@@ -266,7 +272,11 @@ def test_summary_contains_frozen_identity_metrics_and_gate_result():
     assert summary["collection_start"] == "2026-08-26"
     assert summary["generated_at"] == ARRIVAL_PLUS_10.isoformat()
     assert summary["counts"]["matured_five_day_events"] == 60
-    assert summary["date_span"] == {"start": "2026-01-01", "end": "2026-07-08", "natural_months": 7}
+    assert summary["date_span"] == {
+        "start": "2026-01-01",
+        "end": "2026-07-08",
+        "elapsed_calendar_months": 6,
+    }
     assert summary["etf_distribution"] == {code: 10 for code in ETF_CODES}
     assert summary["return_metrics"]["5"]["doubled"]["mean"] > 0
     assert summary["return_metrics"]["10"]["nominal"]["median"] > 0
@@ -274,3 +284,67 @@ def test_summary_contains_frozen_identity_metrics_and_gate_result():
     assert summary["leave_top_winner_out_mean"] > 0
     assert summary["status"] == "pass"
     assert summary["reasons"] == []
+
+
+@pytest.mark.parametrize("bad_return", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_matured_return_fails_closed_before_gate_or_summary(bad_return):
+    records = _with_horizon_returns(make_records(), 5, [bad_return] + [0.02] * 59)
+
+    with pytest.raises(ValueError, match="non-finite matured net_return"):
+        evaluate_gate(records)
+    with pytest.raises(ValueError, match="non-finite matured net_return"):
+        build_summary(records, date(2026, 8, 26), ARRIVAL_PLUS_10)
+
+
+def test_summary_is_strict_json_after_return_validation():
+    summary = build_summary(make_records(), date(2026, 8, 26), ARRIVAL_PLUS_10)
+
+    assert json.dumps(summary, allow_nan=False)
+
+
+@pytest.mark.parametrize(("last_date", "status"), [
+    (date(2026, 6, 1), "stop"),
+    (date(2026, 7, 30), "stop"),
+    (date(2026, 7, 31), "pass"),
+])
+def test_six_calendar_month_gate_requires_completed_elapsed_months(last_date, status):
+    gate = evaluate_gate(_with_date_span(make_records(), date(2026, 1, 31), last_date))
+
+    assert gate.status == status
+    if status == "stop":
+        assert "observation_span_under_six_months" in gate.reasons
+
+
+def test_duplicate_event_identity_cannot_inflate_gate_count():
+    records = make_records()
+    duplicated = (*records[:59], records[0])
+
+    with pytest.raises(ValueError, match="duplicate event_id"):
+        evaluate_gate(duplicated)
+    with pytest.raises(ValueError, match="duplicate event_id"):
+        build_summary(duplicated, date(2026, 8, 26), ARRIVAL_PLUS_10)
+
+
+def test_label_mapping_key_must_match_label_horizon():
+    records = make_records()
+    first = records[0]
+    mismatched = replace(first, labels={**first.labels, 6: first.labels[5]})
+    bad_records = (mismatched, *records[1:])
+
+    with pytest.raises(ValueError, match="label horizon does not match mapping key"):
+        evaluate_gate(bad_records)
+    with pytest.raises(ValueError, match="label horizon does not match mapping key"):
+        build_summary(bad_records, date(2026, 8, 26), ARRIVAL_PLUS_10)
+
+
+def test_label_event_identity_must_match_record_event_id():
+    records = make_records()
+    first = records[0]
+    mismatched_label = replace(first.labels[5], event_id="other-event")
+    mismatched = replace(first, labels={**first.labels, 5: mismatched_label})
+    bad_records = (mismatched, *records[1:])
+
+    with pytest.raises(ValueError, match="label event_id does not match record event_id"):
+        evaluate_gate(bad_records)
+    with pytest.raises(ValueError, match="label event_id does not match record event_id"):
+        build_summary(bad_records, date(2026, 8, 26), ARRIVAL_PLUS_10)
