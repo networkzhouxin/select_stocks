@@ -7,11 +7,13 @@ import json
 import math
 from pathlib import Path
 import re
+from typing import Mapping
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
+from cross_signal_strategy.research.rsi_low_turn_outcomes import FutureSnapshot
 from cross_signal_strategy.research.rsi_low_turn_shadow import RsiTurnInput, calculate_rsi6
 
 
@@ -44,6 +46,61 @@ class SourceManifest:
     append_only: bool
     daily_subdir: str
     minute_subdir: str
+
+
+class ApprovedFuturePriceSource:
+    """Read prospective future labels from the same approved, append-only source."""
+
+    def __init__(self, data_root: Path, approved_root: Path):
+        self.manifest = load_manifest(data_root, approved_root)
+
+    def snapshot_for(
+        self, event: Mapping[str, object], horizon: int, as_of: datetime,
+    ) -> FutureSnapshot:
+        code = _event_code(event)
+        _require_code(code)
+        _require_future_as_of(as_of)
+        if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon < 1:
+            raise ValueError("horizon must be a positive integer")
+
+        arrival_date = _event_arrival_date(event)
+        daily_path = _source_file(self.manifest.root / self.manifest.daily_subdir, code, "daily")
+        minute_path = _source_file(self.manifest.root / self.manifest.minute_subdir, code, "minute")
+        daily = _future_daily_frame(daily_path, code)
+        minute = _future_minute_frame(minute_path, code)
+        future_sessions = sorted(day for day in daily["date"] if day > arrival_date)
+        if len(future_sessions) < horizon:
+            return FutureSnapshot(horizon, "pending_horizon_not_arrived", None, None, None, None)
+        target_date = future_sessions[horizon - 1]
+        if target_date > as_of.date():
+            return FutureSnapshot(horizon, "pending_horizon_not_arrived", None, None, None, None)
+
+        target_timestamp = pd.Timestamp(datetime.combine(target_date, time(9, 35), SHANGHAI))
+        timely = minute[
+            (minute["_timestamp"] == target_timestamp)
+            & (minute["_available_at"] <= pd.Timestamp(as_of))
+            & (minute["_available_at"] <= target_timestamp)
+        ]
+        if len(timely) != 1:
+            return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
+        quote = timely.iloc[0]
+        exit_open, volume, num_trades = (
+            _as_finite(quote[column]) for column in ("open", "volume", "num_trades")
+        )
+        if not (exit_open is not None and exit_open > 0 and volume is not None and volume > 0
+                and num_trades is not None and num_trades > 0):
+            return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
+
+        required_sessions = (arrival_date, *future_sessions[:horizon])
+        mfe, mae = _mfe_mae_if_mature(daily, required_sessions, _event_entry_open(event), as_of)
+        return FutureSnapshot(
+            horizon,
+            "matured",
+            exit_open,
+            mfe,
+            mae,
+            quote["_available_at"].to_pydatetime(),
+        )
 
 
 def validate_root(data_root: Path, approved_root: Path) -> Path:
@@ -158,6 +215,90 @@ def _as_finite(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _require_future_as_of(as_of: datetime) -> None:
+    if not isinstance(as_of, datetime) or getattr(as_of.tzinfo, "key", None) != "Asia/Shanghai":
+        raise SourceContractError("future as_of must be Asia/Shanghai-aware")
+
+
+def _event_code(event: Mapping[str, object]) -> str:
+    if not isinstance(event, Mapping):
+        raise TypeError("event must be a mapping")
+    code = event.get("code")
+    if not isinstance(code, str):
+        raise ValueError("event code must be a six-digit ETF code")
+    return code
+
+
+def _event_arrival_date(event: Mapping[str, object]) -> date:
+    value = event.get("arrival_date")
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("event arrival_date must be an ISO date") from exc
+    raise ValueError("event arrival_date must be a date")
+
+
+def _event_entry_open(event: Mapping[str, object]) -> float:
+    entry_open = _as_finite(event.get("entry_open"))
+    if entry_open is None or entry_open <= 0:
+        raise ValueError("event entry_open must be a positive finite number")
+    return entry_open
+
+
+def _future_daily_frame(path: Path, code: str) -> pd.DataFrame:
+    daily = _read_csv(path, _DAILY_COLUMNS, "daily").copy()
+    if not daily["code"].astype(str).eq(code).all():
+        raise SourceContractError("source file code does not match requested code")
+    try:
+        daily["date"] = pd.to_datetime(daily["date"], errors="raise").dt.date
+        for column in ("open", "high", "low", "close", "volume"):
+            daily[column] = pd.to_numeric(daily[column], errors="raise")
+    except (TypeError, ValueError) as exc:
+        raise SourceContractError("daily source has invalid values") from exc
+    daily["_available_at"] = daily["available_at"].map(
+        lambda value: _aware_timestamp(value, "daily available_at")
+    )
+    if daily["date"].duplicated().any():
+        raise SourceContractError("daily source has duplicate sessions")
+    return daily
+
+
+def _future_minute_frame(path: Path, code: str) -> pd.DataFrame:
+    minute = _read_csv(path, _MINUTE_COLUMNS, "minute").copy()
+    if not minute["code"].astype(str).eq(code).all():
+        raise SourceContractError("source file code does not match requested code")
+    minute["_timestamp"] = minute["timestamp"].map(
+        lambda value: _aware_timestamp(value, "minute timestamp")
+    )
+    minute["_available_at"] = minute["available_at"].map(
+        lambda value: _aware_timestamp(value, "minute available_at")
+    )
+    return minute
+
+
+def _mfe_mae_if_mature(
+    daily: pd.DataFrame,
+    required_sessions: tuple[date, ...],
+    entry_open: float,
+    as_of: datetime,
+) -> tuple[float | None, float | None]:
+    rows = daily[daily["date"].isin(required_sessions)].copy()
+    if len(rows) != len(required_sessions):
+        return None, None
+    if (rows["_available_at"] > pd.Timestamp(as_of)).any():
+        return None, None
+    high = rows["high"].map(_as_finite)
+    low = rows["low"].map(_as_finite)
+    if high.isna().any() or low.isna().any() or (high <= 0).any() or (low <= 0).any():
+        return None, None
+    return float(high.max() / entry_open - 1.0), float(low.min() / entry_open - 1.0)
 
 
 def _background(frame: pd.DataFrame) -> dict[str, float]:

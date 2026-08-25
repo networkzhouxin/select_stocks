@@ -15,6 +15,7 @@ from cross_signal_strategy.research.rsi_low_turn_shadow import (
     detect_rsi_low_turn,
 )
 from cross_signal_strategy.research.rsi_low_turn_source import (
+    ApprovedFuturePriceSource,
     SourceContractError,
     load_arrival_input,
     load_manifest,
@@ -75,6 +76,31 @@ def build_source_with_future_rows(tmp_path: Path) -> Path:
         "2026-08-26T15:01:00+08:00", "pytest_future_row",
     ]
     frame.to_csv(path, index=False)
+    return root
+
+
+def build_source_with_matured_future_sessions(tmp_path: Path) -> Path:
+    root = build_valid_source(tmp_path)
+    daily_path = root / "daily" / "513100.csv"
+    minute_path = root / "minute_0935" / "513100.csv"
+    daily = pd.read_csv(daily_path)
+    minute = pd.read_csv(minute_path)
+    sessions = pd.bdate_range("2026-08-26", "2026-09-09")
+    for index, session in enumerate(sessions):
+        day = session.date()
+        daily.loc[len(daily)] = [
+            "513100", day.isoformat(), 2.00 + index * 0.01, 2.10 + index * 0.01,
+            1.95 + index * 0.01, 2.05 + index * 0.01, 100000,
+            f"{day}T15:01:00+08:00", "pytest_future_row",
+        ]
+        if day != date(2026, 8, 26):
+            minute.loc[len(minute)] = [
+                "513100", f"{day}T09:35:00+08:00", 2.00 + index * 0.01,
+                2.01 + index * 0.01, 1000, 10,
+                f"{day}T09:35:00+08:00", "pytest_future_row",
+            ]
+    daily.to_csv(daily_path, index=False)
+    minute.to_csv(minute_path, index=False)
     return root
 
 
@@ -216,3 +242,71 @@ def test_background_indicators_match_formal_pure_helpers(tmp_path):
     item = load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
     expected = calculate_formal_background_from_same_frame(root)
     assert item.background == pytest.approx(expected)
+
+
+def test_future_source_resolves_nth_session_exact_timely_0935_open(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+    as_of = datetime(2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    snapshot = source.snapshot_for(event, 3, as_of)
+
+    assert snapshot.status == "matured"
+    assert snapshot.exit_open == pytest.approx(2.03)
+    assert snapshot.available_at == as_of
+    assert snapshot.mfe is None
+    assert snapshot.mae is None
+
+
+def test_future_source_never_substitutes_a_missing_exact_0935_open(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    minute_path = root / "minute_0935" / "513100.csv"
+    minute = pd.read_csv(minute_path)
+    minute = minute[minute["timestamp"] != "2026-08-31T09:35:00+08:00"]
+    minute.to_csv(minute_path, index=False)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+    as_of = datetime(2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    snapshot = source.snapshot_for(event, 3, as_of)
+
+    assert snapshot.status == "pending_missing_executable_price"
+    assert snapshot.exit_open is None
+
+
+def test_future_source_rejects_0935_open_published_after_0935(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    minute_path = root / "minute_0935" / "513100.csv"
+    minute = pd.read_csv(minute_path)
+    minute.loc[
+        minute["timestamp"] == "2026-08-31T09:35:00+08:00", "available_at"
+    ] = "2026-08-31T09:36:00+08:00"
+    minute.to_csv(minute_path, index=False)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+
+    snapshot = source.snapshot_for(
+        event, 3, datetime(2026, 8, 31, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert snapshot.status == "pending_missing_executable_price"
+    assert snapshot.exit_open is None
+
+
+def test_future_source_exposes_mfe_mae_only_after_daily_bars_arrive(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+
+    before_close = source.snapshot_for(
+        event, 1, datetime(2026, 8, 27, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    after_close = source.snapshot_for(
+        event, 1, datetime(2026, 8, 27, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert before_close.mfe is None
+    assert before_close.mae is None
+    assert after_close.mfe == pytest.approx(2.11 / 2.035 - 1.0)
+    assert after_close.mae == pytest.approx(1.95 / 2.035 - 1.0)
