@@ -98,6 +98,7 @@ These are starting defaults, not optimized parameters.
 - `docs/backtest_notes.md`: structured backtest result log.
 - `docs/decisions.md`: why each rule was added, rejected, or frozen.
 - `docs/failed_experiments.md`: failed ideas and why they should not be repeated casually.
+- `docs/kdj-rsi-boll-atr-strategy-spec.md`: closed `krba-v0.1-candidate` specification and frozen local-gate result; the independent KDJ/RSI/BOLL/ATR mean-reversion candidate had only 7 closed trades and did not qualify for JoinQuant or PTrade.
 - `docs/research_budget.json`: machine-readable experiment-family status and remaining training-only budget.
 - `docs/research_budget.md`: human-readable research map and frozen experiment families; the current open research budget is zero.
 - `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
@@ -109,6 +110,9 @@ These are starting defaults, not optimized parameters.
 - `docs/prospective_live_log_protocol.md`: 前瞻日志协议开始日、冻结构建/指纹、操作方法，以及“先登记假设、后积累独立确认样本”的防事后挑选规则。
 - `docs/ptrade_deployment.md`: PTrade schedule, data boundary, order lifecycle, restart recovery, and deployment checklist.
 - `research/training_stability.py`: training-only annual, concentration, exit, holding-period, regime, and doubled-friction diagnostics.
+- `research/kdj_rsi_boll_atr_candidate.py`: isolated primitives and order planning for the rejected `krba-v0.1-candidate`; it is research-only and is not imported by either formal strategy.
+- `research/krba_training_replay.py`: one-shot frozen 2019-2021 baseline/candidate replay and gate for the closed KRBA family.
+- `local/krba_backtester.py`: causal local KRBA replay using the 09:35 minute close under the existing local convention and the 14:50 minute open for the ATR-only check.
 - `research/friction_diagnostics.py`: cached-signal training replay that isolates commission-rate, minimum-commission, and slippage sensitivity.
 - `research/capital_utilization_diagnostics.py`: training-only occupied-slot, vacant-slot reason, and de-duplicated shadow-candidate diagnostics.
 - `archive/candidates/backup_fill_candidate.py`: rejected local candidate that tested 50-59 score backup fills without changing the main buy threshold.

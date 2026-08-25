@@ -72,8 +72,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 79
-    assert report.expected_failed_experiment_count == 79
+    assert report.failed_experiment_count == 80
+    assert report.expected_failed_experiment_count == 80
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -93,6 +93,8 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["etf_microstructure"].max_new_experiments == 0
     assert families["etf_microstructure"].planned_experiment is None
     assert families["sell_score_rebalance_user_authorized"].status == "exhausted"
+    assert families["krba_simple_mean_reversion_user_authorized"].status == "exhausted"
+    assert families["krba_simple_mean_reversion_user_authorized"].max_new_experiments == 0
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
@@ -1234,7 +1236,7 @@ def test_dimension_capped_invalid_run_keeps_provenance_without_consuming_a_failu
     )
 
     assert budget.max_total_open_experiments == 0
-    assert payload["expected_failed_experiment_count"] == 79
+    assert payload["expected_failed_experiment_count"] == 80
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert raw["invalid_implementation_observed_gate_passed"] is False
@@ -1358,7 +1360,7 @@ def test_dimension_capped_corrective_replay_is_rejected_and_closes_governance():
     )
 
     assert budget.max_total_open_experiments == 0
-    assert payload["expected_failed_experiment_count"] == 79
+    assert payload["expected_failed_experiment_count"] == 80
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None

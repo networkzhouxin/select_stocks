@@ -7,7 +7,7 @@ it does not change any score, order, position, or risk rule.
 ## Current Accounting
 
 - Training window: 2019-01-01 through 2021-12-31.
-- Recorded failed or non-adopted experiments: 79 real ledger entries.
+- Recorded failed or non-adopted experiments: 80 real ledger entries.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
@@ -50,6 +50,7 @@ it does not change any score, order, position, or risk rule.
 
 | Family key | Status | Decision |
 | --- | --- | --- |
+| `krba_simple_mean_reversion_user_authorized` | exhausted | The frozen independent KDJ-cross + RSI6 oversold + BOLL lower-band rejection entry with BOLL/ATR exits produced only 7 closed trades, no 2019 trade, and +6.09% return versus the local baseline's 89 trades and +125.00%. Corrected doubled-friction return was +5.25% versus +108.15%. The high 85.71% win rate is not deployable evidence because sample, annual coverage, return-retention, and friction gates failed. No JoinQuant/PTrade candidate, validation access, or neighboring parameter search is allowed. |
 | `dimension_capped_score_v04_user_authorized` | exhausted | The corrected rule changed 196 filled-order days, but win rate fell 56.18%→51.76%, return fell +125.00%→+78.13%, and every frozen payoff/robustness gate listed in the canonical report failed. Doubled-friction return fell +108.15%→+63.32% and win rate fell 51.69%→45.88%. No neighboring variant, JoinQuant/PTrade candidate, or validation access is allowed. |
 | `cross_signal_definition` | adopted | Positional cross alignment, T-1 timing, and the three-day window remain frozen. |
 | `indicator_enumeration` | exhausted | Traditional indicator coverage is already broad; adding more now creates multiple-testing bias. |
