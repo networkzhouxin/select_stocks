@@ -344,8 +344,48 @@ def _seed_complete_integrity_state(tmp_path, event_count=1, forge_passing_labels
         store.record_evaluation(_integrity_decision(code, arrival, False), arrival)
 
     if forge_passing_labels:
+        events_by_id = {event["event_id"]: event for event in store.load_events()}
+        history = store.load_source_snapshots()
         for event_id in event_ids:
+            event = events_by_id[event_id]
             for horizon in (5, 10):
+                arrival = datetime.fromisoformat(event["arrival_dt"])
+                target = arrival + timedelta(days=horizon)
+                collected = target.replace(hour=15, minute=1)
+                daily_path = f"daily/{event['code']}.csv"
+                minute_path = f"minute_0935/{event['code']}.csv"
+                daily_snapshot = next(item for item in history if item["relative_path"] == daily_path)
+                minute_snapshot = next(item for item in history if item["relative_path"] == minute_path)
+                store.append_future_observation(event_id, horizon, {
+                    "event_id": event_id, "code": event["code"],
+                    "arrival_date": event["arrival_date"], "horizon": horizon,
+                    "target_date": target.date().isoformat(),
+                    "target_timestamp": target.isoformat(),
+                    "future_sessions": [{
+                        "date": (arrival + timedelta(days=offset)).date().isoformat(),
+                        "available_at": (arrival + timedelta(days=offset)).replace(
+                            hour=15, minute=1,
+                        ).isoformat(),
+                        "source": "pytest_daily",
+                    } for offset in range(1, horizon + 1)],
+                    "minute": {
+                        "timestamp": target.isoformat(), "open": 2.10,
+                        "volume": 1000.0, "num_trades": 10.0,
+                        "available_at": target.isoformat(), "source": "pytest_minute",
+                    },
+                    "daily_snapshot": {
+                        "relative_path": daily_path, "sha256": daily_snapshot["sha256"],
+                        "byte_length": daily_snapshot["byte_length"],
+                        "observed_at": daily_snapshot["observed_at"],
+                        "collected_at": collected.isoformat(),
+                    },
+                    "minute_snapshot": {
+                        "relative_path": minute_path, "sha256": minute_snapshot["sha256"],
+                        "byte_length": minute_snapshot["byte_length"],
+                        "observed_at": minute_snapshot["observed_at"],
+                        "collected_at": collected.isoformat(),
+                    },
+                })
                 nominal = asdict(calculate_round_trip("513100", 2.035, 2.10, NOMINAL_FRICTION))
                 doubled = asdict(calculate_round_trip("513100", 2.035, 2.10, DOUBLED_FRICTION))
                 nominal.update(net_pnl=63.33333333333333, net_return=0.01)
@@ -359,6 +399,12 @@ def _seed_complete_integrity_state(tmp_path, event_count=1, forge_passing_labels
                     "doubled": doubled,
                     "mfe": None,
                     "mae": None,
+                    "target_timestamp": target.isoformat(),
+                    "available_at": target.isoformat(),
+                    "collected_at": collected.isoformat(),
+                    "source_relative_path": minute_path,
+                    "source_sha256": minute_snapshot["sha256"],
+                    "source_byte_length": minute_snapshot["byte_length"],
                 })
     store.write_state_marker()
     return state
@@ -386,6 +432,59 @@ def _append_provenance_label(state, mutate=None, include_provenance=True):
     store = ShadowStore(state, create=False)
     event = store.load_events()[0]
     exit_price = 2.10
+    daily_path = f"daily/{event['code']}.csv"
+    minute_path = f"minute_0935/{event['code']}.csv"
+    daily_snapshot = next(
+        item for item in store.load_source_snapshots()
+        if item["relative_path"] == daily_path
+    )
+    minute_snapshot = next(
+        item for item in store.load_source_snapshots()
+        if item["relative_path"] == minute_path
+    )
+    arrival = datetime.fromisoformat(event["arrival_dt"])
+    target = arrival + timedelta(days=5)
+    collected = target.replace(hour=15, minute=1)
+    store.append_future_observation(event["event_id"], 5, {
+        "event_id": event["event_id"],
+        "code": event["code"],
+        "arrival_date": event["arrival_date"],
+        "horizon": 5,
+        "target_date": target.date().isoformat(),
+        "target_timestamp": target.isoformat(),
+        "future_sessions": [
+            {
+                "date": (arrival + timedelta(days=offset)).date().isoformat(),
+                "available_at": (arrival + timedelta(days=offset)).replace(
+                    hour=15, minute=1,
+                ).isoformat(),
+                "source": "pytest_daily",
+            }
+            for offset in range(1, 6)
+        ],
+        "minute": {
+            "timestamp": target.isoformat(),
+            "open": exit_price,
+            "volume": 1000.0,
+            "num_trades": 10.0,
+            "available_at": target.isoformat(),
+            "source": "pytest_minute",
+        },
+        "daily_snapshot": {
+            "relative_path": daily_path,
+            "sha256": daily_snapshot["sha256"],
+            "byte_length": daily_snapshot["byte_length"],
+            "observed_at": daily_snapshot["observed_at"],
+            "collected_at": collected.isoformat(),
+        },
+        "minute_snapshot": {
+            "relative_path": minute_path,
+            "sha256": minute_snapshot["sha256"],
+            "byte_length": minute_snapshot["byte_length"],
+            "observed_at": minute_snapshot["observed_at"],
+            "collected_at": collected.isoformat(),
+        },
+    })
     payload = {
         "event_id": event["event_id"],
         "horizon": 5,
@@ -401,19 +500,13 @@ def _append_provenance_label(state, mutate=None, include_provenance=True):
         "mae": None,
     }
     if include_provenance:
-        relative_path = f"minute_0935/{event['code']}.csv"
-        snapshot = next(
-            item for item in store.load_source_snapshots()
-            if item["relative_path"] == relative_path
-        )
-        target = datetime.fromisoformat(event["arrival_dt"]) + timedelta(days=1)
         payload.update({
             "target_timestamp": target.isoformat(),
             "available_at": target.isoformat(),
-            "collected_at": target.isoformat(),
-            "source_relative_path": relative_path,
-            "source_sha256": snapshot["sha256"],
-            "source_byte_length": snapshot["byte_length"],
+            "collected_at": collected.isoformat(),
+            "source_relative_path": minute_path,
+            "source_sha256": minute_snapshot["sha256"],
+            "source_byte_length": minute_snapshot["byte_length"],
         })
     if mutate is not None:
         mutate(payload)
@@ -519,7 +612,12 @@ def test_collect_persists_matured_label_from_same_stable_snapshot(tmp_path):
     cli_module.collect(root, root, state, "2026-08-28T09:35:00+08:00")
 
     labels = [json.loads(line) for line in (state / "labels.jsonl").read_text(encoding="utf-8").splitlines()]
+    observations = [
+        json.loads(line)
+        for line in (state / "future_observations.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
     horizon_one = next(record["payload"] for record in labels if record["horizon"] == 1)
+    observed_one = next(record["payload"] for record in observations if record["horizon"] == 1)
     minute_path = root / "minute_0935" / f"{FROZEN_CODES[0]}.csv"
     assert horizon_one["available_at"] == "2026-08-27T09:35:00+08:00"
     assert horizon_one["collected_at"] == "2026-08-28T09:35:00+08:00"
@@ -527,7 +625,40 @@ def test_collect_persists_matured_label_from_same_stable_snapshot(tmp_path):
     assert horizon_one["source_sha256"] == _sha256(minute_path)
     assert horizon_one["source_byte_length"] == len(minute_path.read_bytes())
     assert horizon_one["mfe"] is None and horizon_one["mae"] is None
+    assert observed_one["future_sessions"] == [{
+        "date": "2026-08-27", "available_at": "2026-08-27T15:01:00+08:00",
+        "source": "pytest_fixture",
+    }]
+    assert observed_one["minute"]["open"] == horizon_one["exit_price"]
+    assert observed_one["daily_snapshot"]["relative_path"] == f"daily/{FROZEN_CODES[0]}.csv"
+    assert observed_one["minute_snapshot"]["sha256"] == horizon_one["source_sha256"]
     cli_module.summarize(state, "2026-08-28T09:35:00+08:00")
+
+
+def test_collect_retry_recovers_label_after_observation_append_interruption(tmp_path, monkeypatch):
+    root = build_valid_source(tmp_path)
+    make_first_code_signal(root)
+    state = tmp_path / "state"
+    cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
+    append_second_day(root)
+    cli_module.collect(root, root, state, "2026-08-27T09:35:00+08:00")
+    append_third_day(root)
+    original = ShadowStore.append_label
+
+    def interrupt_label(self, event_id, horizon, payload):
+        raise RuntimeError("injected after observation append")
+
+    monkeypatch.setattr(ShadowStore, "append_label", interrupt_label)
+    with pytest.raises(RuntimeError, match="after observation append"):
+        cli_module.collect(root, root, state, "2026-08-28T09:35:00+08:00")
+    assert (state / "future_observations.jsonl").is_file()
+    assert not (state / "labels.jsonl").exists()
+
+    monkeypatch.setattr(ShadowStore, "append_label", original)
+    cli_module.collect(root, root, state, "2026-08-28T09:35:00+08:00")
+    store = ShadowStore(state, create=False)
+    assert len(store.load_future_observations()) == 1
+    assert len(store.load_labels()) == 1
 
 
 def test_collect_rejects_corrupt_existing_label_provenance_before_writes(tmp_path):
@@ -545,7 +676,7 @@ def test_collect_rejects_corrupt_existing_label_provenance_before_writes(tmp_pat
     )
     before = hash_tree(state)
 
-    with pytest.raises(SourceRewriteError, match="stored label provenance"):
+    with pytest.raises(SourceRewriteError, match="stored label does not match future observation"):
         cli_module.collect(root, root, state, "2026-08-28T09:35:00+08:00")
 
     assert hash_tree(state) == before
@@ -728,37 +859,18 @@ def test_nested_evaluation_provenance_refuses_collect_before_any_state_write(tmp
 @pytest.mark.parametrize(("events", "labels", "message"), [
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},) * 2, (), "duplicate event"),
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "duplicate label"),
-    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "missing", "horizon": 1, "payload": {"event_id": "missing", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+        {"event_id": "missing", "horizon": 1, "payload": {}},
     ), "dangling label"),
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 2, "payload": {"event_id": "e1", "horizon": 2, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+        {"event_id": "e1", "horizon": 2, "payload": {}},
     ), "unsupported horizon"),
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "other", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "stored label identity"),
-    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "stored label status"),
-    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "matured", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "stored label numeric type"),
-    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "unknown", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "stored label status"),
-    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "matured", "exit_price": float("nan"), "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "stored label exit price"),
-    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
-        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "matured", "exit_price": 2.0, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
-    ), "stored label round trip"),
+        {"event_id": "e1", "horizon": 1, "payload": {}},
+    ), "no future observation"),
 ])
 def test_evidence_reconstruction_refuses_ambiguous_state(events, labels, message):
     with pytest.raises(SourceRewriteError, match=message):
-        cli_module._event_outcome_records(events, labels)
+        cli_module._event_outcome_records(events, (), labels)
 
 
 def test_forged_events_and_one_percent_labels_cannot_manufacture_a_pass(tmp_path):
@@ -806,7 +918,7 @@ def test_summarize_requires_matured_label_source_provenance(tmp_path):
     state = _seed_complete_integrity_state(tmp_path)
     _append_provenance_label(state, include_provenance=False)
 
-    _assert_summarize_fails_without_replacing_summary(state, "stored label provenance")
+    _assert_summarize_fails_without_replacing_summary(state, "stored label does not match future observation")
 
 
 @pytest.mark.parametrize("mutate", [
@@ -820,7 +932,7 @@ def test_summarize_cross_checks_matured_label_provenance_history(tmp_path, mutat
     state = _seed_complete_integrity_state(tmp_path)
     _append_provenance_label(state, mutate=mutate)
 
-    _assert_summarize_fails_without_replacing_summary(state, "stored label provenance")
+    _assert_summarize_fails_without_replacing_summary(state, "stored label does not match future observation")
 
 
 def test_summarize_accepts_valid_replayed_event_and_label_provenance(tmp_path):
@@ -870,6 +982,23 @@ def test_summarize_rejects_stored_non_none_mfe_end_to_end(tmp_path):
     _assert_summarize_fails_without_replacing_summary(state, "MFE/MAE")
 
 
+@pytest.mark.parametrize(("mutate", "message"), [
+    (lambda payload: payload.update(event_id="other"), "stored label identity"),
+    (lambda payload: payload.update(status="pending_horizon_not_arrived"), "stored label status"),
+    (lambda payload: payload.update(exit_price=None), "stored label numeric type"),
+    (lambda payload: payload.update(nominal=None), "stored label round trip"),
+    (lambda payload: payload.update(unregistered=True), "stored label fields"),
+])
+def test_summarize_strictly_validates_label_schema_with_observation(
+    tmp_path, mutate, message,
+):
+    state = _seed_complete_integrity_state(tmp_path)
+    _append_provenance_label(state)
+    _rewrite_first_record(state / "labels.jsonl", lambda record: mutate(record["payload"]))
+
+    _assert_summarize_fails_without_replacing_summary(state, message)
+
+
 @pytest.mark.parametrize("mutation", ["missing", "extra"])
 def test_summarize_rejects_missing_or_extra_event_records(tmp_path, mutation):
     state = _seed_complete_integrity_state(tmp_path)
@@ -890,3 +1019,73 @@ def test_summarize_rejects_missing_or_extra_event_records(tmp_path, mutation):
     _assert_summarize_fails_without_replacing_summary(
         state, "stored events do not match evaluation replay",
     )
+
+
+def test_summarize_rejects_coordinated_exit_and_round_trip_tampering(tmp_path):
+    state = _seed_complete_integrity_state(tmp_path)
+    _append_provenance_label(state)
+    event = ShadowStore(state, create=False).load_events()[0]
+
+    def forge_exit(record):
+        payload = record["payload"]
+        payload["exit_price"] = 9.99
+        payload["nominal"] = asdict(calculate_round_trip(
+            event["code"], event["entry_open"], 9.99, NOMINAL_FRICTION,
+        ))
+        payload["doubled"] = asdict(calculate_round_trip(
+            event["code"], event["entry_open"], 9.99, DOUBLED_FRICTION,
+        ))
+
+    _rewrite_first_record(state / "labels.jsonl", forge_exit)
+
+    _assert_summarize_fails_without_replacing_summary(
+        state, "stored label does not match future observation",
+    )
+
+
+def test_summarize_rejects_horizon_five_bound_to_first_future_session(tmp_path):
+    state = _seed_complete_integrity_state(tmp_path)
+    _append_provenance_label(state)
+    def bind_to_first(record):
+        payload = record["payload"]
+        first = payload["future_sessions"][0]
+        payload["future_sessions"] = [first]
+        payload["target_date"] = first["date"]
+        payload["target_timestamp"] = first["date"] + "T09:35:00+08:00"
+
+    _rewrite_first_record(state / "future_observations.jsonl", bind_to_first)
+
+    _assert_summarize_fails_without_replacing_summary(
+        state, "future observation session proof",
+    )
+
+
+@pytest.mark.parametrize(("corruption", "message"), [
+    ("missing_observation", "stored label has no future observation"),
+    ("missing_label", "future observation has no matured label"),
+    ("dangling_observation", "dangling future observation"),
+    ("conflicting_observation", "conflicting future observation"),
+])
+def test_summarize_rejects_incomplete_or_conflicting_future_observation_chain(
+    tmp_path, corruption, message,
+):
+    state = _seed_complete_integrity_state(tmp_path)
+    _append_provenance_label(state)
+    observation_path = state / "future_observations.jsonl"
+    label_path = state / "labels.jsonl"
+    if corruption == "missing_observation":
+        observation_path.unlink()
+    elif corruption == "missing_label":
+        label_path.unlink()
+    else:
+        original = json.loads(observation_path.read_text(encoding="utf-8"))
+        changed = json.loads(json.dumps(original))
+        if corruption == "dangling_observation":
+            changed["event_id"] = "missing"
+            changed["payload"]["event_id"] = "missing"
+        else:
+            changed["payload"]["minute"]["open"] = 9.99
+        with observation_path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(changed, sort_keys=True, separators=(",", ":")) + "\n")
+
+    _assert_summarize_fails_without_replacing_summary(state, message)

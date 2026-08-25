@@ -24,10 +24,11 @@ EVALUATIONS_FILE = "evaluations.jsonl"
 EVENTS_FILE = "events.jsonl"
 HASHES_FILE = "source_hashes.jsonl"
 LABELS_FILE = "labels.jsonl"
+OBSERVATIONS_FILE = "future_observations.jsonl"
 STATE_MARKER_FILE = "observer_state.json"
 STATE_MARKER = {
     "observer": "rsi_low_turn_prospective_shadow",
-    "schema_version": 1,
+    "schema_version": 2,
 }
 
 
@@ -149,12 +150,15 @@ class ShadowStore:
         self.load_source_snapshots()
         self.load_evaluations()
         self.load_events()
+        self.load_future_observations()
         self.load_labels()
         marker = self.state_dir / STATE_MARKER_FILE
         if marker.exists():
             self.require_state_marker()
         elif self.state_dir.exists():
-            allowed = {HASHES_FILE, EVALUATIONS_FILE, EVENTS_FILE, LABELS_FILE}
+            allowed = {
+                HASHES_FILE, EVALUATIONS_FILE, EVENTS_FILE, OBSERVATIONS_FILE, LABELS_FILE,
+            }
             if any(path.name not in allowed or not path.is_file() for path in self.state_dir.iterdir()):
                 raise SourceRewriteError("observer state marker is required")
 
@@ -191,6 +195,19 @@ class ShadowStore:
         ]
         if matching and any(_canonical(item) != _canonical(record) for item in matching):
             raise SourceRewriteError(f"conflicting label for event_id {event_id} horizon {horizon}")
+
+    def validate_future_observation(
+        self, event_id: str, horizon: int, payload: Mapping[str, object],
+    ) -> None:
+        record = _future_observation_record(event_id, horizon, payload)
+        matching = [
+            item for item in self.load_future_observations()
+            if item.get("event_id") == event_id and item.get("horizon") == horizon
+        ]
+        if matching and any(_canonical(item) != _canonical(record) for item in matching):
+            raise SourceRewriteError(
+                f"conflicting future observation for event_id {event_id} horizon {horizon}"
+            )
 
     def write_state_marker(self) -> None:
         path = self.state_dir / STATE_MARKER_FILE
@@ -276,6 +293,13 @@ class ShadowStore:
         if not isinstance(payload, Mapping):
             raise TypeError("payload must be a mapping")
 
+        if not any(
+            item.get("event_id") == event_id and item.get("horizon") == horizon
+            for item in self.load_future_observations()
+        ):
+            raise SourceRewriteError(
+                f"label has no future observation for event_id {event_id} horizon {horizon}"
+            )
         record = _label_record(event_id, horizon, payload)
         existing = self.load_labels()
         matching = [
@@ -293,6 +317,24 @@ class ShadowStore:
         self._append_record(LABELS_FILE, record)
         return RecordResult(True, False, "label_appended")
 
+    def append_future_observation(
+        self, event_id: str, horizon: int, payload: Mapping[str, object],
+    ) -> RecordResult:
+        record = _future_observation_record(event_id, horizon, payload)
+        existing = self.load_future_observations()
+        matching = [
+            item for item in existing
+            if item.get("event_id") == event_id and item.get("horizon") == horizon
+        ]
+        if matching:
+            if any(_canonical(item) != _canonical(record) for item in matching):
+                raise SourceRewriteError(
+                    f"conflicting future observation for event_id {event_id} horizon {horizon}"
+                )
+            return RecordResult(False, False, "duplicate_future_observation")
+        self._append_record(OBSERVATIONS_FILE, record)
+        return RecordResult(True, False, "future_observation_appended")
+
     def load_events(self) -> tuple[Mapping[str, object], ...]:
         return self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event", reject_duplicates=True)
 
@@ -308,6 +350,23 @@ class ShadowStore:
                 if _canonical(keys[key]) != _canonical(record):
                     raise SourceRewriteError(f"conflicting label for event_id {event_id} horizon {horizon}")
                 raise SourceRewriteError(f"duplicate label for event_id {event_id} horizon {horizon}")
+            keys[key] = record
+        return records
+
+    def load_future_observations(self) -> tuple[Mapping[str, object], ...]:
+        records = tuple(self._read_records(OBSERVATIONS_FILE))
+        keys: dict[tuple[str, int], Mapping[str, object]] = {}
+        for record in records:
+            event_id, horizon = _validated_future_observation(record)
+            key = (event_id, horizon)
+            if key in keys:
+                if _canonical(keys[key]) != _canonical(record):
+                    raise SourceRewriteError(
+                        f"conflicting future observation for event_id {event_id} horizon {horizon}"
+                    )
+                raise SourceRewriteError(
+                    f"duplicate future observation for event_id {event_id} horizon {horizon}"
+                )
             keys[key] = record
         return records
 
@@ -683,6 +742,88 @@ def _label_record(event_id: str, horizon: int, payload: Mapping[str, object]) ->
         "horizon": horizon,
         "payload": _json_value(payload),
     }
+
+
+def _future_observation_record(
+    event_id: str, horizon: int, payload: Mapping[str, object],
+) -> dict[str, object]:
+    record = {
+        "event_id": event_id,
+        "horizon": horizon,
+        "payload": _json_value(payload),
+    }
+    _validated_future_observation(record)
+    return record
+
+
+def _validated_future_observation(record: Mapping[str, object]) -> tuple[str, int]:
+    if not isinstance(record, Mapping) or set(record) != {"event_id", "horizon", "payload"}:
+        raise SourceRewriteError("invalid future observation record")
+    event_id, horizon, payload = (
+        record.get("event_id"), record.get("horizon"), record.get("payload"),
+    )
+    if (
+        not isinstance(event_id, str) or not event_id
+        or not isinstance(horizon, int) or isinstance(horizon, bool)
+        or horizon not in (1, 3, 5, 10)
+        or not isinstance(payload, Mapping)
+    ):
+        raise SourceRewriteError("invalid future observation key")
+    expected = {
+        "event_id", "code", "arrival_date", "horizon", "target_date",
+        "target_timestamp", "future_sessions", "minute", "daily_snapshot",
+        "minute_snapshot",
+    }
+    if set(payload) != expected or payload.get("event_id") != event_id or payload.get("horizon") != horizon:
+        raise SourceRewriteError("invalid future observation fields")
+    if not isinstance(payload.get("code"), str) or re.fullmatch(r"\d{6}", payload["code"]) is None:
+        raise SourceRewriteError("invalid future observation identity")
+    for key in ("arrival_date", "target_date"):
+        try:
+            date.fromisoformat(payload.get(key))
+        except (TypeError, ValueError) as exc:
+            raise SourceRewriteError("invalid future observation date") from exc
+    _parse_datetime(payload.get("target_timestamp"))
+    sessions = payload.get("future_sessions")
+    if not isinstance(sessions, list) or len(sessions) != horizon:
+        raise SourceRewriteError("invalid future observation session proof")
+    for session in sessions:
+        if not isinstance(session, Mapping) or set(session) != {"date", "available_at", "source"}:
+            raise SourceRewriteError("invalid future observation session proof")
+        try:
+            date.fromisoformat(session.get("date"))
+        except (TypeError, ValueError) as exc:
+            raise SourceRewriteError("invalid future observation session proof") from exc
+        _parse_datetime(session.get("available_at"))
+        if not isinstance(session.get("source"), str) or not session["source"].strip():
+            raise SourceRewriteError("invalid future observation session proof")
+    minute = payload.get("minute")
+    if not isinstance(minute, Mapping) or set(minute) != {
+        "timestamp", "open", "volume", "num_trades", "available_at", "source",
+    }:
+        raise SourceRewriteError("invalid future observation minute proof")
+    _parse_datetime(minute.get("timestamp"))
+    _parse_datetime(minute.get("available_at"))
+    if not all(_finite_real(minute.get(key)) and float(minute[key]) > 0 for key in ("open", "volume", "num_trades")):
+        raise SourceRewriteError("invalid future observation minute proof")
+    if not isinstance(minute.get("source"), str) or not minute["source"].strip():
+        raise SourceRewriteError("invalid future observation minute proof")
+    for key in ("daily_snapshot", "minute_snapshot"):
+        identity = payload.get(key)
+        if not isinstance(identity, Mapping) or set(identity) != {
+            "relative_path", "sha256", "byte_length", "observed_at", "collected_at",
+        }:
+            raise SourceRewriteError("invalid future observation snapshot identity")
+        if not isinstance(identity.get("relative_path"), str) or not identity["relative_path"]:
+            raise SourceRewriteError("invalid future observation snapshot identity")
+        if not isinstance(identity.get("sha256"), str) or re.fullmatch(r"[0-9a-f]{64}", identity["sha256"]) is None:
+            raise SourceRewriteError("invalid future observation snapshot identity")
+        length = identity.get("byte_length")
+        if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+            raise SourceRewriteError("invalid future observation snapshot identity")
+        _parse_datetime(identity.get("observed_at"))
+        _parse_datetime(identity.get("collected_at"))
+    return event_id, horizon
 
 
 def _evaluation_requires_event(evaluation: Mapping[str, object]) -> bool:

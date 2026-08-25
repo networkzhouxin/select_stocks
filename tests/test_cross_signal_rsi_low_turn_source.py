@@ -370,6 +370,76 @@ def test_future_snapshot_retains_stable_price_file_provenance(tmp_path):
     assert getattr(snapshot, "source_byte_length", None) == len(minute_content)
 
 
+def test_future_observation_binds_frozen_session_sequence_and_exact_minute_row(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    collected_at = datetime(2026, 8, 31, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
+    contents = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*") if path.is_file()
+    }
+    history = tuple({
+        "relative_path": relative_path,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "byte_length": len(content),
+        "observed_at": collected_at.isoformat(),
+    } for relative_path, content in contents.items())
+    source = ApprovedFuturePriceSource(
+        root, root, source_contents=contents, collected_at=collected_at,
+    )
+    event = {
+        "event_id": "event-1", "code": "513100",
+        "arrival_date": date(2026, 8, 26), "entry_open": 2.035,
+    }
+
+    observation = source.observation_for(event, 3, collected_at, history)
+
+    assert observation is not None
+    assert [proof.date for proof in observation.future_sessions] == [
+        date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 31),
+    ]
+    assert observation.target_timestamp == datetime(
+        2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"),
+    )
+    assert observation.minute.timestamp == observation.target_timestamp
+    assert observation.minute.open == pytest.approx(2.03)
+    assert observation.daily_snapshot.sha256 == hashlib.sha256(
+        contents["daily/513100.csv"],
+    ).hexdigest()
+    assert observation.minute_snapshot.sha256 == hashlib.sha256(
+        contents["minute_0935/513100.csv"],
+    ).hexdigest()
+
+
+def test_future_observation_does_not_skip_a_late_earlier_source_session(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    daily_path = root / "daily" / "513100.csv"
+    daily = pd.read_csv(daily_path)
+    daily.loc[daily["date"] == "2026-08-27", "available_at"] = "2026-09-01T15:01:00+08:00"
+    daily.to_csv(daily_path, index=False)
+    as_of = datetime(2026, 8, 28, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
+    contents = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*") if path.is_file()
+    }
+    history = tuple({
+        "relative_path": relative_path,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "byte_length": len(content),
+        "observed_at": as_of.isoformat(),
+    } for relative_path, content in contents.items())
+    source = ApprovedFuturePriceSource(
+        root, root, source_contents=contents, collected_at=as_of,
+    )
+    event = {
+        "event_id": "event-1", "code": "513100",
+        "arrival_date": date(2026, 8, 26), "entry_open": 2.035,
+    }
+
+    observation = source.observation_for(event, 1, as_of, history)
+
+    assert observation is None
+
+
 def test_future_source_never_substitutes_a_missing_exact_0935_open(tmp_path):
     root = build_source_with_matured_future_sessions(tmp_path)
     minute_path = root / "minute_0935" / "513100.csv"

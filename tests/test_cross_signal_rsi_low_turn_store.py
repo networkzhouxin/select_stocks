@@ -22,6 +22,44 @@ OBSERVED_0827 = datetime(2026, 8, 27, 9, 35, tzinfo=SHANGHAI)
 OBSERVED_0828 = datetime(2026, 8, 28, 9, 35, tzinfo=SHANGHAI)
 
 
+def observation_payload(event_id="event-1", horizon=5):
+    target = OBSERVED_0826 + timedelta(days=horizon)
+    collected = target.replace(hour=15, minute=1)
+    return {
+        "event_id": event_id,
+        "code": "513100",
+        "arrival_date": OBSERVED_0826.date().isoformat(),
+        "horizon": horizon,
+        "target_date": target.date().isoformat(),
+        "target_timestamp": target.isoformat(),
+        "future_sessions": [
+            {
+                "date": (OBSERVED_0826 + timedelta(days=index)).date().isoformat(),
+                "available_at": (OBSERVED_0826 + timedelta(days=index)).replace(
+                    hour=15, minute=1,
+                ).isoformat(),
+                "source": "pytest_daily",
+            }
+            for index in range(1, horizon + 1)
+        ],
+        "minute": {
+            "timestamp": target.isoformat(), "open": 2.1, "volume": 1000.0,
+            "num_trades": 10.0, "available_at": target.isoformat(),
+            "source": "pytest_minute",
+        },
+        "daily_snapshot": {
+            "relative_path": "daily/513100.csv", "sha256": "a" * 64,
+            "byte_length": 1, "observed_at": OBSERVED_0826.isoformat(),
+            "collected_at": collected.isoformat(),
+        },
+        "minute_snapshot": {
+            "relative_path": "minute_0935/513100.csv", "sha256": "b" * 64,
+            "byte_length": 1, "observed_at": OBSERVED_0826.isoformat(),
+            "collected_at": collected.isoformat(),
+        },
+    }
+
+
 def decision_for(arrival_date: str, signal: bool = True, price: float = 2.035):
     day = date.fromisoformat(arrival_date)
     item = RsiTurnInput(
@@ -193,7 +231,7 @@ def test_marker_write_is_atomic_and_retry_safe_after_replace_failure(tmp_path, m
 
     monkeypatch.setattr(os, "replace", real_replace)
     store.write_state_marker()
-    assert marker.read_text(encoding="utf-8") == '{"observer":"rsi_low_turn_prospective_shadow","schema_version":1}\n'
+    assert marker.read_text(encoding="utf-8") == '{"observer":"rsi_low_turn_prospective_shadow","schema_version":2}\n'
     store.require_state_marker()
 
 
@@ -267,6 +305,7 @@ def test_unproved_signal_starts_episode_without_emitting_event(tmp_path):
 
 def test_labels_are_idempotent_and_conflicts_are_refused(tmp_path):
     store = ShadowStore(tmp_path)
+    store.append_future_observation("event-1", 5, observation_payload())
     payload = {"return": 0.1, "close": 2.1}
     first = store.append_label("event-1", 5, payload)
     duplicate = store.append_label("event-1", 5, payload)
@@ -275,6 +314,33 @@ def test_labels_are_idempotent_and_conflicts_are_refused(tmp_path):
     assert store.load_labels() == ({"event_id": "event-1", "horizon": 5, "payload": payload},)
     with pytest.raises(SourceRewriteError, match="conflicting label"):
         store.append_label("event-1", 5, {"return": 0.2, "close": 2.1})
+
+
+def test_future_observations_are_idempotent_strict_and_conflict_safe(tmp_path):
+    store = ShadowStore(tmp_path)
+    payload = observation_payload()
+    first = store.append_future_observation("event-1", 5, payload)
+    duplicate = store.append_future_observation("event-1", 5, payload)
+    assert first.written is True
+    assert duplicate.written is False
+    assert store.load_future_observations() == ({
+        "event_id": "event-1", "horizon": 5, "payload": payload,
+    },)
+
+    changed = observation_payload()
+    changed["minute"]["open"] = 9.99
+    with pytest.raises(SourceRewriteError, match="conflicting future observation"):
+        store.append_future_observation("event-1", 5, changed)
+
+    extra = observation_payload("event-2")
+    extra["unregistered"] = True
+    with pytest.raises(SourceRewriteError, match="future observation fields"):
+        store.append_future_observation("event-2", 5, extra)
+
+
+def test_label_cannot_be_appended_without_future_observation(tmp_path):
+    with pytest.raises(SourceRewriteError, match="label has no future observation"):
+        ShadowStore(tmp_path).append_label("event-1", 5, {"return": 0.1})
 
 
 def test_event_snapshot_keeps_complete_immutable_decision_input(tmp_path):
@@ -326,7 +392,7 @@ def test_retry_reconciles_event_after_interruption_between_appends(tmp_path, mon
 
 @pytest.mark.parametrize(
     "filename",
-    ["evaluations.jsonl", "events.jsonl", "labels.jsonl", "source_hashes.jsonl"],
+    ["evaluations.jsonl", "events.jsonl", "future_observations.jsonl", "labels.jsonl", "source_hashes.jsonl"],
 )
 def test_malformed_or_truncated_jsonl_is_a_domain_integrity_error(tmp_path, filename):
     store = ShadowStore(tmp_path)
@@ -338,6 +404,8 @@ def test_malformed_or_truncated_jsonl_is_a_domain_integrity_error(tmp_path, file
             store.load_events()
         elif filename == "labels.jsonl":
             store.load_labels()
+        elif filename == "future_observations.jsonl":
+            store.load_future_observations()
         else:
             store.record_source_snapshot("daily/513100.csv", b"fixture", OBSERVED_0826)
 
@@ -371,6 +439,7 @@ def test_load_evaluations_rejects_identical_duplicate_event_id(tmp_path):
 
 def test_preexisting_later_conflicting_label_duplicate_is_refused(tmp_path):
     store = ShadowStore(tmp_path)
+    store.append_future_observation("event-1", 5, observation_payload())
     payload = {"return": 0.1}
     store.append_label("event-1", 5, payload)
     path = tmp_path / "labels.jsonl"

@@ -67,6 +67,46 @@ class MaturedLabel:
 
 
 @dataclass(frozen=True)
+class FutureSessionProof:
+    date: date
+    available_at: datetime
+    source: str
+
+
+@dataclass(frozen=True)
+class MinuteExecutionProof:
+    timestamp: datetime
+    open: float
+    volume: float
+    num_trades: float
+    available_at: datetime
+    source: str
+
+
+@dataclass(frozen=True)
+class SourceSnapshotIdentity:
+    relative_path: str
+    sha256: str
+    byte_length: int
+    observed_at: datetime
+    collected_at: datetime
+
+
+@dataclass(frozen=True)
+class FutureObservation:
+    event_id: str
+    code: str
+    arrival_date: date
+    horizon: int
+    target_date: date
+    target_timestamp: datetime
+    future_sessions: tuple[FutureSessionProof, ...]
+    minute: MinuteExecutionProof
+    daily_snapshot: SourceSnapshotIdentity
+    minute_snapshot: SourceSnapshotIdentity
+
+
+@dataclass(frozen=True)
 class EventOutcomeRecord:
     event_id: str
     code: str

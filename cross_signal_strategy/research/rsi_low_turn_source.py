@@ -14,7 +14,13 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from cross_signal_strategy.research.rsi_low_turn_outcomes import FutureSnapshot
+from cross_signal_strategy.research.rsi_low_turn_outcomes import (
+    FutureObservation,
+    FutureSessionProof,
+    FutureSnapshot,
+    MinuteExecutionProof,
+    SourceSnapshotIdentity,
+)
 from cross_signal_strategy.research.rsi_low_turn_shadow import RsiTurnInput, calculate_rsi6
 
 
@@ -142,6 +148,97 @@ class ApprovedFuturePriceSource:
             minute_relative_path,
             hashlib.sha256(minute_content).hexdigest(),
             len(minute_content),
+        )
+
+    def observation_for(
+        self,
+        event: Mapping[str, object],
+        horizon: int,
+        as_of: datetime,
+        source_snapshots: tuple[Mapping[str, object], ...],
+    ) -> FutureObservation | None:
+        """Derive one immutable normalized observation from the bound source bytes."""
+        code = _event_code(event)
+        _require_code(code)
+        _require_future_as_of(as_of)
+        if horizon not in (1, 3, 5, 10):
+            raise ValueError("horizon is outside the frozen set")
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("event_id must be a non-empty string")
+        arrival_date = _event_arrival_date(event)
+        collected_at = self.collected_at or as_of
+        if collected_at > as_of:
+            raise SourceContractError("future source collected_at cannot follow as_of")
+
+        daily_path = _source_file(self.manifest.root / self.manifest.daily_subdir, code, "daily")
+        minute_path = _source_file(self.manifest.root / self.manifest.minute_subdir, code, "minute")
+        daily_relative = f"{self.manifest.daily_subdir}/{code}.csv"
+        minute_relative = f"{self.manifest.minute_subdir}/{code}.csv"
+        daily_content = _snapshot_content(self.source_contents, daily_relative, daily_path)
+        minute_content = _snapshot_content(self.source_contents, minute_relative, minute_path)
+        daily = _future_daily_frame_from_content(daily_content, code)
+        minute = _future_minute_frame_from_content(minute_content, code)
+        source_sessions = daily[daily["date"] > arrival_date].sort_values("date", kind="stable")
+        if len(source_sessions) < horizon:
+            return None
+        sessions = source_sessions.iloc[:horizon]
+        target_date = sessions.iloc[-1]["date"]
+        if (
+            target_date > as_of.date()
+            or (sessions["_available_at"] > pd.Timestamp(as_of)).any()
+        ):
+            return None
+        _require_consumed_sources(sessions, "daily")
+        target_timestamp = pd.Timestamp(datetime.combine(target_date, time(9, 35), SHANGHAI))
+        exact = minute[minute["_timestamp"] == target_timestamp]
+        if len(exact) != 1:
+            return None
+        timely = exact[
+            (exact["_available_at"] <= target_timestamp)
+            & (exact["_available_at"] <= pd.Timestamp(as_of))
+        ]
+        if len(timely) != 1:
+            return None
+        quote = timely.iloc[0]
+        minute_source = _require_source_value(quote["source"], "minute")
+        exit_open, volume, num_trades = (
+            _as_finite(quote[column]) for column in ("open", "volume", "num_trades")
+        )
+        if not all(value is not None and value > 0 for value in (exit_open, volume, num_trades)):
+            return None
+
+        daily_identity = _snapshot_identity(
+            daily_relative, daily_content, collected_at, source_snapshots,
+        )
+        minute_identity = _snapshot_identity(
+            minute_relative, minute_content, collected_at, source_snapshots,
+        )
+        return FutureObservation(
+            event_id=event_id,
+            code=code,
+            arrival_date=arrival_date,
+            horizon=horizon,
+            target_date=target_date,
+            target_timestamp=target_timestamp.to_pydatetime(),
+            future_sessions=tuple(
+                FutureSessionProof(
+                    date=row["date"],
+                    available_at=row["_available_at"].to_pydatetime(),
+                    source=_require_source_value(row["source"], "daily"),
+                )
+                for _, row in sessions.iterrows()
+            ),
+            minute=MinuteExecutionProof(
+                timestamp=target_timestamp.to_pydatetime(),
+                open=float(exit_open),
+                volume=float(volume),
+                num_trades=float(num_trades),
+                available_at=quote["_available_at"].to_pydatetime(),
+                source=minute_source,
+            ),
+            daily_snapshot=daily_identity,
+            minute_snapshot=minute_identity,
         )
 
 
@@ -516,3 +613,37 @@ def _snapshot_content(
         return path.read_bytes()
     except OSError as exc:
         raise SourceContractError(f"source snapshot is unreadable: {path.name}") from exc
+
+
+def _snapshot_identity(
+    relative_path: str,
+    content: bytes,
+    collected_at: datetime,
+    history: tuple[Mapping[str, object], ...],
+) -> SourceSnapshotIdentity:
+    digest = hashlib.sha256(content).hexdigest()
+    length = len(content)
+    matches = []
+    for record in history:
+        if (
+            record.get("relative_path") == relative_path
+            and record.get("sha256") == digest
+            and record.get("byte_length") == length
+        ):
+            try:
+                observed = datetime.fromisoformat(record.get("observed_at"))
+            except (TypeError, ValueError) as exc:
+                raise SourceContractError("source snapshot history timestamp is invalid") from exc
+            if observed.tzinfo is None or observed.utcoffset() is None:
+                raise SourceContractError("source snapshot history timestamp is invalid")
+            if observed <= collected_at:
+                matches.append(observed)
+    if not matches:
+        raise SourceContractError("future observation source snapshot is unproved")
+    return SourceSnapshotIdentity(
+        relative_path=relative_path,
+        sha256=digest,
+        byte_length=length,
+        observed_at=max(matches),
+        collected_at=collected_at,
+    )

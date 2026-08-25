@@ -27,7 +27,6 @@ from cross_signal_strategy.research.rsi_low_turn_outcomes import (
     RoundTripResult,
     build_summary,
     calculate_round_trip,
-    mature_event_labels,
 )
 from cross_signal_strategy.research.rsi_low_turn_shadow import detect_rsi_low_turn
 from cross_signal_strategy.research.rsi_low_turn_source import (
@@ -83,8 +82,11 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     existing_events = preflight_store.replay_validated_events(
         FROZEN_ETF_CODES, require_exact=has_marker,
     )
+    existing_observations = preflight_store.load_future_observations()
+    existing_labels = preflight_store.load_labels()
     _event_outcome_records(
-        existing_events, preflight_store.load_labels(), source_history,
+        existing_events, existing_observations, existing_labels, source_history,
+        allow_missing_labels=True,
     )
     before_snapshots = _read_source_snapshots(
         manifest.root, manifest.daily_subdir, manifest.minute_subdir,
@@ -111,9 +113,6 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
         )
         for code in FROZEN_ETF_CODES
     )
-    labels = _matured_existing_labels(
-        existing_events, manifest.root, observed_at, source_contents,
-    )
     after_snapshots = _read_source_snapshots(
         manifest.root, manifest.daily_subdir, manifest.minute_subdir,
     )
@@ -124,7 +123,28 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     for decision in decisions:
         preflight_store.validate_evaluation(decision, observed_at)
     available_snapshots = (*source_history, *snapshot_batch.records)
-    _validate_new_label_provenance(existing_events, labels, available_snapshots)
+    observations = _matured_existing_observations(
+        existing_events, existing_observations, manifest.root, observed_at,
+        source_contents, available_snapshots,
+    )
+    all_observations = (*existing_observations, *(
+        {"event_id": event_id, "horizon": horizon, "payload": payload}
+        for event_id, horizon, payload in observations
+    ))
+    labels = _labels_for_observations(
+        existing_events, all_observations, existing_labels, available_snapshots,
+    )
+    _event_outcome_records(
+        existing_events,
+        tuple(all_observations),
+        (*existing_labels, *(
+            {"event_id": event_id, "horizon": horizon, "payload": payload}
+            for event_id, horizon, payload in labels
+        )),
+        available_snapshots,
+    )
+    for event_id, horizon, payload in observations:
+        preflight_store.validate_future_observation(event_id, horizon, payload)
     for event_id, horizon, payload in labels:
         preflight_store.validate_label(event_id, horizon, payload)
 
@@ -132,6 +152,10 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     _record_source_snapshots(store, snapshot_batch)
     evaluation_results = [
         store.record_evaluation(decision, observed_at) for decision in decisions
+    ]
+    observation_results = [
+        store.append_future_observation(event_id, horizon, payload)
+        for event_id, horizon, payload in observations
     ]
     label_results = [
         store.append_label(event_id, horizon, payload)
@@ -141,6 +165,7 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     print(
         "收集完成："
         f"evaluations={sum(result.written for result in evaluation_results)} "
+        f"future_observations={sum(result.written for result in observation_results)} "
         f"matured_labels={sum(result.written for result in label_results)} "
         "orders_disabled=True"
     )
@@ -156,7 +181,8 @@ def summarize(state_dir: Path, generated_at: str) -> None:
     events = store.replay_validated_events(FROZEN_ETF_CODES)
     summary = build_summary(
         _event_outcome_records(
-            events, store.load_labels(), store.load_source_snapshots(),
+            events, store.load_future_observations(), store.load_labels(),
+            store.load_source_snapshots(),
         ),
         MIN_COLLECTION_START,
         timestamp,
@@ -212,27 +238,60 @@ def _required_snapshot_paths() -> tuple[str, ...]:
     )
 
 
-def _matured_existing_labels(
+def _matured_existing_observations(
     events: tuple[Mapping[str, object], ...],
+    existing: tuple[Mapping[str, object], ...],
     root: Path,
     as_of: datetime,
     source_contents: Mapping[str, bytes],
+    source_snapshots: tuple[Mapping[str, object], ...],
 ) -> tuple[tuple[str, int, Mapping[str, object]], ...]:
     source = ApprovedFuturePriceSource(
         root, root, source_contents=source_contents, collected_at=as_of,
     )
-    labels = []
+    existing_keys = {(item["event_id"], item["horizon"]) for item in existing}
+    observations = []
     for event in events:
-        for label in mature_event_labels(event, source, as_of):
-            if label.status == "matured":
-                labels.append((label.event_id, label.horizon, asdict(label)))
+        for horizon in HORIZONS:
+            key = (event["event_id"], horizon)
+            if key in existing_keys:
+                continue
+            observation = source.observation_for(event, horizon, as_of, source_snapshots)
+            if observation is not None:
+                observations.append((event["event_id"], horizon, _json_ready(asdict(observation))))
+    return tuple(observations)
+
+
+def _labels_for_observations(
+    events: tuple[Mapping[str, object], ...],
+    observations: tuple[Mapping[str, object], ...],
+    existing_labels: tuple[Mapping[str, object], ...],
+    source_snapshots: tuple[Mapping[str, object], ...],
+) -> tuple[tuple[str, int, Mapping[str, object]], ...]:
+    existing_keys = {(item["event_id"], item["horizon"]) for item in existing_labels}
+    events_by_id = {event["event_id"]: event for event in events}
+    labels = []
+    for record in observations:
+        key = (record["event_id"], record["horizon"])
+        if key in existing_keys:
+            continue
+        event = events_by_id.get(record["event_id"])
+        if event is None:
+            raise SourceRewriteError(f"dangling future observation {record['event_id']}")
+        observation = _validated_future_observation(
+            event, record["horizon"], record["payload"], source_snapshots,
+        )
+        labels.append((key[0], key[1], _label_payload_from_observation(event, observation)))
     return tuple(labels)
 
 
 def _event_outcome_records(
     events: tuple[Mapping[str, object], ...],
+    observations: tuple[Mapping[str, object], ...],
     labels: tuple[Mapping[str, object], ...],
     source_snapshots: tuple[Mapping[str, object], ...] = (),
+    *,
+    allow_missing_labels: bool = False,
 ) -> tuple[EventOutcomeRecord, ...]:
     event_ids = set()
     for event in events:
@@ -243,27 +302,51 @@ def _event_outcome_records(
             raise SourceRewriteError(f"duplicate event {event_id}")
         event_ids.add(event_id)
 
-    labels_by_event: dict[str, dict[int, MaturedLabel]] = {}
-    validated_labels = []
-    for record in labels:
+    events_by_id = {event["event_id"]: event for event in events}
+    observations_by_key = {}
+    for record in observations:
         event_id = record.get("event_id")
         horizon = record.get("horizon")
         payload = record.get("payload")
         if not isinstance(event_id, str) or not isinstance(horizon, int) or not isinstance(payload, Mapping):
+            raise SourceRewriteError("stored future observation is invalid")
+        if event_id not in event_ids:
+            raise SourceRewriteError(f"dangling future observation {event_id}")
+        if horizon not in HORIZONS:
+            raise SourceRewriteError(f"unsupported horizon {horizon}")
+        key = (event_id, horizon)
+        if key in observations_by_key:
+            raise SourceRewriteError(f"duplicate future observation for event_id {event_id} horizon {horizon}")
+        observations_by_key[key] = _validated_future_observation(
+            events_by_id[event_id], horizon, payload, source_snapshots,
+        )
+
+    label_records = {}
+    for record in labels:
+        event_id, horizon, payload = (
+            record.get("event_id"), record.get("horizon"), record.get("payload"),
+        )
+        if not isinstance(event_id, str) or not isinstance(horizon, int) or not isinstance(payload, Mapping):
             raise SourceRewriteError("stored label is invalid")
+        key = (event_id, horizon)
         if event_id not in event_ids:
             raise SourceRewriteError(f"dangling label {event_id}")
         if horizon not in HORIZONS:
             raise SourceRewriteError(f"unsupported horizon {horizon}")
-        event_labels = labels_by_event.setdefault(event_id, {})
-        if horizon in event_labels:
+        if key not in observations_by_key:
+            raise SourceRewriteError("stored label has no future observation")
+        if key in label_records:
             raise SourceRewriteError(f"duplicate label for event_id {event_id} horizon {horizon}")
-        event_labels[horizon] = None
-        validated_labels.append((event_id, horizon, payload))
-    for event_id, horizon, payload in validated_labels:
-        event = next(item for item in events if item.get("event_id") == event_id)
-        labels_by_event[event_id][horizon] = _matured_label(
-            event, horizon, payload, source_snapshots,
+        label_records[key] = payload
+    missing = set(observations_by_key) - set(label_records)
+    if missing and not allow_missing_labels:
+        raise SourceRewriteError("future observation has no matured label")
+
+    labels_by_event: dict[str, dict[int, MaturedLabel]] = {}
+    for key, payload in label_records.items():
+        event_id, horizon = key
+        labels_by_event.setdefault(event_id, {})[horizon] = _matured_label(
+            events_by_id[event_id], horizon, payload, observations_by_key[key],
         )
 
     records = []
@@ -281,11 +364,114 @@ def _event_outcome_records(
     return tuple(records)
 
 
+def _validated_future_observation(
+    event: Mapping[str, object],
+    horizon: int,
+    payload: Mapping[str, object],
+    source_snapshots: tuple[Mapping[str, object], ...],
+) -> Mapping[str, object]:
+    expected = {
+        "event_id", "code", "arrival_date", "horizon", "target_date",
+        "target_timestamp", "future_sessions", "minute", "daily_snapshot",
+        "minute_snapshot",
+    }
+    if set(payload) != expected:
+        raise SourceRewriteError("future observation fields are invalid")
+    if (
+        payload.get("event_id") != event.get("event_id")
+        or payload.get("code") != event.get("code")
+        or payload.get("arrival_date") != event.get("arrival_date")
+        or payload.get("horizon") != horizon
+    ):
+        raise SourceRewriteError("future observation event identity is invalid")
+    try:
+        arrival = date.fromisoformat(payload["arrival_date"])
+        target_date = date.fromisoformat(payload["target_date"])
+        target = _stored_aware_datetime(payload["target_timestamp"])
+    except (TypeError, ValueError) as exc:
+        raise SourceRewriteError("future observation timestamp is invalid") from exc
+    sessions = payload.get("future_sessions")
+    if not isinstance(sessions, list) or len(sessions) != horizon:
+        raise SourceRewriteError("future observation session proof is invalid")
+    session_dates = []
+    collected_values = []
+    for identity_name in ("daily_snapshot", "minute_snapshot"):
+        identity = payload.get(identity_name)
+        if not isinstance(identity, Mapping):
+            raise SourceRewriteError("future observation snapshot identity is invalid")
+        expected_path = (
+            f"daily/{event['code']}.csv" if identity_name == "daily_snapshot"
+            else f"minute_0935/{event['code']}.csv"
+        )
+        if identity.get("relative_path") != expected_path:
+            raise SourceRewriteError("future observation snapshot identity is invalid")
+        try:
+            observed = _stored_aware_datetime(identity.get("observed_at"))
+            collected = _stored_aware_datetime(identity.get("collected_at"))
+        except (TypeError, ValueError) as exc:
+            raise SourceRewriteError("future observation snapshot identity is invalid") from exc
+        if observed > collected:
+            raise SourceRewriteError("future observation snapshot identity is not point-in-time valid")
+        collected_values.append(collected)
+        if not any(
+            snapshot.get("relative_path") == identity.get("relative_path")
+            and snapshot.get("sha256") == identity.get("sha256")
+            and snapshot.get("byte_length") == identity.get("byte_length")
+            and _stored_aware_datetime(snapshot.get("observed_at")) == observed
+            for snapshot in source_snapshots
+        ):
+            raise SourceRewriteError("future observation snapshot identity does not match source history")
+    if collected_values[0] != collected_values[1]:
+        raise SourceRewriteError("future observation snapshots were not collected together")
+    collected = collected_values[0]
+    for session in sessions:
+        if not isinstance(session, Mapping) or set(session) != {"date", "available_at", "source"}:
+            raise SourceRewriteError("future observation session proof is invalid")
+        try:
+            session_date = date.fromisoformat(session.get("date"))
+            available = _stored_aware_datetime(session.get("available_at"))
+        except (TypeError, ValueError) as exc:
+            raise SourceRewriteError("future observation session proof is invalid") from exc
+        if (
+            session_date <= arrival
+            or available > collected
+            or not isinstance(session.get("source"), str)
+            or not session["source"].strip()
+        ):
+            raise SourceRewriteError("future observation session proof is invalid")
+        session_dates.append(session_date)
+    if session_dates != sorted(set(session_dates)) or session_dates[-1] != target_date:
+        raise SourceRewriteError("future observation session proof is invalid")
+    expected_target = datetime.combine(target_date, datetime.min.time().replace(hour=9, minute=35), SHANGHAI)
+    if target != expected_target:
+        raise SourceRewriteError("future observation target is invalid")
+    minute = payload.get("minute")
+    if not isinstance(minute, Mapping) or set(minute) != {
+        "timestamp", "open", "volume", "num_trades", "available_at", "source",
+    }:
+        raise SourceRewriteError("future observation minute proof is invalid")
+    try:
+        minute_timestamp = _stored_aware_datetime(minute.get("timestamp"))
+        minute_available = _stored_aware_datetime(minute.get("available_at"))
+    except (TypeError, ValueError) as exc:
+        raise SourceRewriteError("future observation minute proof is invalid") from exc
+    if (
+        minute_timestamp != target
+        or minute_available > target
+        or minute_available > collected
+        or not all(_strict_real(minute.get(key)) and float(minute[key]) > 0 for key in ("open", "volume", "num_trades"))
+        or not isinstance(minute.get("source"), str)
+        or not minute["source"].strip()
+    ):
+        raise SourceRewriteError("future observation minute proof is invalid")
+    return payload
+
+
 def _matured_label(
     event: Mapping[str, object],
     horizon: int,
     payload: Mapping[str, object],
-    source_snapshots: tuple[Mapping[str, object], ...] = (),
+    observation: Mapping[str, object],
 ) -> MaturedLabel:
     event_id = event.get("event_id")
     if not isinstance(event_id, str):
@@ -307,6 +493,23 @@ def _matured_label(
     if not _strict_real(payload.get("exit_price")):
         raise SourceRewriteError("stored label numeric type is invalid")
     exit_price = _positive_finite_number(payload.get("exit_price"), "stored label exit price")
+    minute = observation.get("minute")
+    minute_snapshot = observation.get("minute_snapshot")
+    if not isinstance(minute, Mapping) or not isinstance(minute_snapshot, Mapping):
+        raise SourceRewriteError("future observation minute proof is invalid")
+    expected_provenance = {
+        "target_timestamp": observation.get("target_timestamp"),
+        "available_at": minute.get("available_at"),
+        "collected_at": minute_snapshot.get("collected_at"),
+        "source_relative_path": minute_snapshot.get("relative_path"),
+        "source_sha256": minute_snapshot.get("sha256"),
+        "source_byte_length": minute_snapshot.get("byte_length"),
+    }
+    if (
+        exit_price != float(minute.get("open"))
+        or any(payload.get(key) != value for key, value in expected_provenance.items())
+    ):
+        raise SourceRewriteError("stored label does not match future observation")
     nominal = _round_trip(payload.get("nominal"))
     doubled = _round_trip(payload.get("doubled"))
     if nominal is None or doubled is None:
@@ -326,7 +529,14 @@ def _matured_label(
         if set(payload) == base_fields:
             raise SourceRewriteError("stored label provenance is required")
         raise SourceRewriteError("stored label fields are invalid")
-    provenance = _validated_label_provenance(event, payload, source_snapshots)
+    provenance = (
+        _stored_aware_datetime(expected_provenance["target_timestamp"]),
+        _stored_aware_datetime(expected_provenance["available_at"]),
+        _stored_aware_datetime(expected_provenance["collected_at"]),
+        expected_provenance["source_relative_path"],
+        expected_provenance["source_sha256"],
+        expected_provenance["source_byte_length"],
+    )
     return MaturedLabel(
         event_id=event_id,
         horizon=horizon,
@@ -345,76 +555,30 @@ def _matured_label(
     )
 
 
-def _validate_new_label_provenance(
-    events: tuple[Mapping[str, object], ...],
-    labels: tuple[tuple[str, int, Mapping[str, object]], ...],
-    source_snapshots: tuple[Mapping[str, object], ...],
-) -> None:
-    events_by_id = {event["event_id"]: event for event in events}
-    for event_id, horizon, payload in labels:
-        event = events_by_id.get(event_id)
-        if event is None:
-            raise SourceRewriteError(f"dangling label {event_id}")
-        _matured_label(event, horizon, payload, source_snapshots)
-
-
-def _validated_label_provenance(
-    event: Mapping[str, object],
-    payload: Mapping[str, object],
-    source_snapshots: tuple[Mapping[str, object], ...],
-) -> tuple[datetime, datetime, datetime, str, str, int]:
-    try:
-        target = _stored_aware_datetime(payload.get("target_timestamp"))
-        available = _stored_aware_datetime(payload.get("available_at"))
-        collected = _stored_aware_datetime(payload.get("collected_at"))
-    except (TypeError, ValueError) as exc:
-        raise SourceRewriteError("stored label provenance timestamp is invalid") from exc
-    if (
-        target.astimezone(SHANGHAI).timetz().replace(tzinfo=None).isoformat() != "09:35:00"
-        or available > target
-        or available > collected
-    ):
-        raise SourceRewriteError("stored label provenance is not point-in-time valid")
-    arrival_value = event.get("arrival_date")
-    try:
-        arrival = date.fromisoformat(arrival_value)
-    except (TypeError, ValueError) as exc:
-        raise SourceRewriteError("stored event arrival date is invalid") from exc
-    if target.date() <= arrival:
-        raise SourceRewriteError("stored label provenance is not a future session")
-
-    code = event.get("code")
-    expected_path = f"minute_0935/{code}.csv"
-    relative_path = payload.get("source_relative_path")
-    digest = payload.get("source_sha256")
-    byte_length = payload.get("source_byte_length")
-    if (
-        relative_path != expected_path
-        or not isinstance(digest, str)
-        or len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest.lower())
-        or not isinstance(byte_length, int)
-        or isinstance(byte_length, bool)
-        or byte_length < 0
-    ):
-        raise SourceRewriteError("stored label provenance is invalid")
-    matched = False
-    for snapshot in source_snapshots:
-        if (
-            snapshot.get("relative_path") == relative_path
-            and snapshot.get("sha256") == digest
-            and snapshot.get("byte_length") == byte_length
-        ):
-            try:
-                observed = _stored_aware_datetime(snapshot.get("observed_at"))
-            except (TypeError, ValueError) as exc:
-                raise SourceRewriteError("stored label provenance history is invalid") from exc
-            if observed <= collected:
-                matched = True
-                break
-    if not matched:
-        raise SourceRewriteError("stored label provenance does not match source history")
-    return target, available, collected, relative_path, digest.lower(), byte_length
+def _label_payload_from_observation(
+    event: Mapping[str, object], observation: Mapping[str, object],
+) -> Mapping[str, object]:
+    minute = observation["minute"]
+    minute_snapshot = observation["minute_snapshot"]
+    exit_price = float(minute["open"])
+    code = event["code"]
+    entry = float(event["entry_open"])
+    return {
+        "event_id": event["event_id"],
+        "horizon": observation["horizon"],
+        "status": "matured",
+        "exit_price": exit_price,
+        "nominal": asdict(calculate_round_trip(code, entry, exit_price, NOMINAL_FRICTION)),
+        "doubled": asdict(calculate_round_trip(code, entry, exit_price, DOUBLED_FRICTION)),
+        "mfe": None,
+        "mae": None,
+        "target_timestamp": observation["target_timestamp"],
+        "available_at": minute["available_at"],
+        "collected_at": minute_snapshot["collected_at"],
+        "source_relative_path": minute_snapshot["relative_path"],
+        "source_sha256": minute_snapshot["sha256"],
+        "source_byte_length": minute_snapshot["byte_length"],
+    }
 
 
 def _stored_aware_datetime(value: object) -> datetime:
@@ -422,6 +586,18 @@ def _stored_aware_datetime(value: object) -> datetime:
     if not isinstance(parsed, datetime) or parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("timestamp must be timezone-aware")
     return parsed
+
+
+def _json_ready(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_ready(item) for item in value]
+    return value
 
 
 def _round_trip(value: object) -> RoundTripResult | None:
