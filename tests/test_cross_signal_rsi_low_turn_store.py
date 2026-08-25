@@ -1,11 +1,14 @@
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 import json
+import hashlib
+import os
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from cross_signal_strategy.research.rsi_low_turn_shadow import RsiTurnInput, detect_rsi_low_turn
+import cross_signal_strategy.research.rsi_low_turn_store as store_module
 from cross_signal_strategy.research.rsi_low_turn_store import ShadowStore, SourceRewriteError
 
 
@@ -28,6 +31,7 @@ def decision_for(arrival_date: str, signal: bool = True, price: float = 2.035):
         c0=price,
         entry_open=price,
         price_proved=True,
+        source_hashes=("a" * 64, "b" * 64, "c" * 64),
     )
     return detect_rsi_low_turn(item)
 
@@ -81,6 +85,42 @@ def test_source_snapshot_history_allows_only_exact_prefix_growth(tmp_path):
         store.record_source_snapshot("daily/513100.csv", b"first?second\n", OBSERVED_0828)
 
 
+def _snapshot_record(relative_path, content, observed_at):
+    return {
+        "relative_path": relative_path,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "byte_length": len(content),
+        "observed_at": observed_at.isoformat(),
+    }
+
+
+@pytest.mark.parametrize(("record", "message"), [
+    (_snapshot_record("daily/513100.csv", b"first", OBSERVED_0827), "source snapshot length"),
+    (_snapshot_record("daily/513100.csv", b"other\n", OBSERVED_0827), "source snapshot hash"),
+    (_snapshot_record("daily/513100.csv", b"first\nsecond\n", OBSERVED_0826), "source snapshot observed_at"),
+])
+def test_snapshot_history_rejects_broken_per_path_chain(tmp_path, record, message):
+    store = ShadowStore(tmp_path)
+    store.record_source_snapshot("daily/513100.csv", b"first\n", OBSERVED_0826)
+    path = tmp_path / "source_hashes.jsonl"
+    path.write_text(path.read_text(encoding="utf-8") + json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(SourceRewriteError, match=message):
+        store.load_source_snapshots()
+
+
+def test_snapshot_batch_rechecks_chain_before_writing_stale_plan(tmp_path):
+    store = ShadowStore(tmp_path)
+    store.record_source_snapshot("daily/513100.csv", b"first\n", OBSERVED_0826)
+    stale = store.prepare_source_snapshot_batch(
+        (("daily/513100.csv", b"first\nsecond\n"),), OBSERVED_0827,
+    )
+    store.record_source_snapshot("daily/513100.csv", b"first\nsecond\nthird\n", OBSERVED_0828)
+
+    with pytest.raises(SourceRewriteError, match="stale source snapshot batch"):
+        store.write_source_snapshot_batch(stale)
+
+
 def test_source_snapshot_retry_is_idempotent_after_partial_append(tmp_path):
     store = ShadowStore(tmp_path)
     snapshots = (
@@ -92,6 +132,54 @@ def test_source_snapshot_retry_is_idempotent_after_partial_append(tmp_path):
     assert store.record_source_snapshot(*snapshots[0], OBSERVED_0826) is False
     assert store.record_source_snapshot(*snapshots[1], OBSERVED_0826) is True
     assert len(store.load_source_snapshots()) == 2
+
+
+def test_marker_write_is_atomic_and_retry_safe_after_replace_failure(tmp_path, monkeypatch):
+    store = ShadowStore(tmp_path)
+    marker = tmp_path / "observer_state.json"
+    real_replace = os.replace
+
+    def fail_replace(source, destination):
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        store.write_state_marker()
+    assert not marker.exists()
+    assert not list(tmp_path.glob(".observer-state-*.tmp"))
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    store.write_state_marker()
+    assert marker.read_text(encoding="utf-8") == '{"observer":"rsi_low_turn_prospective_shadow","schema_version":1}\n'
+    store.require_state_marker()
+
+
+@pytest.mark.parametrize(("mutate", "message"), [
+    (lambda item: item.pop("r0"), "stored evaluation item fields"),
+    (lambda item: item.update(source_hashes=["a" * 64, "b" * 64]), "stored evaluation source hashes"),
+    (lambda item: item.update(source_hashes=["z" * 64] * 3), "stored evaluation source hashes"),
+])
+def test_evaluation_item_schema_and_hash_provenance_are_strict(tmp_path, mutate, message):
+    store = ShadowStore(tmp_path)
+    store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
+    path = tmp_path / "evaluations.jsonl"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    mutate(record["item"])
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(SourceRewriteError, match=message):
+        store.load_evaluations()
+
+
+def test_unproved_item_allows_missing_entry_open_when_other_fields_are_valid(tmp_path):
+    decision = detect_rsi_low_turn(replace(
+        true_decision("2026-08-26").item,
+        entry_open=None, price_proved=False, price_reason="price_unproved",
+    ))
+    store = ShadowStore(tmp_path)
+    store.record_evaluation(decision, OBSERVED_0826)
+
+    assert len(store.load_evaluations()) == 1
 
 
 def test_source_snapshot_batch_is_compact_and_reuses_one_history_load(tmp_path, monkeypatch):
@@ -151,7 +239,7 @@ def test_event_snapshot_keeps_complete_immutable_decision_input(tmp_path):
     decision = detect_rsi_low_turn(replace(
         true_decision("2026-08-26").item,
         background={"rsi12": 31.5},
-        source_hashes=("a" * 64,),
+        source_hashes=("a" * 64, "b" * 64, "c" * 64),
     ))
     store.record_evaluation(decision, OBSERVED_0826)
 
@@ -166,7 +254,7 @@ def test_event_snapshot_keeps_complete_immutable_decision_input(tmp_path):
     }
     assert event["input"]["price_proved"] is True
     assert event["input"]["background"] == {"rsi12": 31.5}
-    assert event["input"]["source_hashes"] == ["a" * 64]
+    assert event["input"]["source_hashes"] == ["a" * 64, "b" * 64, "c" * 64]
 
 
 def test_retry_reconciles_event_after_interruption_between_appends(tmp_path, monkeypatch):

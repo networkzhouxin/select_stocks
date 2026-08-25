@@ -4,8 +4,12 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime
 import hashlib
 import json
+import math
 from numbers import Integral, Real
+import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
+import re
+import tempfile
 from typing import Mapping
 
 from cross_signal_strategy.research.rsi_low_turn_shadow import SignalDecision, VERSION
@@ -32,6 +36,7 @@ class RecordResult:
 @dataclass(frozen=True)
 class SourceSnapshotBatch:
     records: tuple[Mapping[str, object], ...]
+    bases: tuple[Mapping[str, object] | None, ...] = ()
 
 
 class SourceRewriteError(RuntimeError):
@@ -54,13 +59,20 @@ class ShadowStore:
 
     def load_source_snapshots(self) -> tuple[Mapping[str, object], ...]:
         records = tuple(self._read_records(HASHES_FILE))
-        keys = set()
+        latest: dict[str, Mapping[str, object]] = {}
         for record in records:
             path = _validated_source_snapshot(record)
-            key = (path, record["sha256"], record["byte_length"])
-            if key in keys:
-                raise SourceRewriteError(f"duplicate source snapshot for {path}")
-            keys.add(key)
+            prior = latest.get(path)
+            if prior is not None:
+                if record["byte_length"] < prior["byte_length"]:
+                    raise SourceRewriteError(f"source snapshot length decreased for {path}")
+                if record["byte_length"] == prior["byte_length"]:
+                    if record["sha256"] != prior["sha256"]:
+                        raise SourceRewriteError(f"source snapshot hash changed without growth for {path}")
+                    raise SourceRewriteError(f"duplicate source snapshot for {path}")
+                if _parse_datetime(record["observed_at"]) <= _parse_datetime(prior["observed_at"]):
+                    raise SourceRewriteError(f"source snapshot observed_at is not strictly increasing for {path}")
+            latest[path] = record
         return records
 
     def prepare_source_snapshot_batch(
@@ -69,6 +81,7 @@ class ShadowStore:
         history = self.load_source_snapshots()
         latest = _latest_snapshot_by_path(history)
         records = []
+        bases = []
         for relative_path, content in snapshots:
             record = _source_snapshot_record(relative_path, content, observed_at)
             prior = latest.get(record["relative_path"])
@@ -80,26 +93,36 @@ class ShadowStore:
                 record["sha256"], record["byte_length"]
             ) != (prior["sha256"], prior["byte_length"]):
                 records.append(record)
+                bases.append(prior)
                 latest[record["relative_path"]] = record
-        return SourceSnapshotBatch(tuple(records))
+        return SourceSnapshotBatch(tuple(records), tuple(bases))
 
     def write_source_snapshot_batch(self, batch: SourceSnapshotBatch) -> tuple[bool, ...]:
         if not isinstance(batch, SourceSnapshotBatch):
             raise TypeError("batch must be a SourceSnapshotBatch")
+        if len(batch.records) != len(batch.bases):
+            raise SourceRewriteError("stale source snapshot batch")
         history = self.load_source_snapshots()
-        existing = {
-            (item["relative_path"], item["sha256"], item["byte_length"])
-            for item in history
-        }
+        latest = _latest_snapshot_by_path(history)
         results = []
-        for record in batch.records:
-            _validated_source_snapshot(record)
+        for record, base in zip(batch.records, batch.bases):
+            path = _validated_source_snapshot(record)
             key = (record["relative_path"], record["sha256"], record["byte_length"])
-            if key in existing:
+            current = latest.get(path)
+            if current is not None and (
+                current["sha256"], current["byte_length"]
+            ) == (record["sha256"], record["byte_length"]):
                 results.append(False)
                 continue
+            if not _same_snapshot(current, base):
+                raise SourceRewriteError("stale source snapshot batch")
+            if current is not None and (
+                record["byte_length"] <= current["byte_length"]
+                or _parse_datetime(record["observed_at"]) <= _parse_datetime(current["observed_at"])
+            ):
+                raise SourceRewriteError("stale source snapshot batch")
             self._append_record(HASHES_FILE, record)
-            existing.add(key)
+            latest[path] = record
             results.append(True)
         return tuple(results)
 
@@ -155,7 +178,24 @@ class ShadowStore:
         if path.exists():
             self.require_state_marker()
             return
-        path.write_text(_canonical(STATE_MARKER) + "\n", encoding="utf-8", newline="\n")
+        temporary_path = None
+        try:
+            descriptor, raw_path = tempfile.mkstemp(
+                dir=self.state_dir, prefix=".observer-state-", suffix=".tmp",
+            )
+            temporary_path = Path(raw_path)
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(_canonical(STATE_MARKER) + "\n")
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except OSError:
+                    pass
+            os.replace(temporary_path, path)
+        except Exception:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
 
     def require_state_marker(self) -> None:
         path = self.state_dir / STATE_MARKER_FILE
@@ -422,6 +462,18 @@ def _latest_snapshot_by_path(
     return latest
 
 
+def _same_snapshot(
+    left: Mapping[str, object] | None, right: Mapping[str, object] | None,
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    return (
+        left.get("relative_path"), left.get("sha256"), left.get("byte_length"), left.get("observed_at"),
+    ) == (
+        right.get("relative_path"), right.get("sha256"), right.get("byte_length"), right.get("observed_at"),
+    )
+
+
 def _validated_evaluation(record: Mapping[str, object]) -> str:
     required = {
         "event_id", "code", "arrival_dt", "signal_date", "observed_at",
@@ -453,14 +505,46 @@ def _validated_evaluation(record: Mapping[str, object]) -> str:
     item = record["item"]
     if not isinstance(item, Mapping):
         raise SourceRewriteError("stored evaluation item is invalid")
+    item_fields = {
+        "code", "arrival_dt", "signal_date", "r2", "r1", "r0", "c1", "c0",
+        "entry_open", "price_proved", "price_reason", "background", "source_hashes",
+    }
+    if set(item) != item_fields:
+        raise SourceRewriteError("stored evaluation item fields are invalid")
     if item.get("code") != code or item.get("arrival_dt") != record["arrival_dt"]:
         raise SourceRewriteError("stored evaluation item identity is invalid")
     if item.get("signal_date") != record["signal_date"]:
         raise SourceRewriteError("stored evaluation item identity is invalid")
+    for field in ("r2", "r1", "r0", "c1", "c0"):
+        if not _finite_real(item.get(field)):
+            raise SourceRewriteError("stored evaluation item values are invalid")
+    if not isinstance(item["price_proved"], bool):
+        raise SourceRewriteError("stored evaluation item price proof is invalid")
+    entry_open = item["entry_open"]
+    if entry_open is not None and not _finite_real(entry_open):
+        raise SourceRewriteError("stored evaluation item entry price is invalid")
+    if item["price_proved"] and (entry_open is None or float(entry_open) <= 0.0):
+        raise SourceRewriteError("stored evaluation item entry price is invalid")
+    if item["price_reason"] is not None and not isinstance(item["price_reason"], str):
+        raise SourceRewriteError("stored evaluation item price reason is invalid")
+    background = item["background"]
+    if not isinstance(background, Mapping) or not all(
+        isinstance(key, str) and _finite_real(value) for key, value in background.items()
+    ):
+        raise SourceRewriteError("stored evaluation item background is invalid")
     hashes = item.get("source_hashes")
-    if not isinstance(hashes, list) or not all(isinstance(value, str) and len(value) == 64 for value in hashes):
+    if not isinstance(hashes, list) or len(hashes) != 3 or not all(
+        isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+        for value in hashes
+    ):
         raise SourceRewriteError("stored evaluation source hashes are invalid")
     return event_id
+
+
+def _finite_real(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return False
+    return math.isfinite(float(value))
 
 
 def _label_record(event_id: str, horizon: int, payload: Mapping[str, object]) -> dict[str, object]:

@@ -59,8 +59,9 @@ def imported_module_names(tree):
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            names.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            prefix = "." * node.level + (node.module + "." if node.module else "")
+            names.update(f"{prefix}{alias.name}" for alias in node.names)
     return names
 
 
@@ -92,11 +93,15 @@ def local_broker_order_calls(tree):
 
 
 def dynamic_order_lookups(tree):
+    aliases = {"getattr"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "builtins":
+            aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "getattr")
     lookups = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
-        if node.func.id != "getattr" or len(node.args) < 2:
+        if node.func.id not in aliases or len(node.args) < 2:
             continue
         method = node.args[1]
         if isinstance(method, ast.Constant) and isinstance(method.value, str):
@@ -106,15 +111,27 @@ def dynamic_order_lookups(tree):
 
 
 def forbidden_dynamic_imports(tree):
+    aliases = {"__import__"}
+    importlib_aliases = {"importlib"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            importlib_aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "importlib")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "importlib":
+                aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "import_module")
+            if node.module == "builtins":
+                aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "__import__")
     names = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        name = (
-            node.func.id if isinstance(node.func, ast.Name)
-            else node.func.attr if isinstance(node.func, ast.Attribute) else None
+        direct = node.func.id if isinstance(node.func, ast.Name) else None
+        member = (
+            node.func.attr if isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in importlib_aliases else None
         )
-        if name not in {"__import__", "import_module"} or not node.args:
+        if direct not in aliases and member != "import_module" or not node.args:
             continue
         value = node.args[0]
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
@@ -123,6 +140,7 @@ def forbidden_dynamic_imports(tree):
 
 
 def is_forbidden_import(name):
+    name = name.lstrip(".")
     return (
         name == "jqdata" or name.startswith("jqdata.")
         or name == "smart_trade_joinquant_cross_signal_etf"
@@ -238,7 +256,12 @@ def test_observer_modules_have_no_platform_or_order_dependency():
     "from smart_trade_ptrade_cross_signal_etf import initialize",
     "__import__('jqdata.market')",
     "importlib.import_module('jqdata.market')",
+    "from importlib import import_module as load\nload('jqdata.market')",
+    "import importlib as il\nil.import_module('jqdata.market')",
+    "from builtins import __import__ as load\nload('jqdata.market')",
+    "from .. import smart_trade_joinquant_cross_signal_etf",
     "getattr(broker, 'order_target_value')",
+    "from builtins import getattr as load\nload(broker, 'order_target_value')",
 ])
 def test_ast_guard_rejects_import_and_dynamic_order_bypasses(source):
     tree = ast.parse(source)
@@ -390,6 +413,25 @@ def test_corrupt_evaluation_refuses_collect_before_any_state_write(tmp_path):
     before = hash_tree(state)
 
     with pytest.raises(SourceRewriteError, match="stored evaluation"):
+        cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
+
+    assert hash_tree(state) == before
+
+
+def test_nested_evaluation_provenance_refuses_collect_before_any_state_write(tmp_path):
+    root = build_valid_source(tmp_path)
+    state = tmp_path / "state"
+    assert run_cli(
+        "collect", "--data-root", str(root), "--approved-root", str(root),
+        "--state-dir", str(state), "--as-of", "2026-08-26T09:35:00+08:00",
+    ).returncode == 0
+    path = state / "evaluations.jsonl"
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    records[0]["item"]["source_hashes"] = ["a" * 64, "b" * 64]
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    before = hash_tree(state)
+
+    with pytest.raises(SourceRewriteError, match="stored evaluation source hashes"):
         cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
 
     assert hash_tree(state) == before
