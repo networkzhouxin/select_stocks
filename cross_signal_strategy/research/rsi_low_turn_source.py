@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time
 import hashlib
+import io
 import json
 import math
 from pathlib import Path
@@ -51,8 +52,19 @@ class SourceManifest:
 class ApprovedFuturePriceSource:
     """Read prospective future labels from the same approved, append-only source."""
 
-    def __init__(self, data_root: Path, approved_root: Path):
+    def __init__(
+        self,
+        data_root: Path,
+        approved_root: Path,
+        *,
+        source_contents: Mapping[str, bytes] | None = None,
+        collected_at: datetime | None = None,
+    ):
         self.manifest = load_manifest(data_root, approved_root)
+        self.source_contents = None if source_contents is None else dict(source_contents)
+        if collected_at is not None:
+            _require_future_as_of(collected_at)
+        self.collected_at = collected_at
 
     def snapshot_for(
         self, event: Mapping[str, object], horizon: int, as_of: datetime,
@@ -66,13 +78,21 @@ class ApprovedFuturePriceSource:
         arrival_date = _event_arrival_date(event)
         daily_path = _source_file(self.manifest.root / self.manifest.daily_subdir, code, "daily")
         minute_path = _source_file(self.manifest.root / self.manifest.minute_subdir, code, "minute")
-        daily = _future_daily_frame(daily_path, code)
-        minute = _future_minute_frame(minute_path, code)
-        future_sessions = sorted(
-            day
-            for day, available_at in zip(daily["date"], daily["_available_at"])
-            if day > arrival_date and available_at <= pd.Timestamp(as_of)
-        )
+        daily_relative_path = f"{self.manifest.daily_subdir}/{code}.csv"
+        minute_relative_path = f"{self.manifest.minute_subdir}/{code}.csv"
+        daily_content = _snapshot_content(self.source_contents, daily_relative_path, daily_path)
+        minute_content = _snapshot_content(self.source_contents, minute_relative_path, minute_path)
+        daily = _future_daily_frame_from_content(daily_content, code)
+        minute = _future_minute_frame_from_content(minute_content, code)
+        collected_at = self.collected_at or as_of
+        if collected_at > as_of:
+            raise SourceContractError("future source collected_at cannot follow as_of")
+        consumed_daily = daily[
+            (daily["date"] > arrival_date)
+            & (daily["_available_at"] <= pd.Timestamp(as_of))
+        ]
+        _require_consumed_sources(consumed_daily, "daily")
+        future_sessions = sorted(consumed_daily["date"])
         if len(future_sessions) < horizon:
             return FutureSnapshot(horizon, "pending_horizon_not_arrived", None, None, None, None)
         target_date = future_sessions[horizon - 1]
@@ -82,20 +102,33 @@ class ApprovedFuturePriceSource:
         target_timestamp = pd.Timestamp(datetime.combine(target_date, time(9, 35), SHANGHAI))
         exact_timestamp = minute[minute["_timestamp"] == target_timestamp]
         if len(exact_timestamp) != 1:
-            return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
+            return FutureSnapshot(
+                horizon, "pending_missing_executable_price", None, None, None, None,
+                target_timestamp.to_pydatetime(), collected_at, minute_relative_path,
+                hashlib.sha256(minute_content).hexdigest(), len(minute_content),
+            )
         timely = exact_timestamp[
             (exact_timestamp["_available_at"] <= pd.Timestamp(as_of))
             & (exact_timestamp["_available_at"] <= target_timestamp)
         ]
         if len(timely) != 1:
-            return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
+            return FutureSnapshot(
+                horizon, "pending_missing_executable_price", None, None, None, None,
+                target_timestamp.to_pydatetime(), collected_at, minute_relative_path,
+                hashlib.sha256(minute_content).hexdigest(), len(minute_content),
+            )
         quote = timely.iloc[0]
+        _require_source_value(quote["source"], "minute")
         exit_open, volume, num_trades = (
             _as_finite(quote[column]) for column in ("open", "volume", "num_trades")
         )
         if not (exit_open is not None and exit_open > 0 and volume is not None and volume > 0
                 and num_trades is not None and num_trades > 0):
-            return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
+            return FutureSnapshot(
+                horizon, "pending_missing_executable_price", None, None, None, None,
+                target_timestamp.to_pydatetime(), collected_at, minute_relative_path,
+                hashlib.sha256(minute_content).hexdigest(), len(minute_content),
+            )
 
         return FutureSnapshot(
             horizon,
@@ -104,6 +137,11 @@ class ApprovedFuturePriceSource:
             None,
             None,
             quote["_available_at"].to_pydatetime(),
+            target_timestamp.to_pydatetime(),
+            collected_at,
+            minute_relative_path,
+            hashlib.sha256(minute_content).hexdigest(),
+            len(minute_content),
         )
 
 
@@ -177,8 +215,18 @@ def _read_csv(path: Path, expected_columns: list[str], label: str) -> pd.DataFra
     if not path.is_file():
         raise SourceContractError("%s source file is required" % label)
     try:
-        frame = pd.read_csv(path)
+        content = path.read_bytes()
     except (OSError, UnicodeDecodeError, pd.errors.ParserError) as exc:
+        raise SourceContractError("%s source file is unreadable" % label) from exc
+    return _read_csv_bytes(content, expected_columns, label)
+
+
+def _read_csv_bytes(content: bytes, expected_columns: list[str], label: str) -> pd.DataFrame:
+    if not isinstance(content, bytes):
+        raise TypeError("source snapshot content must be bytes")
+    try:
+        frame = pd.read_csv(io.BytesIO(content))
+    except (UnicodeDecodeError, pd.errors.ParserError) as exc:
         raise SourceContractError("%s source file is unreadable" % label) from exc
     if frame.columns.tolist() != expected_columns:
         raise SourceContractError("%s columns do not match the source contract" % label)
@@ -221,6 +269,17 @@ def _as_finite(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _require_source_value(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SourceContractError(f"consumed {label} row source is unknown")
+    return value.strip()
+
+
+def _require_consumed_sources(frame: pd.DataFrame, label: str) -> None:
+    for value in frame["source"]:
+        _require_source_value(value, label)
+
+
 def _require_future_as_of(as_of: datetime) -> None:
     if not isinstance(as_of, datetime) or getattr(as_of.tzinfo, "key", None) != "Asia/Shanghai":
         raise SourceContractError("future as_of must be Asia/Shanghai-aware")
@@ -250,7 +309,11 @@ def _event_arrival_date(event: Mapping[str, object]) -> date:
 
 
 def _future_daily_frame(path: Path, code: str) -> pd.DataFrame:
-    daily = _read_csv(path, _DAILY_COLUMNS, "daily").copy()
+    return _future_daily_frame_from_content(path.read_bytes(), code)
+
+
+def _future_daily_frame_from_content(content: bytes, code: str) -> pd.DataFrame:
+    daily = _read_csv_bytes(content, _DAILY_COLUMNS, "daily").copy()
     if not daily["code"].astype(str).eq(code).all():
         raise SourceContractError("source file code does not match requested code")
     try:
@@ -267,8 +330,33 @@ def _future_daily_frame(path: Path, code: str) -> pd.DataFrame:
     return daily
 
 
+def prior_source_session_from_snapshot(
+    content: bytes, code: str, arrival_dt: datetime,
+) -> date:
+    """Return the exact prior session proved by one immutable daily snapshot."""
+    _require_code(code)
+    _require_arrival(arrival_dt)
+    daily = _read_csv_bytes(content, _DAILY_COLUMNS, "daily").copy()
+    if not daily["code"].astype(str).eq(code).all():
+        raise SourceContractError("source file code does not match requested code")
+    try:
+        daily["date"] = pd.to_datetime(daily["date"], errors="raise").dt.date
+    except (TypeError, ValueError) as exc:
+        raise SourceContractError("daily source has invalid values") from exc
+    if daily["date"].duplicated().any():
+        raise SourceContractError("daily source has duplicate sessions")
+    candidates = daily.loc[daily["date"] < arrival_dt.date(), "date"]
+    if candidates.empty:
+        raise SourceContractError("no prior source session is available")
+    return max(candidates)
+
+
 def _future_minute_frame(path: Path, code: str) -> pd.DataFrame:
-    minute = _read_csv(path, _MINUTE_COLUMNS, "minute").copy()
+    return _future_minute_frame_from_content(path.read_bytes(), code)
+
+
+def _future_minute_frame_from_content(content: bytes, code: str) -> pd.DataFrame:
+    minute = _read_csv_bytes(content, _MINUTE_COLUMNS, "minute").copy()
     if not minute["code"].astype(str).eq(code).all():
         raise SourceContractError("source file code does not match requested code")
     minute["_timestamp"] = minute["timestamp"].map(
@@ -333,7 +421,15 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.S
     return tr.rolling(period).mean()
 
 
-def load_arrival_input(data_root: Path, approved_root: Path, code: str, arrival_dt: datetime) -> RsiTurnInput:
+def load_arrival_input(
+    data_root: Path,
+    approved_root: Path,
+    code: str,
+    arrival_dt: datetime,
+    *,
+    expected_prior_session: date | None = None,
+    source_contents: Mapping[str, bytes] | None = None,
+) -> RsiTurnInput:
     """Load only data whose session and publication time precede the 09:35 arrival."""
     _require_code(code)
     _require_arrival(arrival_dt)
@@ -342,8 +438,11 @@ def load_arrival_input(data_root: Path, approved_root: Path, code: str, arrival_
         raise SourceContractError("arrival precedes manifest collection_start")
     daily_path = _source_file(manifest.root / manifest.daily_subdir, code, "daily")
     minute_path = _source_file(manifest.root / manifest.minute_subdir, code, "minute")
-    daily = _read_csv(daily_path, _DAILY_COLUMNS, "daily")
-    minute = _read_csv(minute_path, _MINUTE_COLUMNS, "minute")
+    manifest_content = _snapshot_content(source_contents, "manifest.json", manifest.root / "manifest.json")
+    daily_content = _snapshot_content(source_contents, f"daily/{code}.csv", daily_path)
+    minute_content = _snapshot_content(source_contents, f"minute_0935/{code}.csv", minute_path)
+    daily = _read_csv_bytes(daily_content, _DAILY_COLUMNS, "daily")
+    minute = _read_csv_bytes(minute_content, _MINUTE_COLUMNS, "minute")
     if not daily["code"].astype(str).eq(code).all() or not minute["code"].astype(str).eq(code).all():
         raise SourceContractError("source file code does not match requested code")
 
@@ -355,13 +454,22 @@ def load_arrival_input(data_root: Path, approved_root: Path, code: str, arrival_
     except (TypeError, ValueError) as exc:
         raise SourceContractError("daily source has invalid values") from exc
     daily["_available_at"] = daily["available_at"].map(lambda value: _aware_timestamp(value, "daily available_at"))
-    cutoff = arrival_dt.date() - pd.Timedelta(days=1)
-    causal = daily[(daily["date"] <= cutoff) & (daily["_available_at"] <= pd.Timestamp(arrival_dt))].copy()
+    if daily["date"].duplicated().any():
+        raise SourceContractError("daily source has duplicate sessions")
+    prior_session = prior_source_session_from_snapshot(daily_content, code, arrival_dt)
+    if expected_prior_session is not None and prior_session != expected_prior_session:
+        raise SourceContractError("ETF files do not share one consistent prior source session")
+    exact_prior = daily[daily["date"] == prior_session]
+    if len(exact_prior) != 1 or exact_prior.iloc[0]["_available_at"] > pd.Timestamp(arrival_dt):
+        raise SourceContractError("exact prior source session is not available by arrival")
+    causal = daily[
+        (daily["date"] <= prior_session)
+        & (daily["_available_at"] <= pd.Timestamp(arrival_dt))
+    ].copy()
     causal = causal.sort_values("date", kind="stable")
     if causal.empty:
         raise SourceContractError("no causal daily rows are available")
-    if causal["date"].duplicated().any():
-        raise SourceContractError("causal daily source has duplicate sessions")
+    _require_consumed_sources(causal, "daily")
 
     minute = minute.copy()
     minute["_timestamp"] = minute["timestamp"].map(lambda value: _aware_timestamp(value, "minute timestamp"))
@@ -371,18 +479,40 @@ def load_arrival_input(data_root: Path, approved_root: Path, code: str, arrival_
     if len(timely) != 1:
         raise SourceContractError("exact timely 09:35 minute proof is required")
     quote = timely.iloc[0]
+    _require_source_value(quote["source"], "minute")
     entry_open, volume, num_trades = (_as_finite(quote[column]) for column in ("open", "volume", "num_trades"))
     price_proved = bool(entry_open is not None and entry_open > 0 and volume is not None and volume > 0 and num_trades is not None and num_trades > 0)
 
     rsi6 = calculate_rsi6(causal["close"])
-    if len(rsi6) < 3:
-        r2 = r1 = r0 = float("nan")
-        c1 = c0 = float("nan")
-    else:
-        r2, r1, r0 = rsi6.iloc[-3:]
-        c1, c0 = causal["close"].iloc[-2:]
-    hashes = tuple(file_sha256(path) for path in (manifest.root / "manifest.json", daily_path, minute_path))
+    background = _background(causal)
+    if len(rsi6) < 3 or len(causal) < 2:
+        raise SourceContractError("insufficient indicator history for frozen inputs")
+    r2, r1, r0 = (float(value) for value in rsi6.iloc[-3:])
+    c1, c0 = (float(value) for value in causal["close"].iloc[-2:])
+    if not all(
+        math.isfinite(float(value))
+        for value in (r2, r1, r0, c1, c0, *background.values())
+    ):
+        raise SourceContractError("insufficient indicator history or non-finite frozen input")
+    hashes = tuple(
+        hashlib.sha256(content).hexdigest()
+        for content in (manifest_content, daily_content, minute_content)
+    )
     return RsiTurnInput(code=code, arrival_dt=arrival_dt, signal_date=causal["date"].iloc[-1],
                         r2=r2, r1=r1, r0=r0, c1=c1, c0=c0, entry_open=entry_open,
                         price_proved=price_proved, price_reason=None if price_proved else "price_unproved",
-                        background=_background(causal), source_hashes=hashes)
+                        background=background, source_hashes=hashes)
+
+
+def _snapshot_content(
+    source_contents: Mapping[str, bytes] | None, relative_path: str, path: Path,
+) -> bytes:
+    if source_contents is not None:
+        content = source_contents.get(relative_path)
+        if not isinstance(content, bytes):
+            raise SourceContractError(f"source snapshot is missing: {relative_path}")
+        return content
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise SourceContractError(f"source snapshot is unreadable: {path.name}") from exc

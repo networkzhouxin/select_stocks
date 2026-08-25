@@ -50,10 +50,26 @@ def valid_event():
     }
 
 
+def proved_snapshot(horizon, exit_open, available_at, mfe=None, mae=None):
+    return FutureSnapshot(
+        horizon,
+        "matured",
+        exit_open,
+        mfe,
+        mae,
+        available_at,
+        target_timestamp=available_at,
+        collected_at=available_at,
+        source_relative_path="minute_0935/513100.csv",
+        source_sha256="a" * 64,
+        source_byte_length=1,
+    )
+
+
 def source_with_horizons(tmp_path, horizons):
     snapshots = {
-        horizon: FutureSnapshot(
-            horizon, "matured", 2.035 + horizon * 0.01, 0.05, -0.02,
+        horizon: proved_snapshot(
+            horizon, 2.035 + horizon * 0.01,
             ARRIVAL + timedelta(days=horizon),
         )
         for horizon in horizons
@@ -63,8 +79,8 @@ def source_with_horizons(tmp_path, horizons):
 
 def source_missing_horizon_three(tmp_path):
     snapshots = {
-        horizon: FutureSnapshot(
-            horizon, "matured", 2.035 + horizon * 0.01, 0.05, -0.02,
+        horizon: proved_snapshot(
+            horizon, 2.035 + horizon * 0.01,
             ARRIVAL + timedelta(days=horizon),
         )
         for horizon in (1, 5, 10)
@@ -206,6 +222,15 @@ def test_matured_snapshot_without_arrived_availability_is_not_labeled(available_
     assert item.exit_price is None
     assert item.nominal is None
     assert item.doubled is None
+
+
+def test_matured_snapshot_rejects_unproved_mfe_or_mae():
+    source = FakeFuturePriceSource({
+        1: proved_snapshot(1, 2.10, ARRIVAL_PLUS_5, mfe=0.05),
+    })
+
+    with pytest.raises(ValueError, match="MFE/MAE"):
+        mature_event_labels(valid_event(), source, ARRIVAL_PLUS_5)
 
 
 def test_wilson_interval_is_not_the_raw_rate():

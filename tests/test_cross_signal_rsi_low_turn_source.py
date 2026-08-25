@@ -1,4 +1,5 @@
 import importlib
+import hashlib
 import json
 import sys
 import types
@@ -195,16 +196,38 @@ def test_t_day_daily_and_late_available_rows_are_invisible(tmp_path):
     assert len(item.source_hashes) == 3
 
 
-def test_late_t_minus_one_publication_is_invisible_to_signal_and_background(tmp_path):
+def test_late_exact_prior_source_session_fails_closed_instead_of_falling_back(tmp_path):
     root = build_valid_source(tmp_path)
     path = root / "daily" / "513100.csv"
     frame = pd.read_csv(path)
     frame.loc[len(frame) - 1, "available_at"] = "2026-08-26T09:36:00+08:00"
     frame.to_csv(path, index=False)
-    item = load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
-    assert item.signal_date == date(2026, 8, 24)
-    expected = calculate_formal_background_from_same_frame(root, through="2026-08-24")
-    assert item.background == pytest.approx(expected)
+
+    with pytest.raises(SourceContractError, match="exact prior source session"):
+        load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
+
+
+def test_source_calendar_accepts_non_natural_prior_session_across_weekend(tmp_path):
+    root = build_valid_source(tmp_path)
+    daily_path = root / "daily" / "513100.csv"
+    daily = pd.read_csv(daily_path)
+    daily.loc[len(daily) - 1, "date"] = "2026-08-28"
+    daily.loc[len(daily) - 1, "available_at"] = "2026-08-28T15:01:00+08:00"
+    daily.to_csv(daily_path, index=False)
+    minute_path = root / "minute_0935" / "513100.csv"
+    minute = pd.read_csv(minute_path)
+    minute.loc[0, "timestamp"] = "2026-08-31T09:35:00+08:00"
+    minute.loc[0, "available_at"] = "2026-08-31T09:35:00+08:00"
+    minute.to_csv(minute_path, index=False)
+
+    item = load_arrival_input(
+        root,
+        root,
+        "513100",
+        datetime(2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert item.signal_date == date(2026, 8, 28)
 
 
 def test_late_or_duplicate_0935_evidence_is_not_a_valid_price_proof(tmp_path):
@@ -244,6 +267,61 @@ def test_background_indicators_match_formal_pure_helpers(tmp_path):
     assert item.background == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("mutation", ["short_history", "nonfinite_close"])
+def test_loader_fails_closed_on_insufficient_or_nonfinite_indicator_history(tmp_path, mutation):
+    root = build_valid_source(tmp_path)
+    path = root / "daily" / "513100.csv"
+    frame = pd.read_csv(path)
+    if mutation == "short_history":
+        frame = frame.iloc[-10:].copy()
+    else:
+        frame.loc[len(frame) - 1, "close"] = np.nan
+    frame.to_csv(path, index=False)
+
+    with pytest.raises(SourceContractError, match="insufficient indicator history"):
+        load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
+
+
+@pytest.mark.parametrize("unknown_source", ["   ", np.nan])
+def test_consumed_daily_rows_require_nonempty_source(tmp_path, unknown_source):
+    root = build_valid_source(tmp_path)
+    path = root / "daily" / "513100.csv"
+    frame = pd.read_csv(path)
+    frame.loc[len(frame) - 1, "source"] = unknown_source
+    frame.to_csv(path, index=False)
+
+    with pytest.raises(SourceContractError, match="consumed daily row source"):
+        load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
+
+
+@pytest.mark.parametrize("unknown_source", ["", np.nan])
+def test_consumed_entry_minute_requires_nonempty_source(tmp_path, unknown_source):
+    root = build_valid_source(tmp_path, {"source": unknown_source})
+
+    with pytest.raises(SourceContractError, match="consumed minute row source"):
+        load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26)
+
+
+def test_unconsumed_rows_may_keep_unknown_source(tmp_path):
+    root = build_valid_source(tmp_path)
+    daily_path = root / "daily" / "513100.csv"
+    daily = pd.read_csv(daily_path)
+    daily.loc[len(daily)] = [
+        "513100", "2026-08-26", 2.0, 2.1, 1.9, 2.0, 100,
+        "2026-08-26T15:01:00+08:00", "",
+    ]
+    daily.to_csv(daily_path, index=False)
+    minute_path = root / "minute_0935" / "513100.csv"
+    minute = pd.read_csv(minute_path)
+    minute.loc[len(minute)] = [
+        "513100", "2026-08-26T09:34:00+08:00", 2.0, 2.0, 100, 1,
+        "2026-08-26T09:34:00+08:00", "",
+    ]
+    minute.to_csv(minute_path, index=False)
+
+    assert load_arrival_input(root, root, "513100", ARRIVAL_2026_08_26).price_proved is True
+
+
 def test_future_source_waits_for_daily_calendar_row_before_resolving_horizon(tmp_path):
     root = build_source_with_matured_future_sessions(tmp_path)
     source = ApprovedFuturePriceSource(root, root)
@@ -263,6 +341,33 @@ def test_future_source_waits_for_daily_calendar_row_before_resolving_horizon(tmp
     assert after_daily_arrives.available_at == datetime(
         2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"),
     )
+
+
+def test_future_snapshot_retains_stable_price_file_provenance(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    collected_at = datetime(2026, 8, 27, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
+    snapshots = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*") if path.is_file()
+    }
+    try:
+        source = ApprovedFuturePriceSource(
+            root, root, source_contents=snapshots, collected_at=collected_at,
+        )
+    except TypeError as exc:
+        pytest.fail(f"future source does not accept a stable source snapshot: {exc}")
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+
+    snapshot = source.snapshot_for(event, 1, collected_at)
+    minute_content = snapshots["minute_0935/513100.csv"]
+
+    assert getattr(snapshot, "target_timestamp", None) == datetime(
+        2026, 8, 27, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"),
+    )
+    assert getattr(snapshot, "collected_at", None) == collected_at
+    assert getattr(snapshot, "source_relative_path", None) == "minute_0935/513100.csv"
+    assert getattr(snapshot, "source_sha256", None) == hashlib.sha256(minute_content).hexdigest()
+    assert getattr(snapshot, "source_byte_length", None) == len(minute_content)
 
 
 def test_future_source_never_substitutes_a_missing_exact_0935_open(tmp_path):
@@ -334,3 +439,37 @@ def test_future_source_keeps_mfe_mae_none_even_after_daily_bars_arrive(tmp_path)
     assert before_close.mae is None
     assert after_close.mfe is None
     assert after_close.mae is None
+
+
+@pytest.mark.parametrize("kind", ["daily", "minute"])
+def test_future_source_rejects_unknown_source_on_consumed_rows(tmp_path, kind):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    path = root / ("daily" if kind == "daily" else "minute_0935") / "513100.csv"
+    frame = pd.read_csv(path)
+    key = "date" if kind == "daily" else "timestamp"
+    target = "2026-08-27" if kind == "daily" else "2026-08-27T09:35:00+08:00"
+    frame.loc[frame[key] == target, "source"] = "   "
+    frame.to_csv(path, index=False)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+
+    with pytest.raises(SourceContractError, match="consumed .* row source"):
+        source.snapshot_for(
+            event, 1, datetime(2026, 8, 27, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+
+
+def test_future_source_ignores_unknown_source_on_unconsumed_minute_row(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    path = root / "minute_0935" / "513100.csv"
+    frame = pd.read_csv(path)
+    frame.loc[frame["timestamp"] == "2026-09-01T09:35:00+08:00", "source"] = np.nan
+    frame.to_csv(path, index=False)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+
+    snapshot = source.snapshot_for(
+        event, 1, datetime(2026, 8, 27, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert snapshot.status == "matured"

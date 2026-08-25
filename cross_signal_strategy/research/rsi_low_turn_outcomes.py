@@ -41,6 +41,11 @@ class FutureSnapshot:
     mfe: float | None
     mae: float | None
     available_at: datetime | None
+    target_timestamp: datetime | None = None
+    collected_at: datetime | None = None
+    source_relative_path: str | None = None
+    source_sha256: str | None = None
+    source_byte_length: int | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,12 @@ class MaturedLabel:
     doubled: RoundTripResult | None
     mfe: float | None
     mae: float | None
+    target_timestamp: datetime | None = None
+    available_at: datetime | None = None
+    collected_at: datetime | None = None
+    source_relative_path: str | None = None
+    source_sha256: str | None = None
+    source_byte_length: int | None = None
 
 
 @dataclass(frozen=True)
@@ -132,8 +143,14 @@ def mature_event_labels(
             labels.append(MaturedLabel(
                 event_id, horizon, status, None, None, None,
                 snapshot.mfe, snapshot.mae,
+                snapshot.target_timestamp, snapshot.available_at, snapshot.collected_at,
+                snapshot.source_relative_path, snapshot.source_sha256,
+                snapshot.source_byte_length,
             ))
             continue
+        if snapshot.mfe is not None or snapshot.mae is not None:
+            raise ValueError("MFE/MAE require an approved intraday-extrema source")
+        _require_matured_snapshot_provenance(snapshot, as_of)
         exit_price = float(snapshot.exit_open)
         labels.append(MaturedLabel(
             event_id,
@@ -144,6 +161,12 @@ def mature_event_labels(
             calculate_round_trip(code, entry_open, exit_price, DOUBLED_FRICTION),
             snapshot.mfe,
             snapshot.mae,
+            snapshot.target_timestamp,
+            snapshot.available_at,
+            snapshot.collected_at,
+            snapshot.source_relative_path,
+            snapshot.source_sha256,
+            snapshot.source_byte_length,
         ))
     return tuple(labels)
 
@@ -178,6 +201,33 @@ def _available_by(available_at: object, as_of: datetime) -> bool:
         return available_at <= as_of
     except TypeError:
         return False
+
+
+def _require_matured_snapshot_provenance(snapshot: FutureSnapshot, as_of: datetime) -> None:
+    target = snapshot.target_timestamp
+    available = snapshot.available_at
+    collected = snapshot.collected_at
+    if not all(
+        isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None
+        for value in (target, available, collected)
+    ):
+        raise ValueError("matured future snapshot provenance is required")
+    if not (available <= target <= collected <= as_of):
+        raise ValueError("matured future snapshot provenance is not point-in-time valid")
+    if not isinstance(snapshot.source_relative_path, str) or not snapshot.source_relative_path:
+        raise ValueError("matured future snapshot provenance is required")
+    if (
+        not isinstance(snapshot.source_sha256, str)
+        or len(snapshot.source_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in snapshot.source_sha256.lower())
+    ):
+        raise ValueError("matured future snapshot provenance is required")
+    if (
+        not isinstance(snapshot.source_byte_length, int)
+        or isinstance(snapshot.source_byte_length, bool)
+        or snapshot.source_byte_length < 0
+    ):
+        raise ValueError("matured future snapshot provenance is required")
 
 
 def wilson_interval(

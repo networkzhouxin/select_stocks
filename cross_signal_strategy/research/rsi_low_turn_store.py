@@ -12,7 +12,12 @@ import re
 import tempfile
 from typing import Mapping
 
-from cross_signal_strategy.research.rsi_low_turn_shadow import SignalDecision, VERSION
+from cross_signal_strategy.research.rsi_low_turn_shadow import (
+    RsiTurnInput,
+    SignalDecision,
+    VERSION,
+    detect_rsi_low_turn,
+)
 
 
 EVALUATIONS_FILE = "evaluations.jsonl"
@@ -316,6 +321,59 @@ class ShadowStore:
             ids.add(event_id)
         return records
 
+    def replay_validated_events(
+        self, codes: tuple[str, ...], require_exact: bool = True,
+    ) -> tuple[Mapping[str, object], ...]:
+        """Derive the only admissible event set from validated evaluations."""
+        if (
+            not isinstance(codes, tuple)
+            or not codes
+            or len(set(codes)) != len(codes)
+            or not all(isinstance(code, str) and code for code in codes)
+        ):
+            raise ValueError("codes must be a non-empty unique tuple")
+        allowed = set(codes)
+        evaluations = self.load_evaluations()
+        source_history = self.load_source_snapshots()
+        seen_arrivals = set()
+        ordered = []
+        for evaluation in evaluations:
+            code = evaluation["code"]
+            if code not in allowed:
+                raise SourceRewriteError("stored evaluation code is outside the frozen ETF set")
+            _validate_evaluation_source_history(evaluation, source_history)
+            arrival = _parse_datetime(evaluation["arrival_dt"])
+            key = (code, arrival)
+            if key in seen_arrivals:
+                raise SourceRewriteError("duplicate evaluation for code and arrival")
+            seen_arrivals.add(key)
+            ordered.append((code, arrival, evaluation))
+        ordered.sort(key=lambda value: (value[0], value[1]))
+
+        active_by_code = {code: False for code in codes}
+        expected = []
+        for code, arrival, evaluation in ordered:
+            observed = _parse_datetime(evaluation["observed_at"])
+            if observed > arrival:
+                continue
+            signal = evaluation["signal_detected"] is True
+            if signal and not active_by_code[code] and evaluation["valid_event"] is True:
+                expected.append(_event_record_from_evaluation(evaluation))
+            active_by_code[code] = signal
+
+        actual = self.load_events()
+        expected_by_id = {event["event_id"]: event for event in expected}
+        actual_by_id = {event["event_id"]: event for event in actual}
+        extra_or_changed = any(
+            event_id not in expected_by_id
+            or _canonical(event) != _canonical(expected_by_id[event_id])
+            for event_id, event in actual_by_id.items()
+        )
+        missing = set(expected_by_id) - set(actual_by_id)
+        if extra_or_changed or (require_exact and missing):
+            raise SourceRewriteError("stored events do not match evaluation replay")
+        return tuple(expected)
+
     def _episode_is_active_before(self, decision: SignalDecision) -> bool:
         return self._episode_is_active_before_record(
             decision.item.code, _as_aware_datetime(decision.item.arrival_dt)
@@ -552,6 +610,29 @@ def _validated_evaluation(record: Mapping[str, object]) -> str:
         for value in hashes
     ):
         raise SourceRewriteError("stored evaluation source hashes are invalid")
+    reconstructed = RsiTurnInput(
+        code=code,
+        arrival_dt=arrival,
+        signal_date=signal_date,
+        r2=float(item["r2"]),
+        r1=float(item["r1"]),
+        r0=float(item["r0"]),
+        c1=float(item["c1"]),
+        c0=float(item["c0"]),
+        entry_open=None if entry_open is None else float(entry_open),
+        price_proved=item["price_proved"],
+        price_reason=item["price_reason"],
+        background=dict(background),
+        source_hashes=tuple(value.lower() for value in hashes),
+    )
+    decision = detect_rsi_low_turn(reconstructed)
+    if (
+        decision.event_id != event_id
+        or decision.signal_detected is not record["signal_detected"]
+        or decision.valid_event is not record["valid_event"]
+        or list(decision.reasons) != record["reasons"]
+    ):
+        raise SourceRewriteError("stored evaluation decision does not match detector replay")
     return event_id
 
 
@@ -559,6 +640,35 @@ def _finite_real(value: object) -> bool:
     if isinstance(value, bool) or not isinstance(value, Real):
         return False
     return math.isfinite(float(value))
+
+
+def _validate_evaluation_source_history(
+    evaluation: Mapping[str, object],
+    source_history: tuple[Mapping[str, object], ...],
+) -> None:
+    item = evaluation.get("item")
+    code = evaluation.get("code")
+    if not isinstance(item, Mapping) or not isinstance(code, str):
+        raise SourceRewriteError("stored evaluation identity is invalid")
+    hashes = item.get("source_hashes")
+    if not isinstance(hashes, list) or len(hashes) != 3:
+        raise SourceRewriteError("stored evaluation source hashes are invalid")
+    observed = _parse_datetime(evaluation.get("observed_at"))
+    expected = (
+        ("manifest.json", hashes[0]),
+        (f"daily/{code}.csv", hashes[1]),
+        (f"minute_0935/{code}.csv", hashes[2]),
+    )
+    for relative_path, digest in expected:
+        if not any(
+            snapshot.get("relative_path") == relative_path
+            and snapshot.get("sha256") == digest
+            and _parse_datetime(snapshot.get("observed_at")) <= observed
+            for snapshot in source_history
+        ):
+            raise SourceRewriteError(
+                "stored evaluation source hashes do not match source history"
+            )
 
 
 def _label_record(event_id: str, horizon: int, payload: Mapping[str, object]) -> dict[str, object]:

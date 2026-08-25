@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from numbers import Real
 import sys
 import tempfile
 from typing import Mapping
@@ -18,11 +19,14 @@ if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from cross_signal_strategy.research.rsi_low_turn_outcomes import (
+    DOUBLED_FRICTION,
     EventOutcomeRecord,
     HORIZONS,
     MaturedLabel,
+    NOMINAL_FRICTION,
     RoundTripResult,
     build_summary,
+    calculate_round_trip,
     mature_event_labels,
 )
 from cross_signal_strategy.research.rsi_low_turn_shadow import detect_rsi_low_turn
@@ -33,6 +37,7 @@ from cross_signal_strategy.research.rsi_low_turn_source import (
     SourceContractError,
     load_arrival_input,
     load_manifest,
+    prior_source_session_from_snapshot,
 )
 from cross_signal_strategy.research.rsi_low_turn_store import (
     STATE_MARKER_FILE,
@@ -71,18 +76,44 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
 
     preflight_store = ShadowStore(state_path, create=False)
     preflight_store.validate_collect_integrity()
-    if (state_path / STATE_MARKER_FILE).exists():
+    has_marker = (state_path / STATE_MARKER_FILE).exists()
+    if has_marker:
         preflight_store.require_complete_initial_collection(_required_snapshot_paths(), FROZEN_ETF_CODES)
+    source_history = preflight_store.load_source_snapshots()
+    existing_events = preflight_store.replay_validated_events(
+        FROZEN_ETF_CODES, require_exact=has_marker,
+    )
+    _event_outcome_records(
+        existing_events, preflight_store.load_labels(), source_history,
+    )
     before_snapshots = _read_source_snapshots(
         manifest.root, manifest.daily_subdir, manifest.minute_subdir,
     )
     snapshot_batch = preflight_store.prepare_source_snapshot_batch(before_snapshots, observed_at)
+    source_contents = dict(before_snapshots)
+    prior_sessions = {
+        prior_source_session_from_snapshot(
+            source_contents[f"daily/{code}.csv"], code, observed_at,
+        )
+        for code in FROZEN_ETF_CODES
+    }
+    if len(prior_sessions) != 1:
+        raise SourceContractError("ETF files do not share one consistent prior source session")
+    prior_session = next(iter(prior_sessions))
     inputs = tuple(
-        load_arrival_input(manifest.root, manifest.root, code, observed_at)
+        load_arrival_input(
+            manifest.root,
+            manifest.root,
+            code,
+            observed_at,
+            expected_prior_session=prior_session,
+            source_contents=source_contents,
+        )
         for code in FROZEN_ETF_CODES
     )
-    existing_events = preflight_store.load_events()
-    labels = _matured_existing_labels(existing_events, manifest.root, observed_at)
+    labels = _matured_existing_labels(
+        existing_events, manifest.root, observed_at, source_contents,
+    )
     after_snapshots = _read_source_snapshots(
         manifest.root, manifest.daily_subdir, manifest.minute_subdir,
     )
@@ -92,6 +123,8 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     decisions = tuple(detect_rsi_low_turn(item) for item in inputs)
     for decision in decisions:
         preflight_store.validate_evaluation(decision, observed_at)
+    available_snapshots = (*source_history, *snapshot_batch.records)
+    _validate_new_label_provenance(existing_events, labels, available_snapshots)
     for event_id, horizon, payload in labels:
         preflight_store.validate_label(event_id, horizon, payload)
 
@@ -120,8 +153,11 @@ def summarize(state_dir: Path, generated_at: str) -> None:
         raise SourceRewriteError("state directory is required")
     store = ShadowStore(state_path, create=False)
     store.require_complete_initial_collection(_required_snapshot_paths(), FROZEN_ETF_CODES)
+    events = store.replay_validated_events(FROZEN_ETF_CODES)
     summary = build_summary(
-        _event_outcome_records(store.load_events(), store.load_labels()),
+        _event_outcome_records(
+            events, store.load_labels(), store.load_source_snapshots(),
+        ),
         MIN_COLLECTION_START,
         timestamp,
     )
@@ -177,9 +213,14 @@ def _required_snapshot_paths() -> tuple[str, ...]:
 
 
 def _matured_existing_labels(
-    events: tuple[Mapping[str, object], ...], root: Path, as_of: datetime,
+    events: tuple[Mapping[str, object], ...],
+    root: Path,
+    as_of: datetime,
+    source_contents: Mapping[str, bytes],
 ) -> tuple[tuple[str, int, Mapping[str, object]], ...]:
-    source = ApprovedFuturePriceSource(root, root)
+    source = ApprovedFuturePriceSource(
+        root, root, source_contents=source_contents, collected_at=as_of,
+    )
     labels = []
     for event in events:
         for label in mature_event_labels(event, source, as_of):
@@ -189,7 +230,9 @@ def _matured_existing_labels(
 
 
 def _event_outcome_records(
-    events: tuple[Mapping[str, object], ...], labels: tuple[Mapping[str, object], ...],
+    events: tuple[Mapping[str, object], ...],
+    labels: tuple[Mapping[str, object], ...],
+    source_snapshots: tuple[Mapping[str, object], ...] = (),
 ) -> tuple[EventOutcomeRecord, ...]:
     event_ids = set()
     for event in events:
@@ -218,7 +261,10 @@ def _event_outcome_records(
         event_labels[horizon] = None
         validated_labels.append((event_id, horizon, payload))
     for event_id, horizon, payload in validated_labels:
-        labels_by_event[event_id][horizon] = _matured_label(event_id, horizon, payload)
+        event = next(item for item in events if item.get("event_id") == event_id)
+        labels_by_event[event_id][horizon] = _matured_label(
+            event, horizon, payload, source_snapshots,
+        )
 
     records = []
     for event in events:
@@ -235,16 +281,52 @@ def _event_outcome_records(
     return tuple(records)
 
 
-def _matured_label(event_id: str, horizon: int, payload: Mapping[str, object]) -> MaturedLabel:
+def _matured_label(
+    event: Mapping[str, object],
+    horizon: int,
+    payload: Mapping[str, object],
+    source_snapshots: tuple[Mapping[str, object], ...] = (),
+) -> MaturedLabel:
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str):
+        raise SourceRewriteError("stored event is invalid")
+    base_fields = {
+        "event_id", "horizon", "status", "exit_price", "nominal", "doubled",
+        "mfe", "mae",
+    }
+    provenance_fields = {
+        "target_timestamp", "available_at", "collected_at", "source_relative_path",
+        "source_sha256", "source_byte_length",
+    }
+    if not base_fields.issubset(payload):
+        raise SourceRewriteError("stored label fields are invalid")
     if payload.get("event_id") != event_id or payload.get("horizon") != horizon:
         raise SourceRewriteError("stored label identity is invalid")
     if payload.get("status") != "matured":
         raise SourceRewriteError("stored label status is invalid")
+    if not _strict_real(payload.get("exit_price")):
+        raise SourceRewriteError("stored label numeric type is invalid")
     exit_price = _positive_finite_number(payload.get("exit_price"), "stored label exit price")
     nominal = _round_trip(payload.get("nominal"))
     doubled = _round_trip(payload.get("doubled"))
     if nominal is None or doubled is None:
         raise SourceRewriteError("stored label round trip is required")
+    code = event.get("code")
+    entry_open = event.get("entry_open")
+    if not isinstance(code, str):
+        raise SourceRewriteError("stored event is invalid")
+    entry = _positive_finite_number(entry_open, "stored event entry price")
+    expected_nominal = calculate_round_trip(code, entry, exit_price, NOMINAL_FRICTION)
+    expected_doubled = calculate_round_trip(code, entry, exit_price, DOUBLED_FRICTION)
+    if nominal != expected_nominal or doubled != expected_doubled:
+        raise SourceRewriteError("stored label round trip does not match recomputation")
+    if payload.get("mfe") is not None or payload.get("mae") is not None:
+        raise SourceRewriteError("stored label MFE/MAE must remain unproved")
+    if set(payload) != base_fields | provenance_fields:
+        if set(payload) == base_fields:
+            raise SourceRewriteError("stored label provenance is required")
+        raise SourceRewriteError("stored label fields are invalid")
+    provenance = _validated_label_provenance(event, payload, source_snapshots)
     return MaturedLabel(
         event_id=event_id,
         horizon=horizon,
@@ -252,9 +334,94 @@ def _matured_label(event_id: str, horizon: int, payload: Mapping[str, object]) -
         exit_price=exit_price,
         nominal=nominal,
         doubled=doubled,
-        mfe=_optional_number(payload.get("mfe")),
-        mae=_optional_number(payload.get("mae")),
+        mfe=None,
+        mae=None,
+        target_timestamp=provenance[0],
+        available_at=provenance[1],
+        collected_at=provenance[2],
+        source_relative_path=provenance[3],
+        source_sha256=provenance[4],
+        source_byte_length=provenance[5],
     )
+
+
+def _validate_new_label_provenance(
+    events: tuple[Mapping[str, object], ...],
+    labels: tuple[tuple[str, int, Mapping[str, object]], ...],
+    source_snapshots: tuple[Mapping[str, object], ...],
+) -> None:
+    events_by_id = {event["event_id"]: event for event in events}
+    for event_id, horizon, payload in labels:
+        event = events_by_id.get(event_id)
+        if event is None:
+            raise SourceRewriteError(f"dangling label {event_id}")
+        _matured_label(event, horizon, payload, source_snapshots)
+
+
+def _validated_label_provenance(
+    event: Mapping[str, object],
+    payload: Mapping[str, object],
+    source_snapshots: tuple[Mapping[str, object], ...],
+) -> tuple[datetime, datetime, datetime, str, str, int]:
+    try:
+        target = _stored_aware_datetime(payload.get("target_timestamp"))
+        available = _stored_aware_datetime(payload.get("available_at"))
+        collected = _stored_aware_datetime(payload.get("collected_at"))
+    except (TypeError, ValueError) as exc:
+        raise SourceRewriteError("stored label provenance timestamp is invalid") from exc
+    if (
+        target.astimezone(SHANGHAI).timetz().replace(tzinfo=None).isoformat() != "09:35:00"
+        or available > target
+        or available > collected
+    ):
+        raise SourceRewriteError("stored label provenance is not point-in-time valid")
+    arrival_value = event.get("arrival_date")
+    try:
+        arrival = date.fromisoformat(arrival_value)
+    except (TypeError, ValueError) as exc:
+        raise SourceRewriteError("stored event arrival date is invalid") from exc
+    if target.date() <= arrival:
+        raise SourceRewriteError("stored label provenance is not a future session")
+
+    code = event.get("code")
+    expected_path = f"minute_0935/{code}.csv"
+    relative_path = payload.get("source_relative_path")
+    digest = payload.get("source_sha256")
+    byte_length = payload.get("source_byte_length")
+    if (
+        relative_path != expected_path
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest.lower())
+        or not isinstance(byte_length, int)
+        or isinstance(byte_length, bool)
+        or byte_length < 0
+    ):
+        raise SourceRewriteError("stored label provenance is invalid")
+    matched = False
+    for snapshot in source_snapshots:
+        if (
+            snapshot.get("relative_path") == relative_path
+            and snapshot.get("sha256") == digest
+            and snapshot.get("byte_length") == byte_length
+        ):
+            try:
+                observed = _stored_aware_datetime(snapshot.get("observed_at"))
+            except (TypeError, ValueError) as exc:
+                raise SourceRewriteError("stored label provenance history is invalid") from exc
+            if observed <= collected:
+                matched = True
+                break
+    if not matched:
+        raise SourceRewriteError("stored label provenance does not match source history")
+    return target, available, collected, relative_path, digest.lower(), byte_length
+
+
+def _stored_aware_datetime(value: object) -> datetime:
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if not isinstance(parsed, datetime) or parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed
 
 
 def _round_trip(value: object) -> RoundTripResult | None:
@@ -262,10 +429,21 @@ def _round_trip(value: object) -> RoundTripResult | None:
         return None
     if not isinstance(value, Mapping):
         raise SourceRewriteError("stored round trip is invalid")
+    if set(value) != {
+        "amount", "buy_exec_price", "sell_exec_price", "buy_commission",
+        "sell_commission", "net_pnl", "net_return",
+    }:
+        raise SourceRewriteError("stored round trip is invalid")
     try:
         amount = value["amount"]
         if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
             raise ValueError("amount")
+        numeric_fields = (
+            "buy_exec_price", "sell_exec_price", "buy_commission", "sell_commission",
+            "net_pnl", "net_return",
+        )
+        if not all(_strict_real(value[field]) for field in numeric_fields):
+            raise SourceRewriteError("stored label numeric type is invalid")
         return RoundTripResult(
             amount,
             _finite_number(value["buy_exec_price"]), _finite_number(value["sell_exec_price"]),
@@ -274,6 +452,10 @@ def _round_trip(value: object) -> RoundTripResult | None:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceRewriteError("stored round trip is invalid") from exc
+
+
+def _strict_real(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool)
 
 
 def _required_str(payload: Mapping[str, object], key: str) -> str:
