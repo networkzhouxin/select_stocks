@@ -109,6 +109,7 @@ These are starting defaults, not optimized parameters.
 - `docs/research_budget.md`: human-readable research map and frozen experiment families; the current open research budget is zero.
 - `docs/validation_protocol.md`: frozen out-of-sample validation protocol.
 - `smart_trade_joinquant_cross_signal_etf.py`: frozen formal JoinQuant strategy and business-logic source of truth.
+- `smart_trade_joinquant_kdj_rsi_boll_atr_scheme_a_candidate.py`: standalone JoinQuant-only `krba-rsi-turn-v0.1-joinquant-candidate`; it preserves the closed KRBA exits and adds the exact frozen RSI6 low-turn event as a second T-1 entry channel. It is awaiting a 2019-2021 development-period JoinQuant run and is not validation, PTrade, simulation, or live-ready.
 - `smart_trade_ptrade_cross_signal_etf.py`: Guojin PTrade live adapter for `cross-v0.3.3`; QDII buys keep the failure-open 5% IOPV shadow, while blocked signal sells have an explicit PTrade-only 8% live sell override using fresh executable bid-one/IOPV premium.
 - `tools/audit_ptrade_runtime_log.py`: 只读 PTrade 运行日志审计工具；可按交易日检查初始化、状态恢复、09:35 主流程、条件性 10:35 复牌补偿、收盘汇总、委托回报、错误和 QDII IOPV 日志顺序。示例：`python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --date YYYY-MM-DD`。
 - `tools/verify_release.py`: 只读正式发布检查工具；校验三个正式入口、语法、版本、构建编号、业务配置指纹、聚宽/PTrade 核心纯函数一致性、PTrade 禁用模块和状态结构。完整发布检查命令：`python cross_signal_strategy/tools/verify_release.py --run-tests`。

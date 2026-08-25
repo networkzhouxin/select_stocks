@@ -95,6 +95,8 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["sell_score_rebalance_user_authorized"].status == "exhausted"
     assert families["krba_simple_mean_reversion_user_authorized"].status == "exhausted"
     assert families["krba_simple_mean_reversion_user_authorized"].max_new_experiments == 0
+    assert families["krba_rsi_low_turn_scheme_a_user_authorized"].status == "exhausted"
+    assert families["krba_rsi_low_turn_scheme_a_user_authorized"].max_new_experiments == 0
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]

@@ -1439,6 +1439,24 @@
       "validation_influence": "none",
       "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true
+    },
+    {
+      "key": "krba_rsi_low_turn_scheme_a_user_authorized",
+      "label": "Independent KRBA scheme A with exact RSI6 low-turn OR entry",
+      "status": "exhausted",
+      "max_new_experiments": 0,
+      "rationale": "The user explicitly authorized one standalone JoinQuant candidate after design review. It preserves the exact closed KRBA KDJ channel and exits, adds only the pre-registered RSI6 low-turn event as an OR entry, and does not authorize neighboring thresholds, rankings, exits, times, ETF rules, or PTrade work.",
+      "candidate_variants": 1,
+      "version": "krba-rsi-turn-v0.1-joinquant-candidate",
+      "joinquant_candidate_created": true,
+      "joinquant_status": "ready_to_run_2019_2021_development_diagnostic",
+      "ptrade_candidate_created": false,
+      "formal_files_unchanged": true,
+      "market_data_read_during_implementation": false,
+      "historical_result_interpretation": "development_diagnostic_not_out_of_sample",
+      "validation_influence": "none",
+      "validation_authorized": false,
+      "prohibit_alternatives": true
     }
   ]
 }
