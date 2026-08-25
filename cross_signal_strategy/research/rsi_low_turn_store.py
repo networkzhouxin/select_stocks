@@ -120,7 +120,7 @@ class ShadowStore:
         return RecordResult(True, False, "label_appended")
 
     def load_events(self) -> tuple[Mapping[str, object], ...]:
-        return tuple(self._read_records(EVENTS_FILE))
+        return self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event")
 
     def load_labels(self) -> tuple[Mapping[str, object], ...]:
         return tuple(self._read_records(LABELS_FILE))
@@ -160,7 +160,9 @@ class ShadowStore:
         event = _event_record_from_evaluation(evaluation)
         event_id = event["event_id"]
         matching = [
-            item for item in self._read_records(EVENTS_FILE) if item.get("event_id") == event_id
+            item
+            for item in self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event")
+            if item.get("event_id") == event_id
         ]
         if matching:
             if any(_canonical(item) != _canonical(event) for item in matching):
@@ -187,6 +189,21 @@ class ShadowStore:
             return False
         self._append_record(filename, record)
         return True
+
+    def _load_unique_keyed_records(
+        self, filename: str, key_name: str, label: str
+    ) -> tuple[Mapping[str, object], ...]:
+        unique: dict[str, dict[str, object]] = {}
+        for record in self._read_records(filename):
+            key = record.get(key_name)
+            if not isinstance(key, str) or not key:
+                raise SourceRewriteError(f"invalid {label} key in {filename}")
+            prior = unique.get(key)
+            if prior is None:
+                unique[key] = record
+            elif _canonical(prior) != _canonical(record):
+                raise SourceRewriteError(f"conflicting {label} for {key_name} {key}")
+        return tuple(unique.values())
 
     def _append_record(self, filename: str, record: Mapping[str, object]) -> None:
         path = self.state_dir / filename

@@ -153,7 +153,10 @@ def test_retry_reconciles_event_after_interruption_between_appends(tmp_path, mon
     assert len(store.load_events()) == 1
 
 
-@pytest.mark.parametrize("filename", ["evaluations.jsonl", "events.jsonl", "labels.jsonl"])
+@pytest.mark.parametrize(
+    "filename",
+    ["evaluations.jsonl", "events.jsonl", "labels.jsonl", "source_hashes.jsonl"],
+)
 def test_malformed_or_truncated_jsonl_is_a_domain_integrity_error(tmp_path, filename):
     store = ShadowStore(tmp_path)
     (tmp_path / filename).write_text('{"truncated":', encoding="utf-8")
@@ -162,8 +165,10 @@ def test_malformed_or_truncated_jsonl_is_a_domain_integrity_error(tmp_path, file
             store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
         elif filename == "events.jsonl":
             store.load_events()
-        else:
+        elif filename == "labels.jsonl":
             store.load_labels()
+        else:
+            store.record_source_hash("daily/513100.csv", "a" * 64, OBSERVED_0826)
 
 
 def test_preexisting_later_conflicting_evaluation_duplicate_is_refused(tmp_path):
@@ -196,3 +201,29 @@ def test_preexisting_later_conflicting_label_duplicate_is_refused(tmp_path):
 
     with pytest.raises(SourceRewriteError, match="conflicting label"):
         store.append_label("event-1", 5, payload)
+
+
+def test_load_events_rejects_later_conflicting_duplicate_event_id(tmp_path):
+    store = ShadowStore(tmp_path)
+    store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
+    path = tmp_path / "events.jsonl"
+    conflicting = json.loads(path.read_text(encoding="utf-8"))
+    conflicting["entry_open"] = 9.99
+    path.write_text(
+        path.read_text(encoding="utf-8") + json.dumps(conflicting) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceRewriteError, match="conflicting event"):
+        store.load_events()
+
+
+def test_load_events_collapses_identical_duplicate_event_ids(tmp_path):
+    store = ShadowStore(tmp_path)
+    store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
+    path = tmp_path / "events.jsonl"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original + original, encoding="utf-8")
+
+    events = store.load_events()
+    assert len(events) == 1
