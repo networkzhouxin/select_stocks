@@ -76,6 +76,17 @@ def called_function_names(tree):
     return names
 
 
+def imported_module_aliases(tree, module):
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases.update(
+                alias.asname or alias.name
+                for alias in node.names if alias.name == module
+            )
+    return aliases
+
+
 def local_broker_order_calls(tree):
     local_broker_names = set()
     for node in ast.walk(tree):
@@ -94,14 +105,21 @@ def local_broker_order_calls(tree):
 
 def dynamic_order_lookups(tree):
     aliases = {"getattr"}
+    builtins_aliases = imported_module_aliases(tree, "builtins")
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "builtins":
             aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "getattr")
     lookups = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        if not isinstance(node, ast.Call):
             continue
-        if node.func.id not in aliases or len(node.args) < 2:
+        direct = node.func.id if isinstance(node.func, ast.Name) else None
+        member = (
+            node.func.attr if isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in builtins_aliases else None
+        )
+        if (direct not in aliases and member != "getattr") or len(node.args) < 2:
             continue
         method = node.args[1]
         if isinstance(method, ast.Constant) and isinstance(method.value, str):
@@ -113,6 +131,7 @@ def dynamic_order_lookups(tree):
 def forbidden_dynamic_imports(tree):
     aliases = {"__import__"}
     importlib_aliases = {"importlib"}
+    builtins_aliases = imported_module_aliases(tree, "builtins")
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             importlib_aliases.update(alias.asname or alias.name for alias in node.names if alias.name == "importlib")
@@ -129,9 +148,13 @@ def forbidden_dynamic_imports(tree):
         member = (
             node.func.attr if isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in importlib_aliases else None
+            and node.func.value.id in importlib_aliases | builtins_aliases else None
         )
-        if direct not in aliases and member != "import_module" or not node.args:
+        if (
+            direct not in aliases
+            and not (member == "import_module" and node.func.value.id in importlib_aliases)
+            and not (member == "__import__" and node.func.value.id in builtins_aliases)
+        ) or not node.args:
             continue
         value = node.args[0]
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
@@ -259,9 +282,11 @@ def test_observer_modules_have_no_platform_or_order_dependency():
     "from importlib import import_module as load\nload('jqdata.market')",
     "import importlib as il\nil.import_module('jqdata.market')",
     "from builtins import __import__ as load\nload('jqdata.market')",
+    "import builtins as bi\nbi.__import__('jqdata')",
     "from .. import smart_trade_joinquant_cross_signal_etf",
     "getattr(broker, 'order_target_value')",
     "from builtins import getattr as load\nload(broker, 'order_target_value')",
+    "import builtins as bi\nbi.getattr(broker, 'order_target_value')(broker)",
 ])
 def test_ast_guard_rejects_import_and_dynamic_order_bypasses(source):
     tree = ast.parse(source)

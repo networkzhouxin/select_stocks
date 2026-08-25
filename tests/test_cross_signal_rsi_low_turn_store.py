@@ -9,7 +9,11 @@ import pytest
 
 from cross_signal_strategy.research.rsi_low_turn_shadow import RsiTurnInput, detect_rsi_low_turn
 import cross_signal_strategy.research.rsi_low_turn_store as store_module
-from cross_signal_strategy.research.rsi_low_turn_store import ShadowStore, SourceRewriteError
+from cross_signal_strategy.research.rsi_low_turn_store import (
+    ShadowStore,
+    SourceRewriteError,
+    SourceSnapshotBatch,
+)
 
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -119,6 +123,45 @@ def test_snapshot_batch_rechecks_chain_before_writing_stale_plan(tmp_path):
 
     with pytest.raises(SourceRewriteError, match="stale source snapshot batch"):
         store.write_source_snapshot_batch(stale)
+
+
+def test_snapshot_batch_preflights_every_path_before_appending(tmp_path):
+    store = ShadowStore(tmp_path)
+    store.record_source_snapshot("daily/513100.csv", b"a\n", OBSERVED_0826)
+    store.record_source_snapshot("minute_0935/513100.csv", b"b\n", OBSERVED_0826)
+    stale = store.prepare_source_snapshot_batch((
+        ("daily/513100.csv", b"a\nplanned\n"),
+        ("minute_0935/513100.csv", b"b\nplanned\n"),
+    ), OBSERVED_0827)
+    store.record_source_snapshot(
+        "minute_0935/513100.csv", b"b\nnewer\n", OBSERVED_0828,
+    )
+    path = tmp_path / "source_hashes.jsonl"
+    before = path.read_bytes()
+
+    with pytest.raises(SourceRewriteError, match="stale source snapshot batch"):
+        store.write_source_snapshot_batch(stale)
+
+    assert path.read_bytes() == before
+
+
+def test_snapshot_batch_preserves_same_path_chain_and_retry_idempotency(tmp_path):
+    store = ShadowStore(tmp_path)
+    first = _snapshot_record("daily/513100.csv", b"header\n", OBSERVED_0826)
+    second = _snapshot_record("daily/513100.csv", b"header\nrow\n", OBSERVED_0827)
+    other = _snapshot_record("minute_0935/513100.csv", b"minute\n", OBSERVED_0826)
+    batch = SourceSnapshotBatch(
+        records=(first, second, other),
+        bases=(None, first, None),
+    )
+
+    assert store.write_source_snapshot_batch(batch) == (True, True, True)
+    assert store.write_source_snapshot_batch(batch) == (False, False, False)
+    assert [record["relative_path"] for record in store.load_source_snapshots()] == [
+        "daily/513100.csv",
+        "daily/513100.csv",
+        "minute_0935/513100.csv",
+    ]
 
 
 def test_source_snapshot_retry_is_idempotent_after_partial_append(tmp_path):

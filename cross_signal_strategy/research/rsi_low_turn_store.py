@@ -104,16 +104,27 @@ class ShadowStore:
             raise SourceRewriteError("stale source snapshot batch")
         history = self.load_source_snapshots()
         latest = _latest_snapshot_by_path(history)
+        known = {
+            (
+                record["relative_path"], record["sha256"],
+                record["byte_length"], record["observed_at"],
+            )
+            for record in history
+        }
         results = []
+        write_plan = []
         for record, base in zip(batch.records, batch.bases):
             path = _validated_source_snapshot(record)
-            key = (record["relative_path"], record["sha256"], record["byte_length"])
-            current = latest.get(path)
-            if current is not None and (
-                current["sha256"], current["byte_length"]
-            ) == (record["sha256"], record["byte_length"]):
+            if base is not None:
+                _validated_source_snapshot(base)
+            key = (
+                record["relative_path"], record["sha256"],
+                record["byte_length"], record["observed_at"],
+            )
+            if key in known:
                 results.append(False)
                 continue
+            current = latest.get(path)
             if not _same_snapshot(current, base):
                 raise SourceRewriteError("stale source snapshot batch")
             if current is not None and (
@@ -121,9 +132,12 @@ class ShadowStore:
                 or _parse_datetime(record["observed_at"]) <= _parse_datetime(current["observed_at"])
             ):
                 raise SourceRewriteError("stale source snapshot batch")
-            self._append_record(HASHES_FILE, record)
+            write_plan.append(record)
             latest[path] = record
+            known.add(key)
             results.append(True)
+        for record in write_plan:
+            self._append_record(HASHES_FILE, record)
         return tuple(results)
 
     def validate_collect_integrity(self) -> None:
