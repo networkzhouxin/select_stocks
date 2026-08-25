@@ -109,7 +109,11 @@ def mature_event_labels(
         snapshot = source.snapshot_for(event, horizon, as_of)
         if snapshot.horizon != horizon:
             raise ValueError("future source returned a snapshot for the wrong horizon")
-        if snapshot.status != "matured" or not _positive_finite(snapshot.exit_open):
+        if (
+            snapshot.status != "matured"
+            or not _positive_finite(snapshot.exit_open)
+            or not _available_by(snapshot.available_at, as_of)
+        ):
             status = (
                 snapshot.status
                 if snapshot.status != "matured"
@@ -153,3 +157,14 @@ def _positive_finite(value: object) -> bool:
     except (TypeError, ValueError):
         return False
     return math.isfinite(number) and number > 0.0
+
+
+def _available_by(available_at: object, as_of: datetime) -> bool:
+    if not isinstance(available_at, datetime) or available_at.tzinfo is None:
+        return False
+    if available_at.utcoffset() is None:
+        return False
+    try:
+        return available_at <= as_of
+    except TypeError:
+        return False

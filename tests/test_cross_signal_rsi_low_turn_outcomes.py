@@ -112,3 +112,18 @@ def test_missing_0935_price_is_not_substituted(tmp_path):
     assert item.exit_price is None
     assert item.nominal is None
     assert item.doubled is None
+
+
+@pytest.mark.parametrize("available_at", [None, ARRIVAL_PLUS_5 + timedelta(seconds=1)])
+def test_matured_snapshot_without_arrived_availability_is_not_labeled(available_at):
+    source = FakeFuturePriceSource({
+        1: FutureSnapshot(1, "matured", 2.10, None, None, available_at),
+    })
+
+    labels = mature_event_labels(valid_event(), source, ARRIVAL_PLUS_5)
+    item = next(label for label in labels if label.horizon == 1)
+
+    assert item.status == "pending_missing_executable_price"
+    assert item.exit_price is None
+    assert item.nominal is None
+    assert item.doubled is None

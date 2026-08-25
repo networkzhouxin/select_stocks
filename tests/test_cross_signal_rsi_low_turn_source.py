@@ -244,19 +244,25 @@ def test_background_indicators_match_formal_pure_helpers(tmp_path):
     assert item.background == pytest.approx(expected)
 
 
-def test_future_source_resolves_nth_session_exact_timely_0935_open(tmp_path):
+def test_future_source_waits_for_daily_calendar_row_before_resolving_horizon(tmp_path):
     root = build_source_with_matured_future_sessions(tmp_path)
     source = ApprovedFuturePriceSource(root, root)
     event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
-    as_of = datetime(2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
 
-    snapshot = source.snapshot_for(event, 3, as_of)
+    before_daily_arrives = source.snapshot_for(
+        event, 3, datetime(2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    after_daily_arrives = source.snapshot_for(
+        event, 3, datetime(2026, 8, 31, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
 
-    assert snapshot.status == "matured"
-    assert snapshot.exit_open == pytest.approx(2.03)
-    assert snapshot.available_at == as_of
-    assert snapshot.mfe is None
-    assert snapshot.mae is None
+    assert before_daily_arrives.status == "pending_horizon_not_arrived"
+    assert before_daily_arrives.exit_open is None
+    assert after_daily_arrives.status == "matured"
+    assert after_daily_arrives.exit_open == pytest.approx(2.03)
+    assert after_daily_arrives.available_at == datetime(
+        2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"),
+    )
 
 
 def test_future_source_never_substitutes_a_missing_exact_0935_open(tmp_path):
@@ -267,7 +273,7 @@ def test_future_source_never_substitutes_a_missing_exact_0935_open(tmp_path):
     minute.to_csv(minute_path, index=False)
     source = ApprovedFuturePriceSource(root, root)
     event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
-    as_of = datetime(2026, 8, 31, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai"))
+    as_of = datetime(2026, 8, 31, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     snapshot = source.snapshot_for(event, 3, as_of)
 
@@ -287,14 +293,32 @@ def test_future_source_rejects_0935_open_published_after_0935(tmp_path):
     event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
 
     snapshot = source.snapshot_for(
-        event, 3, datetime(2026, 8, 31, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        event, 3, datetime(2026, 8, 31, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
 
     assert snapshot.status == "pending_missing_executable_price"
     assert snapshot.exit_open is None
 
 
-def test_future_source_exposes_mfe_mae_only_after_daily_bars_arrive(tmp_path):
+def test_future_source_rejects_duplicate_exact_0935_timestamp_even_if_one_row_is_late(tmp_path):
+    root = build_source_with_matured_future_sessions(tmp_path)
+    minute_path = root / "minute_0935" / "513100.csv"
+    minute = pd.read_csv(minute_path)
+    duplicate = minute.loc[minute["timestamp"] == "2026-08-31T09:35:00+08:00"].copy()
+    duplicate.loc[:, "available_at"] = "2026-08-31T09:36:00+08:00"
+    pd.concat([minute, duplicate], ignore_index=True).to_csv(minute_path, index=False)
+    source = ApprovedFuturePriceSource(root, root)
+    event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
+
+    snapshot = source.snapshot_for(
+        event, 3, datetime(2026, 8, 31, 15, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+
+    assert snapshot.status == "pending_missing_executable_price"
+    assert snapshot.exit_open is None
+
+
+def test_future_source_keeps_mfe_mae_none_even_after_daily_bars_arrive(tmp_path):
     root = build_source_with_matured_future_sessions(tmp_path)
     source = ApprovedFuturePriceSource(root, root)
     event = {"code": "513100", "arrival_date": date(2026, 8, 26), "entry_open": 2.035}
@@ -308,5 +332,5 @@ def test_future_source_exposes_mfe_mae_only_after_daily_bars_arrive(tmp_path):
 
     assert before_close.mfe is None
     assert before_close.mae is None
-    assert after_close.mfe == pytest.approx(2.11 / 2.035 - 1.0)
-    assert after_close.mae == pytest.approx(1.95 / 2.035 - 1.0)
+    assert after_close.mfe is None
+    assert after_close.mae is None

@@ -68,7 +68,11 @@ class ApprovedFuturePriceSource:
         minute_path = _source_file(self.manifest.root / self.manifest.minute_subdir, code, "minute")
         daily = _future_daily_frame(daily_path, code)
         minute = _future_minute_frame(minute_path, code)
-        future_sessions = sorted(day for day in daily["date"] if day > arrival_date)
+        future_sessions = sorted(
+            day
+            for day, available_at in zip(daily["date"], daily["_available_at"])
+            if day > arrival_date and available_at <= pd.Timestamp(as_of)
+        )
         if len(future_sessions) < horizon:
             return FutureSnapshot(horizon, "pending_horizon_not_arrived", None, None, None, None)
         target_date = future_sessions[horizon - 1]
@@ -76,10 +80,12 @@ class ApprovedFuturePriceSource:
             return FutureSnapshot(horizon, "pending_horizon_not_arrived", None, None, None, None)
 
         target_timestamp = pd.Timestamp(datetime.combine(target_date, time(9, 35), SHANGHAI))
-        timely = minute[
-            (minute["_timestamp"] == target_timestamp)
-            & (minute["_available_at"] <= pd.Timestamp(as_of))
-            & (minute["_available_at"] <= target_timestamp)
+        exact_timestamp = minute[minute["_timestamp"] == target_timestamp]
+        if len(exact_timestamp) != 1:
+            return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
+        timely = exact_timestamp[
+            (exact_timestamp["_available_at"] <= pd.Timestamp(as_of))
+            & (exact_timestamp["_available_at"] <= target_timestamp)
         ]
         if len(timely) != 1:
             return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
@@ -91,14 +97,12 @@ class ApprovedFuturePriceSource:
                 and num_trades is not None and num_trades > 0):
             return FutureSnapshot(horizon, "pending_missing_executable_price", None, None, None, None)
 
-        required_sessions = (arrival_date, *future_sessions[:horizon])
-        mfe, mae = _mfe_mae_if_mature(daily, required_sessions, _event_entry_open(event), as_of)
         return FutureSnapshot(
             horizon,
             "matured",
             exit_open,
-            mfe,
-            mae,
+            None,
+            None,
             quote["_available_at"].to_pydatetime(),
         )
 
@@ -245,13 +249,6 @@ def _event_arrival_date(event: Mapping[str, object]) -> date:
     raise ValueError("event arrival_date must be a date")
 
 
-def _event_entry_open(event: Mapping[str, object]) -> float:
-    entry_open = _as_finite(event.get("entry_open"))
-    if entry_open is None or entry_open <= 0:
-        raise ValueError("event entry_open must be a positive finite number")
-    return entry_open
-
-
 def _future_daily_frame(path: Path, code: str) -> pd.DataFrame:
     daily = _read_csv(path, _DAILY_COLUMNS, "daily").copy()
     if not daily["code"].astype(str).eq(code).all():
@@ -281,24 +278,6 @@ def _future_minute_frame(path: Path, code: str) -> pd.DataFrame:
         lambda value: _aware_timestamp(value, "minute available_at")
     )
     return minute
-
-
-def _mfe_mae_if_mature(
-    daily: pd.DataFrame,
-    required_sessions: tuple[date, ...],
-    entry_open: float,
-    as_of: datetime,
-) -> tuple[float | None, float | None]:
-    rows = daily[daily["date"].isin(required_sessions)].copy()
-    if len(rows) != len(required_sessions):
-        return None, None
-    if (rows["_available_at"] > pd.Timestamp(as_of)).any():
-        return None, None
-    high = rows["high"].map(_as_finite)
-    low = rows["low"].map(_as_finite)
-    if high.isna().any() or low.isna().any() or (high <= 0).any() or (low <= 0).any():
-        return None, None
-    return float(high.max() / entry_open - 1.0), float(low.min() / entry_open - 1.0)
 
 
 def _background(frame: pd.DataFrame) -> dict[str, float]:
