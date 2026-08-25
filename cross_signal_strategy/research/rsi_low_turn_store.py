@@ -61,11 +61,16 @@ class ShadowStore:
         existing = self._read_records(EVALUATIONS_FILE)
         matching = [item for item in existing if item.get("event_id") == decision.event_id]
         if matching:
-            if _canonical(matching[0]) != _canonical(record):
+            if any(_canonical(item) != _canonical(record) for item in matching):
                 raise SourceRewriteError(
                     f"conflicting evaluation for event_id {decision.event_id}"
                 )
-            return RecordResult(False, False, "duplicate_evaluation")
+            event_created = self._reconcile_event(matching[0])
+            return RecordResult(
+                False,
+                event_created,
+                "event_recovered" if event_created else "duplicate_evaluation",
+            )
 
         late_import = observed > arrival
         active_before = self._episode_is_active_before(decision)
@@ -80,7 +85,7 @@ class ShadowStore:
         if not decision.valid_event:
             return RecordResult(True, False, "invalid_event")
 
-        self._append_record(EVENTS_FILE, _event_record(decision, observed))
+        self._reconcile_event(record)
         return RecordResult(True, True, "event_created")
 
     def append_label(
@@ -105,7 +110,7 @@ class ShadowStore:
             if item.get("event_id") == event_id and item.get("horizon") == horizon
         ]
         if matching:
-            if _canonical(matching[0]) != _canonical(record):
+            if any(_canonical(item) != _canonical(record) for item in matching):
                 raise SourceRewriteError(
                     f"conflicting label for event_id {event_id} horizon {horizon}"
                 )
@@ -121,10 +126,14 @@ class ShadowStore:
         return tuple(self._read_records(LABELS_FILE))
 
     def _episode_is_active_before(self, decision: SignalDecision) -> bool:
-        arrival = _as_aware_datetime(decision.item.arrival_dt)
+        return self._episode_is_active_before_record(
+            decision.item.code, _as_aware_datetime(decision.item.arrival_dt)
+        )
+
+    def _episode_is_active_before_record(self, code: str, arrival: datetime) -> bool:
         records = []
         for item in self._read_records(EVALUATIONS_FILE):
-            if item.get("code") != decision.item.code:
+            if item.get("code") != code:
                 continue
             item_arrival = _parse_datetime(item.get("arrival_dt"))
             item_observed = _parse_datetime(item.get("observed_at"))
@@ -138,6 +147,28 @@ class ShadowStore:
             active = bool(item["signal_detected"])
         return active
 
+    def _reconcile_event(self, evaluation: Mapping[str, object]) -> bool:
+        if not _evaluation_requires_event(evaluation):
+            return False
+        code = evaluation.get("code")
+        if not isinstance(code, str):
+            raise SourceRewriteError("stored evaluation code is invalid")
+        arrival = _parse_datetime(evaluation.get("arrival_dt"))
+        if self._episode_is_active_before_record(code, arrival):
+            return False
+
+        event = _event_record_from_evaluation(evaluation)
+        event_id = event["event_id"]
+        matching = [
+            item for item in self._read_records(EVENTS_FILE) if item.get("event_id") == event_id
+        ]
+        if matching:
+            if any(_canonical(item) != _canonical(event) for item in matching):
+                raise SourceRewriteError(f"conflicting event for event_id {event_id}")
+            return False
+        self._append_record(EVENTS_FILE, event)
+        return True
+
     def _append_unique(
         self,
         filename: str,
@@ -145,11 +176,13 @@ class ShadowStore:
         key: tuple[str, str],
         label: str,
     ) -> bool:
-        for item in self._read_records(filename):
-            item_key = (str(item.get("relative_path")), str(item.get("observed_at")))
-            if item_key != key:
-                continue
-            if _canonical(item) != _canonical(record):
+        matching = [
+            item
+            for item in self._read_records(filename)
+            if (str(item.get("relative_path")), str(item.get("observed_at"))) == key
+        ]
+        if matching:
+            if any(_canonical(item) != _canonical(record) for item in matching):
                 raise SourceRewriteError(f"conflicting {label} for {key[0]}")
             return False
         self._append_record(filename, record)
@@ -165,8 +198,23 @@ class ShadowStore:
         path = self.state_dir / filename
         if not path.exists():
             return []
-        with path.open("r", encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
+        records = []
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    record = json.loads(line, parse_constant=_reject_json_constant)
+                    if not isinstance(record, dict):
+                        raise SourceRewriteError(
+                            f"invalid JSONL in {filename} at line {line_number}: record is not an object"
+                        )
+                    records.append(record)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            if isinstance(exc, SourceRewriteError):
+                raise
+            raise SourceRewriteError(f"invalid JSONL in {filename}") from exc
+        return records
 
 
 def _evaluation_record(decision: SignalDecision, observed_at: datetime) -> dict[str, object]:
@@ -184,13 +232,44 @@ def _evaluation_record(decision: SignalDecision, observed_at: datetime) -> dict[
     }
 
 
-def _event_record(decision: SignalDecision, observed_at: datetime) -> dict[str, object]:
+def _evaluation_requires_event(evaluation: Mapping[str, object]) -> bool:
+    arrival = _parse_datetime(evaluation.get("arrival_dt"))
+    observed = _parse_datetime(evaluation.get("observed_at"))
+    return (
+        observed <= arrival
+        and evaluation.get("signal_detected") is True
+        and evaluation.get("valid_event") is True
+    )
+
+
+def _event_record_from_evaluation(evaluation: Mapping[str, object]) -> dict[str, object]:
+    item = evaluation.get("item")
+    if not isinstance(item, Mapping):
+        raise SourceRewriteError("stored evaluation input is invalid")
+    arrival = _parse_datetime(evaluation.get("arrival_dt"))
+    event_id = evaluation.get("event_id")
+    code = evaluation.get("code")
+    if not isinstance(event_id, str) or not isinstance(code, str):
+        raise SourceRewriteError("stored evaluation identity is invalid")
     return {
-        "event_id": decision.event_id,
-        "code": decision.item.code,
-        "arrival_dt": _iso_datetime(decision.item.arrival_dt),
-        "signal_date": decision.item.signal_date.isoformat(),
-        "observed_at": _iso_datetime(observed_at),
+        "event_id": event_id,
+        "code": code,
+        "arrival_dt": _iso_datetime(arrival),
+        "arrival_date": arrival.date().isoformat(),
+        "signal_date": evaluation.get("signal_date"),
+        "observed_at": evaluation.get("observed_at"),
+        "entry_open": item.get("entry_open"),
+        "price_proved": item.get("price_proved"),
+        "price_reason": item.get("price_reason"),
+        "background": item.get("background"),
+        "source_hashes": item.get("source_hashes"),
+        "decision": {
+            "event_id": event_id,
+            "signal_detected": evaluation.get("signal_detected"),
+            "valid_event": evaluation.get("valid_event"),
+            "reasons": evaluation.get("reasons"),
+        },
+        "input": _json_value(item),
     }
 
 
@@ -256,3 +335,7 @@ def _canonical(record: Mapping[str, object]) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant: {value}")

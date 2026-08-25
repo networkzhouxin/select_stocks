@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
+import json
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -103,3 +104,95 @@ def test_labels_are_idempotent_and_conflicts_are_refused(tmp_path):
     assert store.load_labels() == ({"event_id": "event-1", "horizon": 5, "payload": payload},)
     with pytest.raises(SourceRewriteError, match="conflicting label"):
         store.append_label("event-1", 5, {"return": 0.2, "close": 2.1})
+
+
+def test_event_snapshot_keeps_complete_immutable_decision_input(tmp_path):
+    store = ShadowStore(tmp_path)
+    decision = detect_rsi_low_turn(replace(
+        true_decision("2026-08-26").item,
+        background={"rsi12": 31.5},
+        source_hashes=("a" * 64,),
+    ))
+    store.record_evaluation(decision, OBSERVED_0826)
+
+    event = store.load_events()[0]
+    assert event["arrival_date"] == "2026-08-26"
+    assert event["entry_open"] == pytest.approx(2.035)
+    assert event["decision"] == {
+        "event_id": decision.event_id,
+        "signal_detected": True,
+        "valid_event": True,
+        "reasons": [],
+    }
+    assert event["input"]["price_proved"] is True
+    assert event["input"]["background"] == {"rsi12": 31.5}
+    assert event["input"]["source_hashes"] == ["a" * 64]
+
+
+def test_retry_reconciles_event_after_interruption_between_appends(tmp_path, monkeypatch):
+    store = ShadowStore(tmp_path)
+    decision = true_decision("2026-08-26")
+    original_append = store._append_record
+
+    def interrupt_after_evaluation(filename, record):
+        original_append(filename, record)
+        if filename == "evaluations.jsonl":
+            raise RuntimeError("injected interruption")
+
+    monkeypatch.setattr(store, "_append_record", interrupt_after_evaluation)
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        store.record_evaluation(decision, OBSERVED_0826)
+    monkeypatch.setattr(store, "_append_record", original_append)
+
+    recovered = store.record_evaluation(decision, OBSERVED_0826)
+    duplicate = store.record_evaluation(decision, OBSERVED_0826)
+    assert recovered.written is False
+    assert recovered.event_created is True
+    assert recovered.reason == "event_recovered"
+    assert duplicate.event_created is False
+    assert len(store.load_events()) == 1
+
+
+@pytest.mark.parametrize("filename", ["evaluations.jsonl", "events.jsonl", "labels.jsonl"])
+def test_malformed_or_truncated_jsonl_is_a_domain_integrity_error(tmp_path, filename):
+    store = ShadowStore(tmp_path)
+    (tmp_path / filename).write_text('{"truncated":', encoding="utf-8")
+    with pytest.raises(SourceRewriteError, match="invalid JSONL"):
+        if filename == "evaluations.jsonl":
+            store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
+        elif filename == "events.jsonl":
+            store.load_events()
+        else:
+            store.load_labels()
+
+
+def test_preexisting_later_conflicting_evaluation_duplicate_is_refused(tmp_path):
+    store = ShadowStore(tmp_path)
+    decision = true_decision("2026-08-26")
+    store.record_evaluation(decision, OBSERVED_0826)
+    path = tmp_path / "evaluations.jsonl"
+    conflicting = json.loads(path.read_text(encoding="utf-8"))
+    conflicting["item"]["c0"] = 9.99
+    path.write_text(
+        path.read_text(encoding="utf-8") + json.dumps(conflicting) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceRewriteError, match="conflicting evaluation"):
+        store.record_evaluation(decision, OBSERVED_0826)
+
+
+def test_preexisting_later_conflicting_label_duplicate_is_refused(tmp_path):
+    store = ShadowStore(tmp_path)
+    payload = {"return": 0.1}
+    store.append_label("event-1", 5, payload)
+    path = tmp_path / "labels.jsonl"
+    conflicting = json.loads(path.read_text(encoding="utf-8"))
+    conflicting["payload"]["return"] = 0.2
+    path.write_text(
+        path.read_text(encoding="utf-8") + json.dumps(conflicting) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SourceRewriteError, match="conflicting label"):
+        store.append_label("event-1", 5, payload)
