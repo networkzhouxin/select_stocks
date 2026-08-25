@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -34,7 +35,9 @@ from cross_signal_strategy.research.rsi_low_turn_source import (
     load_manifest,
 )
 from cross_signal_strategy.research.rsi_low_turn_store import (
+    STATE_MARKER_FILE,
     ShadowStore,
+    SourceSnapshotBatch,
     SourceRewriteError,
 )
 
@@ -68,9 +71,12 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
 
     preflight_store = ShadowStore(state_path, create=False)
     preflight_store.validate_collect_integrity()
+    if (state_path / STATE_MARKER_FILE).exists():
+        preflight_store.require_complete_initial_collection(_required_snapshot_paths(), FROZEN_ETF_CODES)
     before_snapshots = _read_source_snapshots(
         manifest.root, manifest.daily_subdir, manifest.minute_subdir,
     )
+    snapshot_batch = preflight_store.prepare_source_snapshot_batch(before_snapshots, observed_at)
     inputs = tuple(
         load_arrival_input(manifest.root, manifest.root, code, observed_at)
         for code in FROZEN_ETF_CODES
@@ -83,7 +89,6 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     if after_snapshots != before_snapshots:
         raise SourceRewriteError("source changed during collection")
     _validate_input_snapshot_hashes(inputs, before_snapshots)
-    preflight_store.validate_source_snapshots(before_snapshots, observed_at)
     decisions = tuple(detect_rsi_low_turn(item) for item in inputs)
     for decision in decisions:
         preflight_store.validate_evaluation(decision, observed_at)
@@ -91,8 +96,7 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
         preflight_store.validate_label(event_id, horizon, payload)
 
     store = ShadowStore(state_path)
-    store.write_state_marker()
-    _record_source_snapshots(store, before_snapshots, observed_at)
+    _record_source_snapshots(store, snapshot_batch)
     evaluation_results = [
         store.record_evaluation(decision, observed_at) for decision in decisions
     ]
@@ -100,6 +104,7 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
         store.append_label(event_id, horizon, payload)
         for event_id, horizon, payload in labels
     ]
+    store.write_state_marker()
     print(
         "收集完成："
         f"evaluations={sum(result.written for result in evaluation_results)} "
@@ -114,7 +119,7 @@ def summarize(state_dir: Path, generated_at: str) -> None:
     if not state_path.is_dir():
         raise SourceRewriteError("state directory is required")
     store = ShadowStore(state_path, create=False)
-    store.require_state_marker()
+    store.require_complete_initial_collection(_required_snapshot_paths(), FROZEN_ETF_CODES)
     summary = build_summary(
         _event_outcome_records(store.load_events(), store.load_labels()),
         MIN_COLLECTION_START,
@@ -158,10 +163,17 @@ def _validate_input_snapshot_hashes(
 
 
 def _record_source_snapshots(
-    store: ShadowStore, snapshots: tuple[tuple[str, bytes], ...], observed_at: datetime,
+    store: ShadowStore, batch: SourceSnapshotBatch,
 ) -> None:
-    for relative_path, content in snapshots:
-        store.record_source_snapshot(relative_path, content, observed_at)
+    store.write_source_snapshot_batch(batch)
+
+
+def _required_snapshot_paths() -> tuple[str, ...]:
+    return (
+        "manifest.json",
+        *(f"daily/{code}.csv" for code in FROZEN_ETF_CODES),
+        *(f"minute_0935/{code}.csv" for code in FROZEN_ETF_CODES),
+    )
 
 
 def _matured_existing_labels(
@@ -189,6 +201,7 @@ def _event_outcome_records(
         event_ids.add(event_id)
 
     labels_by_event: dict[str, dict[int, MaturedLabel]] = {}
+    validated_labels = []
     for record in labels:
         event_id = record.get("event_id")
         horizon = record.get("horizon")
@@ -202,7 +215,10 @@ def _event_outcome_records(
         event_labels = labels_by_event.setdefault(event_id, {})
         if horizon in event_labels:
             raise SourceRewriteError(f"duplicate label for event_id {event_id} horizon {horizon}")
-        event_labels[horizon] = _matured_label(event_id, horizon, payload)
+        event_labels[horizon] = None
+        validated_labels.append((event_id, horizon, payload))
+    for event_id, horizon, payload in validated_labels:
+        labels_by_event[event_id][horizon] = _matured_label(event_id, horizon, payload)
 
     records = []
     for event in events:
@@ -222,13 +238,20 @@ def _event_outcome_records(
 def _matured_label(event_id: str, horizon: int, payload: Mapping[str, object]) -> MaturedLabel:
     if payload.get("event_id") != event_id or payload.get("horizon") != horizon:
         raise SourceRewriteError("stored label identity is invalid")
+    if payload.get("status") != "matured":
+        raise SourceRewriteError("stored label status is invalid")
+    exit_price = _positive_finite_number(payload.get("exit_price"), "stored label exit price")
+    nominal = _round_trip(payload.get("nominal"))
+    doubled = _round_trip(payload.get("doubled"))
+    if nominal is None or doubled is None:
+        raise SourceRewriteError("stored label round trip is required")
     return MaturedLabel(
         event_id=event_id,
         horizon=horizon,
-        status=_required_str(payload, "status"),
-        exit_price=_optional_number(payload.get("exit_price")),
-        nominal=_round_trip(payload.get("nominal")),
-        doubled=_round_trip(payload.get("doubled")),
+        status="matured",
+        exit_price=exit_price,
+        nominal=nominal,
+        doubled=doubled,
         mfe=_optional_number(payload.get("mfe")),
         mae=_optional_number(payload.get("mae")),
     )
@@ -240,11 +263,14 @@ def _round_trip(value: object) -> RoundTripResult | None:
     if not isinstance(value, Mapping):
         raise SourceRewriteError("stored round trip is invalid")
     try:
+        amount = value["amount"]
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+            raise ValueError("amount")
         return RoundTripResult(
-            int(value["amount"]), float(value["buy_exec_price"]),
-            float(value["sell_exec_price"]), float(value["buy_commission"]),
-            float(value["sell_commission"]), float(value["net_pnl"]),
-            float(value["net_return"]),
+            amount,
+            _finite_number(value["buy_exec_price"]), _finite_number(value["sell_exec_price"]),
+            _finite_number(value["buy_commission"]), _finite_number(value["sell_commission"]),
+            _finite_number(value["net_pnl"]), _finite_number(value["net_return"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceRewriteError("stored round trip is invalid") from exc
@@ -261,9 +287,26 @@ def _optional_number(value: object) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        return _finite_number(value)
     except (TypeError, ValueError) as exc:
         raise SourceRewriteError("stored label number is invalid") from exc
+
+
+def _positive_finite_number(value: object, message: str) -> float:
+    try:
+        number = _finite_number(value)
+    except (TypeError, ValueError) as exc:
+        raise SourceRewriteError(f"{message} is invalid") from exc
+    if number <= 0.0:
+        raise SourceRewriteError(f"{message} is invalid")
+    return number
+
+
+def _finite_number(value: object) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite")
+    return number
 
 
 def _atomic_write_summary(state_dir: Path, summary: Mapping[str, object]) -> None:

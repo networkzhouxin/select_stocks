@@ -2,14 +2,13 @@
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
-import base64
 import hashlib
 import json
 from numbers import Integral, Real
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Mapping
 
-from cross_signal_strategy.research.rsi_low_turn_shadow import SignalDecision
+from cross_signal_strategy.research.rsi_low_turn_shadow import SignalDecision, VERSION
 
 
 EVALUATIONS_FILE = "evaluations.jsonl"
@@ -30,6 +29,11 @@ class RecordResult:
     reason: str
 
 
+@dataclass(frozen=True)
+class SourceSnapshotBatch:
+    records: tuple[Mapping[str, object], ...]
+
+
 class SourceRewriteError(RuntimeError):
     """Raised when an append-only key is supplied with different content."""
 
@@ -45,80 +49,88 @@ class ShadowStore:
     def record_source_snapshot(
         self, relative_path: str, content: bytes, observed_at: datetime,
     ) -> bool:
-        record = _source_snapshot_record(relative_path, content, observed_at)
-        self._validate_source_snapshot_record(record, self.load_source_snapshots())
-        matching = [
-            item for item in self._read_records(HASHES_FILE)
-            if item.get("relative_path") == record["relative_path"]
-            and item.get("sha256") == record["sha256"]
-            and item.get("byte_length") == record["byte_length"]
-            and item.get("content_b64") == record["content_b64"]
-        ]
-        if matching:
-            return False
-        self._append_record(HASHES_FILE, record)
-        return True
+        batch = self.prepare_source_snapshot_batch(((relative_path, content),), observed_at)
+        return bool(self.write_source_snapshot_batch(batch))
 
     def load_source_snapshots(self) -> tuple[Mapping[str, object], ...]:
         records = tuple(self._read_records(HASHES_FILE))
-        latest: dict[str, dict[str, object]] = {}
+        keys = set()
         for record in records:
-            path, content = _validated_source_snapshot(record)
-            prior = latest.get(path)
-            if prior is not None:
-                _, old_content = _validated_source_snapshot(prior)
-                if content == old_content:
-                    raise SourceRewriteError(f"duplicate source snapshot for {path}")
-                if not content.startswith(old_content):
-                    raise SourceRewriteError(f"source hash changed for {path}")
-            latest[path] = record
+            path = _validated_source_snapshot(record)
+            key = (path, record["sha256"], record["byte_length"])
+            if key in keys:
+                raise SourceRewriteError(f"duplicate source snapshot for {path}")
+            keys.add(key)
         return records
 
-    def validate_source_snapshots(
+    def prepare_source_snapshot_batch(
         self, snapshots: tuple[tuple[str, bytes], ...], observed_at: datetime,
-    ) -> None:
-        history = list(self.load_source_snapshots())
+    ) -> SourceSnapshotBatch:
+        history = self.load_source_snapshots()
+        latest = _latest_snapshot_by_path(history)
+        records = []
         for relative_path, content in snapshots:
             record = _source_snapshot_record(relative_path, content, observed_at)
-            self._validate_source_snapshot_record(record, tuple(history))
-            if not any(
-                item.get("relative_path") == record["relative_path"]
-                and item.get("sha256") == record["sha256"]
-                and item.get("byte_length") == record["byte_length"]
-                and item.get("content_b64") == record["content_b64"]
-                for item in history
-            ):
-                history.append(record)
+            prior = latest.get(record["relative_path"])
+            if prior is not None:
+                prior_length = prior["byte_length"]
+                if len(content) < prior_length or hashlib.sha256(content[:prior_length]).hexdigest() != prior["sha256"]:
+                    raise SourceRewriteError(f"source hash changed for {record['relative_path']}")
+            if prior is None or (
+                record["sha256"], record["byte_length"]
+            ) != (prior["sha256"], prior["byte_length"]):
+                records.append(record)
+                latest[record["relative_path"]] = record
+        return SourceSnapshotBatch(tuple(records))
 
-    def _validate_source_snapshot_record(
-        self, record: Mapping[str, object], history: tuple[Mapping[str, object], ...],
-    ) -> None:
-        path, content = _validated_source_snapshot(record)
-        prior = None
-        for item in history:
-            if item.get("relative_path") == path:
-                prior = item
-        if prior is None:
-            return
-        _, old_content = _validated_source_snapshot(prior)
-        if content != old_content and not content.startswith(old_content):
-            raise SourceRewriteError(f"source hash changed for {path}")
+    def write_source_snapshot_batch(self, batch: SourceSnapshotBatch) -> tuple[bool, ...]:
+        if not isinstance(batch, SourceSnapshotBatch):
+            raise TypeError("batch must be a SourceSnapshotBatch")
+        history = self.load_source_snapshots()
+        existing = {
+            (item["relative_path"], item["sha256"], item["byte_length"])
+            for item in history
+        }
+        results = []
+        for record in batch.records:
+            _validated_source_snapshot(record)
+            key = (record["relative_path"], record["sha256"], record["byte_length"])
+            if key in existing:
+                results.append(False)
+                continue
+            self._append_record(HASHES_FILE, record)
+            existing.add(key)
+            results.append(True)
+        return tuple(results)
 
     def validate_collect_integrity(self) -> None:
         self.load_source_snapshots()
-        self._read_records(EVALUATIONS_FILE)
+        self.load_evaluations()
         self.load_events()
         self.load_labels()
         marker = self.state_dir / STATE_MARKER_FILE
         if marker.exists():
             self.require_state_marker()
-        elif self.state_dir.exists() and any(self.state_dir.iterdir()):
-            raise SourceRewriteError("observer state marker is required")
+        elif self.state_dir.exists():
+            allowed = {HASHES_FILE, EVALUATIONS_FILE, EVENTS_FILE, LABELS_FILE}
+            if any(path.name not in allowed or not path.is_file() for path in self.state_dir.iterdir()):
+                raise SourceRewriteError("observer state marker is required")
+
+    def require_complete_initial_collection(
+        self, source_paths: tuple[str, ...], codes: tuple[str, ...],
+    ) -> None:
+        self.require_state_marker()
+        observed_paths = {record["relative_path"] for record in self.load_source_snapshots()}
+        if set(source_paths) != observed_paths:
+            raise SourceRewriteError("observer state initial source snapshots are incomplete")
+        evaluation_codes = {record["code"] for record in self.load_evaluations()}
+        if not set(codes).issubset(evaluation_codes):
+            raise SourceRewriteError("observer state initial evaluations are incomplete")
 
     def validate_evaluation(self, decision: SignalDecision, observed_at: datetime) -> None:
         record = _evaluation_record(decision, observed_at)
         matching = [
-            item for item in self._read_records(EVALUATIONS_FILE)
+            item for item in self.load_evaluations()
             if item.get("event_id") == decision.event_id
         ]
         if matching and any(_canonical(item) != _canonical(record) for item in matching):
@@ -165,7 +177,7 @@ class ShadowStore:
             raise ValueError("observed_at cannot precede arrival_dt")
 
         record = _evaluation_record(decision, observed)
-        existing = self._read_records(EVALUATIONS_FILE)
+        existing = self.load_evaluations()
         matching = [item for item in existing if item.get("event_id") == decision.event_id]
         if matching:
             if any(_canonical(item) != _canonical(record) for item in matching):
@@ -240,6 +252,16 @@ class ShadowStore:
             keys[key] = record
         return records
 
+    def load_evaluations(self) -> tuple[Mapping[str, object], ...]:
+        records = tuple(self._read_records(EVALUATIONS_FILE))
+        ids = set()
+        for record in records:
+            event_id = _validated_evaluation(record)
+            if event_id in ids:
+                raise SourceRewriteError(f"duplicate evaluation for event_id {event_id}")
+            ids.add(event_id)
+        return records
+
     def _episode_is_active_before(self, decision: SignalDecision) -> bool:
         return self._episode_is_active_before_record(
             decision.item.code, _as_aware_datetime(decision.item.arrival_dt)
@@ -247,7 +269,7 @@ class ShadowStore:
 
     def _episode_is_active_before_record(self, code: str, arrival: datetime) -> bool:
         records = []
-        for item in self._read_records(EVALUATIONS_FILE):
+        for item in self.load_evaluations():
             if item.get("code") != code:
                 continue
             item_arrival = _parse_datetime(item.get("arrival_dt"))
@@ -373,28 +395,72 @@ def _source_snapshot_record(
         "relative_path": _validate_relative_path(relative_path),
         "sha256": hashlib.sha256(content).hexdigest(),
         "byte_length": len(content),
-        "content_b64": base64.b64encode(content).decode("ascii"),
         "observed_at": _iso_datetime(observed_at),
     }
 
 
-def _validated_source_snapshot(record: Mapping[str, object]) -> tuple[str, bytes]:
+def _validated_source_snapshot(record: Mapping[str, object]) -> str:
     path = _validate_relative_path(record.get("relative_path"))
     digest = _validate_sha256(record.get("sha256"))
     length = record.get("byte_length")
-    encoded = record.get("content_b64")
     _parse_datetime(record.get("observed_at"))
+    if set(record) != {"relative_path", "sha256", "byte_length", "observed_at"}:
+        raise SourceRewriteError(f"invalid source snapshot fields for {path}")
     if not isinstance(length, int) or isinstance(length, bool) or length < 0:
         raise SourceRewriteError(f"invalid source snapshot length for {path}")
-    if not isinstance(encoded, str):
-        raise SourceRewriteError(f"invalid source snapshot content for {path}")
-    try:
-        content = base64.b64decode(encoded.encode("ascii"), validate=True)
-    except (UnicodeEncodeError, ValueError) as exc:
-        raise SourceRewriteError(f"invalid source snapshot content for {path}") from exc
-    if len(content) != length or hashlib.sha256(content).hexdigest() != digest:
+    if not digest:
         raise SourceRewriteError(f"invalid source snapshot digest for {path}")
-    return path, content
+    return path
+
+
+def _latest_snapshot_by_path(
+    history: tuple[Mapping[str, object], ...],
+) -> dict[str, Mapping[str, object]]:
+    latest: dict[str, Mapping[str, object]] = {}
+    for record in history:
+        latest[record["relative_path"]] = record
+    return latest
+
+
+def _validated_evaluation(record: Mapping[str, object]) -> str:
+    required = {
+        "event_id", "code", "arrival_dt", "signal_date", "observed_at",
+        "signal_detected", "valid_event", "reasons", "item",
+    }
+    if set(record) != required:
+        raise SourceRewriteError("stored evaluation fields are invalid")
+    event_id = record["event_id"]
+    code = record["code"]
+    if not isinstance(event_id, str) or not isinstance(code, str) or not code:
+        raise SourceRewriteError("stored evaluation identity is invalid")
+    arrival = _parse_datetime(record["arrival_dt"])
+    observed = _parse_datetime(record["observed_at"])
+    try:
+        signal_date = date.fromisoformat(record["signal_date"])
+    except (TypeError, ValueError) as exc:
+        raise SourceRewriteError("stored evaluation signal date is invalid") from exc
+    expected = hashlib.sha256(
+        "|".join([VERSION, code, arrival.date().isoformat(), signal_date.isoformat()]).encode("utf-8")
+    ).hexdigest()
+    if event_id != expected or observed < arrival:
+        raise SourceRewriteError("stored evaluation identity is invalid")
+    if not isinstance(record["signal_detected"], bool) or not isinstance(record["valid_event"], bool):
+        raise SourceRewriteError("stored evaluation decision is invalid")
+    if record["valid_event"] and not record["signal_detected"]:
+        raise SourceRewriteError("stored evaluation decision is invalid")
+    if not isinstance(record["reasons"], list) or not all(isinstance(value, str) for value in record["reasons"]):
+        raise SourceRewriteError("stored evaluation reasons are invalid")
+    item = record["item"]
+    if not isinstance(item, Mapping):
+        raise SourceRewriteError("stored evaluation item is invalid")
+    if item.get("code") != code or item.get("arrival_dt") != record["arrival_dt"]:
+        raise SourceRewriteError("stored evaluation item identity is invalid")
+    if item.get("signal_date") != record["signal_date"]:
+        raise SourceRewriteError("stored evaluation item identity is invalid")
+    hashes = item.get("source_hashes")
+    if not isinstance(hashes, list) or not all(isinstance(value, str) and len(value) == 64 for value in hashes):
+        raise SourceRewriteError("stored evaluation source hashes are invalid")
+    return event_id
 
 
 def _label_record(event_id: str, horizon: int, payload: Mapping[str, object]) -> dict[str, object]:

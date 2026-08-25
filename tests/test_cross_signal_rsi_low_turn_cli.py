@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cross_signal_strategy.research.rsi_low_turn_store import SourceRewriteError
+from cross_signal_strategy.research.rsi_low_turn_store import (
+    STATE_MARKER,
+    STATE_MARKER_FILE,
+    SourceRewriteError,
+)
 from cross_signal_strategy.tools import run_rsi_low_turn_shadow as cli_module
 
 
@@ -101,6 +105,37 @@ def dynamic_order_lookups(tree):
     return lookups
 
 
+def forbidden_dynamic_imports(tree):
+    names = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (
+            node.func.id if isinstance(node.func, ast.Name)
+            else node.func.attr if isinstance(node.func, ast.Attribute) else None
+        )
+        if name not in {"__import__", "import_module"} or not node.args:
+            continue
+        value = node.args[0]
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            names.append(value.value)
+    return names
+
+
+def is_forbidden_import(name):
+    return (
+        name == "jqdata" or name.startswith("jqdata.")
+        or name == "smart_trade_joinquant_cross_signal_etf"
+        or name.startswith("smart_trade_joinquant_cross_signal_etf.")
+        or name == "smart_trade_ptrade_cross_signal_etf"
+        or name.startswith("smart_trade_ptrade_cross_signal_etf.")
+        or name == "cross_signal_strategy.smart_trade_joinquant_cross_signal_etf"
+        or name.startswith("cross_signal_strategy.smart_trade_joinquant_cross_signal_etf.")
+        or name == "cross_signal_strategy.smart_trade_ptrade_cross_signal_etf"
+        or name.startswith("cross_signal_strategy.smart_trade_ptrade_cross_signal_etf.")
+    )
+
+
 def build_valid_source(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
@@ -177,14 +212,11 @@ def test_collect_refuses_nonmatching_approved_root(tmp_path):
 
 
 def test_observer_modules_have_no_platform_or_order_dependency():
-    forbidden = {
-        "jqdata", "smart_trade_joinquant_cross_signal_etf",
-        "smart_trade_ptrade_cross_signal_etf",
-    }
     for path in OBSERVER_MODULE_PATHS:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         imported = imported_module_names(tree)
-        assert not (imported & forbidden)
+        assert not any(is_forbidden_import(name) for name in imported)
+        assert not any(is_forbidden_import(name) for name in forbidden_dynamic_imports(tree))
         assert not any(name == "execute_sell" for name in called_function_names(tree))
         assert not dynamic_order_lookups(tree)
         local_broker_names, order_calls = local_broker_order_calls(tree)
@@ -197,6 +229,24 @@ def test_observer_modules_have_no_platform_or_order_dependency():
     outcomes = ast.parse(OBSERVER_MODULE_PATHS[3].read_text(encoding="utf-8"))
     _, order_calls = local_broker_order_calls(outcomes)
     assert len(order_calls) == 2
+
+
+@pytest.mark.parametrize("source", [
+    "import jqdata.submodule",
+    "from jqdata.submodule import price",
+    "import cross_signal_strategy.smart_trade_joinquant_cross_signal_etf",
+    "from smart_trade_ptrade_cross_signal_etf import initialize",
+    "__import__('jqdata.market')",
+    "importlib.import_module('jqdata.market')",
+    "getattr(broker, 'order_target_value')",
+])
+def test_ast_guard_rejects_import_and_dynamic_order_bypasses(source):
+    tree = ast.parse(source)
+    assert (
+        any(is_forbidden_import(name) for name in imported_module_names(tree))
+        or any(is_forbidden_import(name) for name in forbidden_dynamic_imports(tree))
+        or bool(dynamic_order_lookups(tree))
+    )
 
 
 def test_collect_and_summarize_do_not_modify_source(tmp_path):
@@ -293,6 +343,58 @@ def test_summarize_rejects_source_and_uninitialized_dirs_without_modifying_summa
     assert hash_tree(uninitialized) == before
 
 
+def test_summarize_requires_marker_and_complete_initial_collection(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / STATE_MARKER_FILE).write_text(json.dumps(STATE_MARKER), encoding="utf-8")
+    before = hash_tree(state)
+
+    result = run_cli(
+        "summarize", "--state-dir", str(state),
+        "--generated-at", "2026-08-26T09:35:00+08:00",
+    )
+
+    assert result.returncode == 2
+    assert hash_tree(state) == before
+
+
+def test_collect_resumes_markerless_interrupted_initial_collection(tmp_path, monkeypatch):
+    root = build_valid_source(tmp_path)
+    state = tmp_path / "state"
+    original = cli_module.ShadowStore.record_evaluation
+    calls = 0
+
+    def interrupt_once(self, decision, observed_at):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected interruption")
+        return original(self, decision, observed_at)
+
+    monkeypatch.setattr(cli_module.ShadowStore, "record_evaluation", interrupt_once)
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
+    assert not (state / STATE_MARKER_FILE).exists()
+
+    monkeypatch.setattr(cli_module.ShadowStore, "record_evaluation", original)
+    cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
+
+    assert (state / STATE_MARKER_FILE).is_file()
+
+
+def test_corrupt_evaluation_refuses_collect_before_any_state_write(tmp_path):
+    root = build_valid_source(tmp_path)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "evaluations.jsonl").write_text('{"bad":true}\n', encoding="utf-8")
+    before = hash_tree(state)
+
+    with pytest.raises(SourceRewriteError, match="stored evaluation"):
+        cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
+
+    assert hash_tree(state) == before
+
+
 @pytest.mark.parametrize(("events", "labels", "message"), [
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},) * 2, (), "duplicate event"),
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
@@ -308,6 +410,21 @@ def test_summarize_rejects_source_and_uninitialized_dirs_without_modifying_summa
     (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
         {"event_id": "e1", "horizon": 1, "payload": {"event_id": "other", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
     ), "stored label identity"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "stored label status"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "matured", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "stored label exit price"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "unknown", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "stored label status"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "matured", "exit_price": float("nan"), "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "stored label exit price"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "matured", "exit_price": 2.0, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "stored label round trip"),
 ])
 def test_evidence_reconstruction_refuses_ambiguous_state(events, labels, message):
     with pytest.raises(SourceRewriteError, match=message):

@@ -76,7 +76,7 @@ def test_source_snapshot_history_allows_only_exact_prefix_growth(tmp_path):
     history = store.load_source_snapshots()
 
     assert [item["byte_length"] for item in history] == [6, 13]
-    assert len(history[0]["content_b64"]) > 0
+    assert set(history[0]) == {"relative_path", "sha256", "byte_length", "observed_at"}
     with pytest.raises(SourceRewriteError, match="source hash changed"):
         store.record_source_snapshot("daily/513100.csv", b"first?second\n", OBSERVED_0828)
 
@@ -92,6 +92,28 @@ def test_source_snapshot_retry_is_idempotent_after_partial_append(tmp_path):
     assert store.record_source_snapshot(*snapshots[0], OBSERVED_0826) is False
     assert store.record_source_snapshot(*snapshots[1], OBSERVED_0826) is True
     assert len(store.load_source_snapshots()) == 2
+
+
+def test_source_snapshot_batch_is_compact_and_reuses_one_history_load(tmp_path, monkeypatch):
+    store = ShadowStore(tmp_path)
+    snapshots = (
+        ("manifest.json", b'{"append_only":true}\n'),
+        ("daily/513100.csv", b"header\nrow\n"),
+    )
+    calls = 0
+    original = store.load_source_snapshots
+
+    def counted_history():
+        nonlocal calls
+        calls += 1
+        return original()
+
+    monkeypatch.setattr(store, "load_source_snapshots", counted_history)
+    plan = store.prepare_source_snapshot_batch(snapshots, OBSERVED_0826)
+    assert calls == 1
+    store.write_source_snapshot_batch(plan)
+    assert calls == 2
+    assert all("content_b64" not in record for record in original())
 
 
 def test_old_arrival_first_seen_later_is_audit_only(tmp_path):
@@ -201,8 +223,19 @@ def test_preexisting_later_conflicting_evaluation_duplicate_is_refused(tmp_path)
         encoding="utf-8",
     )
 
-    with pytest.raises(SourceRewriteError, match="conflicting evaluation"):
+    with pytest.raises(SourceRewriteError, match="duplicate evaluation"):
         store.record_evaluation(decision, OBSERVED_0826)
+
+
+def test_load_evaluations_rejects_identical_duplicate_event_id(tmp_path):
+    store = ShadowStore(tmp_path)
+    store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
+    path = tmp_path / "evaluations.jsonl"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original + original, encoding="utf-8")
+
+    with pytest.raises(SourceRewriteError, match="duplicate evaluation"):
+        store.load_evaluations()
 
 
 def test_preexisting_later_conflicting_label_duplicate_is_refused(tmp_path):
