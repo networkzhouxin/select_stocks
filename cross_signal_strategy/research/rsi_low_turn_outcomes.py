@@ -91,10 +91,11 @@ def calculate_round_trip(
         min_commission=friction.min_commission,
         slippage_rate=friction.slippage_rate,
     )
-    buy = broker.order_target_value(code, SLOT_CAPITAL, entry_open, "shadow_entry")
+    execute_target = getattr(broker, "order_target_value")
+    buy = execute_target(code, SLOT_CAPITAL, entry_open, "shadow_entry")
     if not buy.filled:
         raise ValueError(f"shadow entry not executable: {buy.reason}")
-    sell = broker.order_target_value(code, 0.0, exit_open, "shadow_exit")
+    sell = execute_target(code, 0.0, exit_open, "shadow_exit")
     if not sell.filled:
         raise ValueError(f"shadow exit not executable: {sell.reason}")
     pnl = broker.cash - SLOT_CAPITAL

@@ -85,6 +85,12 @@ These are starting defaults, not optimized parameters.
 
 ## Files
 
+- `research/rsi_low_turn_shadow.py`: frozen RSI(6) low-turn event detector; it is an order-free prospective-observation primitive.
+- `research/rsi_low_turn_source.py`: fail-closed, point-in-time source contract and exact 09:35 price loader for the blocked prospective observer.
+- `research/rsi_low_turn_store.py`: append-only observer state for source hashes, daily evaluations, events, and matured labels.
+- `research/rsi_low_turn_outcomes.py`: fixed-horizon, friction-aware observer labels and frozen evidence gate; MFE/MAE remain unavailable without an approved intraday-extrema source.
+- `tools/run_rsi_low_turn_shadow.py`: order-free `collect` and state-only `summarize` CLI; it requires an explicitly approved source root and prints `orders_disabled=True`.
+
 - `research/trade_quality_ledger.py`: observation-only unified 2019-2021 trade-quality ledger using actual fills, causal holding-path boundaries, fixed MFE/MAE labels, ATR first-barrier labels, and post-sell returns.
 - `docs/trade_quality_ledger.md`: frozen ledger definitions plus the source-index/time-zone evidence required before any QDII underlying-market consistency observation may run.
 - `research/underlying_market_data.py`: exact-root, read-only contract for four official underlying-index histories and China-09:35 point-in-time selection.
