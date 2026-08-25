@@ -2,6 +2,8 @@
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
+import base64
+import hashlib
 import json
 from numbers import Integral, Real
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -14,6 +16,11 @@ EVALUATIONS_FILE = "evaluations.jsonl"
 EVENTS_FILE = "events.jsonl"
 HASHES_FILE = "source_hashes.jsonl"
 LABELS_FILE = "labels.jsonl"
+STATE_MARKER_FILE = "observer_state.json"
+STATE_MARKER = {
+    "observer": "rsi_low_turn_prospective_shadow",
+    "schema_version": 1,
+}
 
 
 @dataclass(frozen=True)
@@ -28,26 +35,126 @@ class SourceRewriteError(RuntimeError):
 
 
 class ShadowStore:
-    def __init__(self, state_dir: Path):
+    def __init__(self, state_dir: Path, create: bool = True):
         self.state_dir = Path(state_dir).resolve()
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+        elif self.state_dir.exists() and not self.state_dir.is_dir():
+            raise SourceRewriteError("state path is not a directory")
 
-    def record_source_hash(
-        self, relative_path: str, sha256: str, observed_at: datetime
+    def record_source_snapshot(
+        self, relative_path: str, content: bytes, observed_at: datetime,
     ) -> bool:
-        path = _validate_relative_path(relative_path)
-        digest = _validate_sha256(sha256)
-        observed = _iso_datetime(observed_at)
-        record = {
-            "relative_path": path,
-            "sha256": digest,
-            "observed_at": observed,
-        }
-        existing = self._read_records(HASHES_FILE)
-        matching_path = [item for item in existing if item.get("relative_path") == path]
-        if matching_path and any(item.get("sha256") != digest for item in matching_path):
+        record = _source_snapshot_record(relative_path, content, observed_at)
+        self._validate_source_snapshot_record(record, self.load_source_snapshots())
+        matching = [
+            item for item in self._read_records(HASHES_FILE)
+            if item.get("relative_path") == record["relative_path"]
+            and item.get("sha256") == record["sha256"]
+            and item.get("byte_length") == record["byte_length"]
+            and item.get("content_b64") == record["content_b64"]
+        ]
+        if matching:
+            return False
+        self._append_record(HASHES_FILE, record)
+        return True
+
+    def load_source_snapshots(self) -> tuple[Mapping[str, object], ...]:
+        records = tuple(self._read_records(HASHES_FILE))
+        latest: dict[str, dict[str, object]] = {}
+        for record in records:
+            path, content = _validated_source_snapshot(record)
+            prior = latest.get(path)
+            if prior is not None:
+                _, old_content = _validated_source_snapshot(prior)
+                if content == old_content:
+                    raise SourceRewriteError(f"duplicate source snapshot for {path}")
+                if not content.startswith(old_content):
+                    raise SourceRewriteError(f"source hash changed for {path}")
+            latest[path] = record
+        return records
+
+    def validate_source_snapshots(
+        self, snapshots: tuple[tuple[str, bytes], ...], observed_at: datetime,
+    ) -> None:
+        history = list(self.load_source_snapshots())
+        for relative_path, content in snapshots:
+            record = _source_snapshot_record(relative_path, content, observed_at)
+            self._validate_source_snapshot_record(record, tuple(history))
+            if not any(
+                item.get("relative_path") == record["relative_path"]
+                and item.get("sha256") == record["sha256"]
+                and item.get("byte_length") == record["byte_length"]
+                and item.get("content_b64") == record["content_b64"]
+                for item in history
+            ):
+                history.append(record)
+
+    def _validate_source_snapshot_record(
+        self, record: Mapping[str, object], history: tuple[Mapping[str, object], ...],
+    ) -> None:
+        path, content = _validated_source_snapshot(record)
+        prior = None
+        for item in history:
+            if item.get("relative_path") == path:
+                prior = item
+        if prior is None:
+            return
+        _, old_content = _validated_source_snapshot(prior)
+        if content != old_content and not content.startswith(old_content):
             raise SourceRewriteError(f"source hash changed for {path}")
-        return self._append_unique(HASHES_FILE, record, (path, observed), "source hash")
+
+    def validate_collect_integrity(self) -> None:
+        self.load_source_snapshots()
+        self._read_records(EVALUATIONS_FILE)
+        self.load_events()
+        self.load_labels()
+        marker = self.state_dir / STATE_MARKER_FILE
+        if marker.exists():
+            self.require_state_marker()
+        elif self.state_dir.exists() and any(self.state_dir.iterdir()):
+            raise SourceRewriteError("observer state marker is required")
+
+    def validate_evaluation(self, decision: SignalDecision, observed_at: datetime) -> None:
+        record = _evaluation_record(decision, observed_at)
+        matching = [
+            item for item in self._read_records(EVALUATIONS_FILE)
+            if item.get("event_id") == decision.event_id
+        ]
+        if matching and any(_canonical(item) != _canonical(record) for item in matching):
+            raise SourceRewriteError(f"conflicting evaluation for event_id {decision.event_id}")
+        if _evaluation_requires_event(record):
+            event = _event_record_from_evaluation(record)
+            for existing in self.load_events():
+                if existing.get("event_id") == event["event_id"] and _canonical(existing) != _canonical(event):
+                    raise SourceRewriteError(f"conflicting event for event_id {event['event_id']}")
+
+    def validate_label(self, event_id: str, horizon: int, payload: Mapping[str, object]) -> None:
+        record = _label_record(event_id, horizon, payload)
+        matching = [
+            item for item in self.load_labels()
+            if item.get("event_id") == event_id and item.get("horizon") == horizon
+        ]
+        if matching and any(_canonical(item) != _canonical(record) for item in matching):
+            raise SourceRewriteError(f"conflicting label for event_id {event_id} horizon {horizon}")
+
+    def write_state_marker(self) -> None:
+        path = self.state_dir / STATE_MARKER_FILE
+        if path.exists():
+            self.require_state_marker()
+            return
+        path.write_text(_canonical(STATE_MARKER) + "\n", encoding="utf-8", newline="\n")
+
+    def require_state_marker(self) -> None:
+        path = self.state_dir / STATE_MARKER_FILE
+        if not path.is_file():
+            raise SourceRewriteError("observer state marker is required")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise SourceRewriteError("observer state marker is invalid") from exc
+        if _canonical(value) != _canonical(STATE_MARKER):
+            raise SourceRewriteError("observer state marker is invalid")
 
     def record_evaluation(
         self, decision: SignalDecision, observed_at: datetime
@@ -98,12 +205,8 @@ class ShadowStore:
         if not isinstance(payload, Mapping):
             raise TypeError("payload must be a mapping")
 
-        record = {
-            "event_id": event_id,
-            "horizon": horizon,
-            "payload": _json_value(payload),
-        }
-        existing = self._read_records(LABELS_FILE)
+        record = _label_record(event_id, horizon, payload)
+        existing = self.load_labels()
         matching = [
             item
             for item in existing
@@ -120,10 +223,22 @@ class ShadowStore:
         return RecordResult(True, False, "label_appended")
 
     def load_events(self) -> tuple[Mapping[str, object], ...]:
-        return self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event")
+        return self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event", reject_duplicates=True)
 
     def load_labels(self) -> tuple[Mapping[str, object], ...]:
-        return tuple(self._read_records(LABELS_FILE))
+        records = tuple(self._read_records(LABELS_FILE))
+        keys: dict[tuple[str, int], Mapping[str, object]] = {}
+        for record in records:
+            event_id, horizon = record.get("event_id"), record.get("horizon")
+            if not isinstance(event_id, str) or not isinstance(horizon, int):
+                raise SourceRewriteError("invalid label key in labels.jsonl")
+            key = (event_id, horizon)
+            if key in keys:
+                if _canonical(keys[key]) != _canonical(record):
+                    raise SourceRewriteError(f"conflicting label for event_id {event_id} horizon {horizon}")
+                raise SourceRewriteError(f"duplicate label for event_id {event_id} horizon {horizon}")
+            keys[key] = record
+        return records
 
     def _episode_is_active_before(self, decision: SignalDecision) -> bool:
         return self._episode_is_active_before_record(
@@ -161,7 +276,7 @@ class ShadowStore:
         event_id = event["event_id"]
         matching = [
             item
-            for item in self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event")
+            for item in self._load_unique_keyed_records(EVENTS_FILE, "event_id", "event", reject_duplicates=True)
             if item.get("event_id") == event_id
         ]
         if matching:
@@ -191,7 +306,7 @@ class ShadowStore:
         return True
 
     def _load_unique_keyed_records(
-        self, filename: str, key_name: str, label: str
+        self, filename: str, key_name: str, label: str, reject_duplicates: bool = False,
     ) -> tuple[Mapping[str, object], ...]:
         unique: dict[str, dict[str, object]] = {}
         for record in self._read_records(filename):
@@ -201,7 +316,7 @@ class ShadowStore:
             prior = unique.get(key)
             if prior is None:
                 unique[key] = record
-            elif _canonical(prior) != _canonical(record):
+            elif reject_duplicates or _canonical(prior) != _canonical(record):
                 raise SourceRewriteError(f"conflicting {label} for {key_name} {key}")
         return tuple(unique.values())
 
@@ -246,6 +361,53 @@ def _evaluation_record(decision: SignalDecision, observed_at: datetime) -> dict[
         "valid_event": decision.valid_event,
         "reasons": list(decision.reasons),
         "item": _json_value(item),
+    }
+
+
+def _source_snapshot_record(
+    relative_path: str, content: bytes, observed_at: datetime,
+) -> dict[str, object]:
+    if not isinstance(content, bytes):
+        raise TypeError("source snapshot content must be bytes")
+    return {
+        "relative_path": _validate_relative_path(relative_path),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "byte_length": len(content),
+        "content_b64": base64.b64encode(content).decode("ascii"),
+        "observed_at": _iso_datetime(observed_at),
+    }
+
+
+def _validated_source_snapshot(record: Mapping[str, object]) -> tuple[str, bytes]:
+    path = _validate_relative_path(record.get("relative_path"))
+    digest = _validate_sha256(record.get("sha256"))
+    length = record.get("byte_length")
+    encoded = record.get("content_b64")
+    _parse_datetime(record.get("observed_at"))
+    if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+        raise SourceRewriteError(f"invalid source snapshot length for {path}")
+    if not isinstance(encoded, str):
+        raise SourceRewriteError(f"invalid source snapshot content for {path}")
+    try:
+        content = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise SourceRewriteError(f"invalid source snapshot content for {path}") from exc
+    if len(content) != length or hashlib.sha256(content).hexdigest() != digest:
+        raise SourceRewriteError(f"invalid source snapshot digest for {path}")
+    return path, content
+
+
+def _label_record(event_id: str, horizon: int, payload: Mapping[str, object]) -> dict[str, object]:
+    if not isinstance(event_id, str) or not event_id:
+        raise ValueError("event_id must be a non-empty string")
+    if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon < 0:
+        raise ValueError("horizon must be a non-negative integer")
+    if not isinstance(payload, Mapping):
+        raise TypeError("payload must be a mapping")
+    return {
+        "event_id": event_id,
+        "horizon": horizon,
+        "payload": _json_value(payload),
     }
 
 

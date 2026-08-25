@@ -7,6 +7,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+
+from cross_signal_strategy.research.rsi_low_turn_store import SourceRewriteError
+from cross_signal_strategy.tools import run_rsi_low_turn_shadow as cli_module
 
 
 WORKTREE = Path(__file__).resolve().parents[1]
@@ -50,9 +54,9 @@ def imported_module_names(tree):
     names = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names.update(alias.name.split(".")[0] for alias in node.names)
+            names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            names.add(node.module.split(".")[0])
+            names.update(f"{node.module}.{alias.name}" for alias in node.names)
     return names
 
 
@@ -65,6 +69,36 @@ def called_function_names(tree):
             elif isinstance(node.func, ast.Name):
                 names.append(node.func.id)
     return names
+
+
+def local_broker_order_calls(tree):
+    local_broker_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            if isinstance(node.value.func, ast.Name) and node.value.func.id == "LocalBroker":
+                local_broker_names.update(
+                    target.id for target in node.targets if isinstance(target, ast.Name)
+                )
+    calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr.startswith("order"):
+                calls.append((node.func.attr, node.func.value, node.lineno))
+    return local_broker_names, calls
+
+
+def dynamic_order_lookups(tree):
+    lookups = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "getattr" or len(node.args) < 2:
+            continue
+        method = node.args[1]
+        if isinstance(method, ast.Constant) and isinstance(method.value, str):
+            if method.value.startswith("order") or method.value == "execute_sell":
+                lookups.append(node.lineno)
+    return lookups
 
 
 def build_valid_source(tmp_path):
@@ -95,6 +129,22 @@ def build_valid_source(tmp_path):
             "source": "pytest_fixture",
         }]).to_csv(root / "minute_0935" / f"{code}.csv", index=False)
     return root
+
+
+def append_second_day(root):
+    for offset, code in enumerate(FROZEN_CODES):
+        daily_path = root / "daily" / f"{code}.csv"
+        with daily_path.open("ab") as handle:
+            handle.write(
+                f"{code},2026-08-26,{2.00 + offset},{2.10 + offset},{1.95 + offset},"
+                f"{2.05 + offset},100000,2026-08-26T15:01:00+08:00,pytest_fixture\n".encode("utf-8")
+            )
+        minute_path = root / "minute_0935" / f"{code}.csv"
+        with minute_path.open("ab") as handle:
+            handle.write(
+                f"{code},2026-08-27T09:35:00+08:00,{2.04 + offset},{2.04 + offset},"
+                "1000,10,2026-08-27T09:35:00+08:00,pytest_fixture\n".encode("utf-8")
+            )
 
 
 def run_collect_and_summarize(root, state):
@@ -134,9 +184,19 @@ def test_observer_modules_have_no_platform_or_order_dependency():
     for path in OBSERVER_MODULE_PATHS:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         imported = imported_module_names(tree)
-        called = called_function_names(tree)
         assert not (imported & forbidden)
-        assert not any(name.startswith("order") or name == "execute_sell" for name in called)
+        assert not any(name == "execute_sell" for name in called_function_names(tree))
+        assert not dynamic_order_lookups(tree)
+        local_broker_names, order_calls = local_broker_order_calls(tree)
+        for method, receiver, _ in order_calls:
+            assert path.name == "rsi_low_turn_outcomes.py"
+            assert method == "order_target_value"
+            assert isinstance(receiver, ast.Name)
+            assert receiver.id in local_broker_names
+
+    outcomes = ast.parse(OBSERVER_MODULE_PATHS[3].read_text(encoding="utf-8"))
+    _, order_calls = local_broker_order_calls(outcomes)
+    assert len(order_calls) == 2
 
 
 def test_collect_and_summarize_do_not_modify_source(tmp_path):
@@ -147,3 +207,108 @@ def test_collect_and_summarize_do_not_modify_source(tmp_path):
     assert run_collect_and_summarize(root, state).returncode == 0
     assert hash_tree(root) == before
     assert (state / "summary.json").exists()
+
+
+def test_collect_accepts_second_day_prefix_append_only(tmp_path):
+    root = build_valid_source(tmp_path)
+    state = tmp_path / "state"
+    first = run_cli(
+        "collect", "--data-root", str(root), "--approved-root", str(root),
+        "--state-dir", str(state), "--as-of", "2026-08-26T09:35:00+08:00",
+    )
+    append_second_day(root)
+    second = run_cli(
+        "collect", "--data-root", str(root), "--approved-root", str(root),
+        "--state-dir", str(state), "--as-of", "2026-08-27T09:35:00+08:00",
+    )
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    snapshots = [json.loads(line) for line in (state / "source_hashes.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(snapshots) == 37
+    assert all("byte_length" in item for item in snapshots)
+
+
+def test_collect_rejects_rewritten_old_prefix_before_any_state_write(tmp_path):
+    root = build_valid_source(tmp_path)
+    state = tmp_path / "state"
+    assert run_cli(
+        "collect", "--data-root", str(root), "--approved-root", str(root),
+        "--state-dir", str(state), "--as-of", "2026-08-26T09:35:00+08:00",
+    ).returncode == 0
+    before_state = hash_tree(state)
+    path = root / "daily" / "513100.csv"
+    path.write_bytes(path.read_bytes().replace(b"5.3", b"5.4", 1))
+    append_second_day(root)
+
+    result = run_cli(
+        "collect", "--data-root", str(root), "--approved-root", str(root),
+        "--state-dir", str(state), "--as-of", "2026-08-27T09:35:00+08:00",
+    )
+
+    assert result.returncode == 2
+    assert "source hash changed" in result.stdout
+    assert hash_tree(state) == before_state
+
+
+def test_collect_rejects_concurrent_source_drift_before_creating_state(tmp_path, monkeypatch):
+    root = build_valid_source(tmp_path)
+    state = tmp_path / "state"
+    original = cli_module.load_arrival_input
+
+    def drift_after_last_input(data_root, approved_root, code, arrival_dt):
+        item = original(data_root, approved_root, code, arrival_dt)
+        if code == FROZEN_CODES[-1]:
+            with (root / "daily" / "513100.csv").open("ab") as handle:
+                handle.write(b"\n")
+        return item
+
+    monkeypatch.setattr(cli_module, "load_arrival_input", drift_after_last_input)
+    with pytest.raises(SourceRewriteError, match="source changed during collection"):
+        cli_module.collect(root, root, state, "2026-08-26T09:35:00+08:00")
+
+    assert not state.exists()
+
+
+def test_summarize_rejects_source_and_uninitialized_dirs_without_modifying_summary(tmp_path):
+    root = build_valid_source(tmp_path)
+    root_before = hash_tree(root)
+    source_result = run_cli(
+        "summarize", "--state-dir", str(root),
+        "--generated-at", "2026-08-26T09:35:00+08:00",
+    )
+    uninitialized = tmp_path / "uninitialized"
+    uninitialized.mkdir()
+    summary_path = uninitialized / "summary.json"
+    summary_path.write_text('{"preserve":true}\n', encoding="utf-8")
+    before = hash_tree(uninitialized)
+    uninitialized_result = run_cli(
+        "summarize", "--state-dir", str(uninitialized),
+        "--generated-at", "2026-08-26T09:35:00+08:00",
+    )
+
+    assert source_result.returncode == 2
+    assert uninitialized_result.returncode == 2
+    assert hash_tree(root) == root_before
+    assert hash_tree(uninitialized) == before
+
+
+@pytest.mark.parametrize(("events", "labels", "message"), [
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},) * 2, (), "duplicate event"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "e1", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "duplicate label"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "missing", "horizon": 1, "payload": {"event_id": "missing", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "dangling label"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 2, "payload": {"event_id": "e1", "horizon": 2, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "unsupported horizon"),
+    (({"event_id": "e1", "code": "513100", "arrival_date": "2026-08-26"},), (
+        {"event_id": "e1", "horizon": 1, "payload": {"event_id": "other", "horizon": 1, "status": "pending_horizon_not_arrived", "exit_price": None, "nominal": None, "doubled": None, "mfe": None, "mae": None}},
+    ), "stored label identity"),
+])
+def test_evidence_reconstruction_refuses_ambiguous_state(events, labels, message):
+    with pytest.raises(SourceRewriteError, match=message):
+        cli_module._event_outcome_records(events, labels)

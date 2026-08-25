@@ -3,6 +3,7 @@
 import argparse
 from dataclasses import asdict
 from datetime import date, datetime
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -17,6 +18,7 @@ if str(WORKSPACE_ROOT) not in sys.path:
 
 from cross_signal_strategy.research.rsi_low_turn_outcomes import (
     EventOutcomeRecord,
+    HORIZONS,
     MaturedLabel,
     RoundTripResult,
     build_summary,
@@ -28,7 +30,6 @@ from cross_signal_strategy.research.rsi_low_turn_source import (
     MIN_COLLECTION_START,
     SHANGHAI,
     SourceContractError,
-    file_sha256,
     load_arrival_input,
     load_manifest,
 )
@@ -65,19 +66,35 @@ def collect(data_root: Path, approved_root: Path, state_dir: Path, as_of: str) -
     if state_path == manifest.root or state_path.is_relative_to(manifest.root):
         raise SourceContractError("state dir must be outside the approved data root")
 
+    preflight_store = ShadowStore(state_path, create=False)
+    preflight_store.validate_collect_integrity()
+    before_snapshots = _read_source_snapshots(
+        manifest.root, manifest.daily_subdir, manifest.minute_subdir,
+    )
     inputs = tuple(
         load_arrival_input(manifest.root, manifest.root, code, observed_at)
         for code in FROZEN_ETF_CODES
     )
-    store = ShadowStore(state_path)
-    existing_events = store.load_events()
+    existing_events = preflight_store.load_events()
     labels = _matured_existing_labels(existing_events, manifest.root, observed_at)
+    after_snapshots = _read_source_snapshots(
+        manifest.root, manifest.daily_subdir, manifest.minute_subdir,
+    )
+    if after_snapshots != before_snapshots:
+        raise SourceRewriteError("source changed during collection")
+    _validate_input_snapshot_hashes(inputs, before_snapshots)
+    preflight_store.validate_source_snapshots(before_snapshots, observed_at)
+    decisions = tuple(detect_rsi_low_turn(item) for item in inputs)
+    for decision in decisions:
+        preflight_store.validate_evaluation(decision, observed_at)
+    for event_id, horizon, payload in labels:
+        preflight_store.validate_label(event_id, horizon, payload)
 
-    _record_source_hashes(store, manifest.root, manifest.daily_subdir,
-                          manifest.minute_subdir, observed_at)
+    store = ShadowStore(state_path)
+    store.write_state_marker()
+    _record_source_snapshots(store, before_snapshots, observed_at)
     evaluation_results = [
-        store.record_evaluation(detect_rsi_low_turn(item), observed_at)
-        for item in inputs
+        store.record_evaluation(decision, observed_at) for decision in decisions
     ]
     label_results = [
         store.append_label(event_id, horizon, payload)
@@ -96,7 +113,8 @@ def summarize(state_dir: Path, generated_at: str) -> None:
     state_path = Path(state_dir).resolve()
     if not state_path.is_dir():
         raise SourceRewriteError("state directory is required")
-    store = ShadowStore(state_path)
+    store = ShadowStore(state_path, create=False)
+    store.require_state_marker()
     summary = build_summary(
         _event_outcome_records(store.load_events(), store.load_labels()),
         MIN_COLLECTION_START,
@@ -110,15 +128,40 @@ def summarize(state_dir: Path, generated_at: str) -> None:
     )
 
 
-def _record_source_hashes(
-    store: ShadowStore, root: Path, daily_subdir: str, minute_subdir: str,
-    observed_at: datetime,
-) -> None:
+def _read_source_snapshots(
+    root: Path, daily_subdir: str, minute_subdir: str,
+) -> tuple[tuple[str, bytes], ...]:
     paths = [root / "manifest.json"]
     paths.extend(root / daily_subdir / f"{code}.csv" for code in FROZEN_ETF_CODES)
     paths.extend(root / minute_subdir / f"{code}.csv" for code in FROZEN_ETF_CODES)
+    snapshots = []
     for path in paths:
-        store.record_source_hash(path.relative_to(root).as_posix(), file_sha256(path), observed_at)
+        try:
+            snapshots.append((path.relative_to(root).as_posix(), path.read_bytes()))
+        except OSError as exc:
+            raise SourceContractError(f"source snapshot is unreadable: {path.name}") from exc
+    return tuple(snapshots)
+
+
+def _validate_input_snapshot_hashes(
+    inputs: tuple[object, ...], snapshots: tuple[tuple[str, bytes], ...],
+) -> None:
+    hashes = {relative_path: hashlib.sha256(content).hexdigest() for relative_path, content in snapshots}
+    for item in inputs:
+        code = getattr(item, "code")
+        expected = (
+            hashes["manifest.json"], hashes[f"daily/{code}.csv"],
+            hashes[f"minute_0935/{code}.csv"],
+        )
+        if getattr(item, "source_hashes") != expected:
+            raise SourceRewriteError("input source hashes do not match collection snapshot")
+
+
+def _record_source_snapshots(
+    store: ShadowStore, snapshots: tuple[tuple[str, bytes], ...], observed_at: datetime,
+) -> None:
+    for relative_path, content in snapshots:
+        store.record_source_snapshot(relative_path, content, observed_at)
 
 
 def _matured_existing_labels(
@@ -136,6 +179,15 @@ def _matured_existing_labels(
 def _event_outcome_records(
     events: tuple[Mapping[str, object], ...], labels: tuple[Mapping[str, object], ...],
 ) -> tuple[EventOutcomeRecord, ...]:
+    event_ids = set()
+    for event in events:
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str):
+            raise SourceRewriteError("stored event is invalid")
+        if event_id in event_ids:
+            raise SourceRewriteError(f"duplicate event {event_id}")
+        event_ids.add(event_id)
+
     labels_by_event: dict[str, dict[int, MaturedLabel]] = {}
     for record in labels:
         event_id = record.get("event_id")
@@ -143,7 +195,14 @@ def _event_outcome_records(
         payload = record.get("payload")
         if not isinstance(event_id, str) or not isinstance(horizon, int) or not isinstance(payload, Mapping):
             raise SourceRewriteError("stored label is invalid")
-        labels_by_event.setdefault(event_id, {})[horizon] = _matured_label(event_id, horizon, payload)
+        if event_id not in event_ids:
+            raise SourceRewriteError(f"dangling label {event_id}")
+        if horizon not in HORIZONS:
+            raise SourceRewriteError(f"unsupported horizon {horizon}")
+        event_labels = labels_by_event.setdefault(event_id, {})
+        if horizon in event_labels:
+            raise SourceRewriteError(f"duplicate label for event_id {event_id} horizon {horizon}")
+        event_labels[horizon] = _matured_label(event_id, horizon, payload)
 
     records = []
     for event in events:

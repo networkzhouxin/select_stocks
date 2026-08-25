@@ -69,11 +69,29 @@ def test_duplicate_is_idempotent_but_conflicting_payload_is_refused(tmp_path):
         store.record_evaluation(replace_price(decision, 9.99), OBSERVED_0826)
 
 
-def test_changed_source_hash_stops(tmp_path):
+def test_source_snapshot_history_allows_only_exact_prefix_growth(tmp_path):
     store = ShadowStore(tmp_path)
-    store.record_source_hash("daily/513100.csv", "a" * 64, OBSERVED_0826)
+    assert store.record_source_snapshot("daily/513100.csv", b"first\n", OBSERVED_0826) is True
+    assert store.record_source_snapshot("daily/513100.csv", b"first\nsecond\n", OBSERVED_0827) is True
+    history = store.load_source_snapshots()
+
+    assert [item["byte_length"] for item in history] == [6, 13]
+    assert len(history[0]["content_b64"]) > 0
     with pytest.raises(SourceRewriteError, match="source hash changed"):
-        store.record_source_hash("daily/513100.csv", "b" * 64, OBSERVED_0827)
+        store.record_source_snapshot("daily/513100.csv", b"first?second\n", OBSERVED_0828)
+
+
+def test_source_snapshot_retry_is_idempotent_after_partial_append(tmp_path):
+    store = ShadowStore(tmp_path)
+    snapshots = (
+        ("manifest.json", b'{"append_only":true}\n'),
+        ("daily/513100.csv", b"header\nrow\n"),
+    )
+
+    assert store.record_source_snapshot(*snapshots[0], OBSERVED_0826) is True
+    assert store.record_source_snapshot(*snapshots[0], OBSERVED_0826) is False
+    assert store.record_source_snapshot(*snapshots[1], OBSERVED_0826) is True
+    assert len(store.load_source_snapshots()) == 2
 
 
 def test_old_arrival_first_seen_later_is_audit_only(tmp_path):
@@ -168,7 +186,7 @@ def test_malformed_or_truncated_jsonl_is_a_domain_integrity_error(tmp_path, file
         elif filename == "labels.jsonl":
             store.load_labels()
         else:
-            store.record_source_hash("daily/513100.csv", "a" * 64, OBSERVED_0826)
+            store.record_source_snapshot("daily/513100.csv", b"fixture", OBSERVED_0826)
 
 
 def test_preexisting_later_conflicting_evaluation_duplicate_is_refused(tmp_path):
@@ -218,12 +236,12 @@ def test_load_events_rejects_later_conflicting_duplicate_event_id(tmp_path):
         store.load_events()
 
 
-def test_load_events_collapses_identical_duplicate_event_ids(tmp_path):
+def test_load_events_rejects_identical_duplicate_event_ids(tmp_path):
     store = ShadowStore(tmp_path)
     store.record_evaluation(true_decision("2026-08-26"), OBSERVED_0826)
     path = tmp_path / "events.jsonl"
     original = path.read_text(encoding="utf-8")
     path.write_text(original + original, encoding="utf-8")
 
-    events = store.load_events()
-    assert len(events) == 1
+    with pytest.raises(SourceRewriteError, match="conflicting event"):
+        store.load_events()
