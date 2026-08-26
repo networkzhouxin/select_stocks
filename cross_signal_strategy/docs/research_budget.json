@@ -6,7 +6,7 @@
   },
   "validation_tuning_forbidden": true,
   "expected_failed_experiment_count": 80,
-  "max_total_open_experiments": 0,
+  "max_total_open_experiments": 1,
   "families": [
     {
       "key": "dimension_capped_score_v04_user_authorized",
@@ -1456,6 +1456,18 @@
       "historical_result_interpretation": "development_diagnostic_not_out_of_sample",
       "validation_influence": "none",
       "validation_authorized": false,
+      "prohibit_alternatives": true
+    },
+    {
+      "key": "weekly_trend_daily_pullback_user_authorized",
+      "label": "User-authorized completed-week trend plus daily pullback candidate",
+      "status": "open",
+      "max_new_experiments": 1,
+      "rationale": "The user authorized one structurally separate strategy family: each ETF must be above a rising completed-week MA20 before the fixed daily BOLL/KDJ/RSI pullback entry can trade. This does not reopen formal cross-v0.3.3 confirmation tuning or the exhausted KRBA family.",
+      "planned_experiment": "weekly-trend-pullback-v0.1-joinquant-candidate",
+      "candidate_variants": 1,
+      "validation_influence": "none",
+      "data_scope": "2018_warmup_plus_2019_2021_training_only",
       "prohibit_alternatives": true
     }
   ]

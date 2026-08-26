@@ -11,13 +11,12 @@ it does not change any score, order, position, or risk rule.
 - The empty `Date:` line in the ledger template is not an experiment.
 - Mainline: `cross-v0.3.3` remains unchanged.
 - Validation tuning: strictly forbidden. 不得查看或利用验证期结果选择指标、阈值、参数、ETF 或规则。
-- New open budget: zero. The sole implementation-correction replay of the
-  approved v0.4 dimension-capped rule has been consumed and failed seven frozen
-  local gates. The first local run remains classified and preserved separately
-  as `invalid_implementation`; the corrected canonical report is the only
-  evidence used to reject the approved rule. No JoinQuant/PTrade candidate or
-  neighboring variant is open. The separate late-veto/early-pre-MACD family
-  remains blocked, not open.
+- New open budget: exactly one. The sole open family is
+  `weekly_trend_daily_pullback_user_authorized`, limited to the pre-registered
+  `weekly-trend-pullback-v0.1-joinquant-candidate`. It combines an independently
+  evaluated completed-week MA20 trend gate with one fixed daily BOLL/KDJ/RSI
+  pullback entry. It does not reopen formal cross-v0.3.3 tuning, the exhausted
+  KRBA family, or any neighboring threshold, period, ETF, ranking, or exit rule.
 - The user-authorized `fresh_unextended_entry_user_authorized` family is
   exhausted. Its official JoinQuant result reduced return from 129.25% to
   111.14%, win rate from 55.8% to 49.0%, and profit/loss ratio from 5.297 to
@@ -50,6 +49,7 @@ it does not change any score, order, position, or risk rule.
 
 | Family key | Status | Decision |
 | --- | --- | --- |
+| `weekly_trend_daily_pullback_user_authorized` | open | Exactly one fixed candidate is authorized: each ETF independently requires a rising completed-week MA20 environment before the frozen daily BOLL/KDJ/RSI pullback entry may trade. Only 2018 warm-up plus 2019-2021 training data may be used; alternatives and validation influence are prohibited. |
 | `krba_simple_mean_reversion_user_authorized` | exhausted | The frozen independent KDJ-cross + RSI6 oversold + BOLL lower-band rejection entry with BOLL/ATR exits produced only 7 closed trades, no 2019 trade, and +6.09% return versus the local baseline's 89 trades and +125.00%. Corrected doubled-friction return was +5.25% versus +108.15%. The high 85.71% win rate is not deployable evidence because sample, annual coverage, return-retention, and friction gates failed. No JoinQuant/PTrade candidate, validation access, or neighboring parameter search is allowed. |
 | `dimension_capped_score_v04_user_authorized` | exhausted | The corrected rule changed 196 filled-order days, but win rate fell 56.18%→51.76%, return fell +125.00%→+78.13%, and every frozen payoff/robustness gate listed in the canonical report failed. Doubled-friction return fell +108.15%→+63.32% and win rate fell 51.69%→45.88%. No neighboring variant, JoinQuant/PTrade candidate, or validation access is allowed. |
 | `cross_signal_definition` | adopted | Positional cross alignment, T-1 timing, and the three-day window remain frozen. |
@@ -98,7 +98,13 @@ number from another nearby variant is not enough.
 
 ## Open Families
 
-No research family is open. The sole corrected replay for
+Exactly one research family is open:
+`weekly_trend_daily_pullback_user_authorized`. Its only permitted experiment is
+`weekly-trend-pullback-v0.1-joinquant-candidate`, using completed weekly bars and
+T-1 daily bars under the frozen design. The budget permits one variant only;
+validation-period input and neighboring rules are prohibited.
+
+The sole corrected replay for
 `dimension_capped_score_v04_user_authorized` is complete and the family is
 exhausted. The invalid first run remains preserved at
 `cross_signal_strategy/reports/dimension_capped_score_v04_invalid_implementation_2019_2021.md`;

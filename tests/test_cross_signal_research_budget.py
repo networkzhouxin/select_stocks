@@ -100,9 +100,44 @@ def test_budget_freezes_exhausted_search_and_limits_open_families():
     assert families["kdj_ranking_only_buy_user_authorized"].status == "exhausted"
 
     open_families = [family for family in budget.families if family.status == "open"]
-    assert open_families == []
-    assert budget.max_total_open_experiments == 0
+    assert [family.key for family in open_families] == [
+        "weekly_trend_daily_pullback_user_authorized"
+    ]
+    assert budget.max_total_open_experiments == 1
     assert all(family.max_new_experiments == 0 for family in budget.families if family.status != "open")
+
+
+def test_weekly_trend_daily_pullback_has_one_preregistered_variant():
+    from cross_signal_strategy.research.research_budget import (
+        evaluate_experiment_request,
+        load_research_budget,
+    )
+
+    budget = load_research_budget(BUDGET)
+    families = {family.key: family for family in budget.families}
+    family = families["weekly_trend_daily_pullback_user_authorized"]
+
+    assert budget.max_total_open_experiments == 1
+    assert [item.key for item in budget.families if item.status == "open"] == [
+        "weekly_trend_daily_pullback_user_authorized"
+    ]
+    assert family.status == "open"
+    assert family.max_new_experiments == 1
+    assert family.planned_experiment == (
+        "weekly-trend-pullback-v0.1-joinquant-candidate"
+    )
+    assert evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=1,
+    ).allowed is True
+    rejected = evaluate_experiment_request(
+        budget,
+        family_key=family.key,
+        planned_variants=2,
+    )
+    assert rejected.allowed is False
+    assert "one pre-registered variant" in rejected.reason
 
 
 def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_path):
@@ -285,7 +320,7 @@ def test_budget_is_training_only_and_forbids_validation_tuning():
     assert budget.training_start == "2019-01-01"
     assert budget.training_end == "2021-12-31"
     assert budget.validation_tuning_forbidden is True
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
 
 
 def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption():
@@ -298,14 +333,16 @@ def test_user_authorized_1445_signal_clock_cannot_be_reopened_after_consumption(
     families = {family.key: family for family in budget.families}
     family = families["intraday_signal_clock_1445_user_authorized"]
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=1
     ).allowed is False
-    assert [item.key for item in budget.families if item.status == "open"] == []
+    assert [item.key for item in budget.families if item.status == "open"] == [
+        "weekly_trend_daily_pullback_user_authorized"
+    ]
 
     raw = json.loads(BUDGET.read_text(encoding="utf-8"))
     payload = next(item for item in raw["families"] if item["key"] == family.key)
@@ -331,7 +368,7 @@ def test_user_authorized_1445_signal_clock_is_consumed_and_rejected():
     report_text = DUAL_TIMEPOINT_REPORT.read_text(encoding="utf-8")
     report_gate_passed = "ELIGIBLE_FOR_JOINQUANT_PLAN" in report_text
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -420,7 +457,7 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_joinquant_rejection():
         if item["key"] == family.key
     )
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -1184,7 +1221,7 @@ def test_dimension_capped_v04_correction_slot_cannot_reopen_after_consumption():
     families = {item.key: item for item in budget.families}
     family = families["dimension_capped_score_v04_user_authorized"]
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
@@ -1194,7 +1231,9 @@ def test_dimension_capped_v04_correction_slot_cannot_reopen_after_consumption():
     assert evaluate_experiment_request(
         budget, family.key, planned_variants=2
     ).allowed is False
-    assert [item.key for item in budget.families if item.status == "open"] == []
+    assert [item.key for item in budget.families if item.status == "open"] == [
+        "weekly_trend_daily_pullback_user_authorized"
+    ]
 
     payload = json.loads(BUDGET.read_text(encoding="utf-8"))
     raw = next(item for item in payload["families"] if item["key"] == family.key)
@@ -1237,7 +1276,7 @@ def test_dimension_capped_invalid_run_keeps_provenance_without_consuming_a_failu
         if item["key"] == family.key
     )
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert payload["expected_failed_experiment_count"] == 80
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
@@ -1361,7 +1400,7 @@ def test_dimension_capped_corrective_replay_is_rejected_and_closes_governance():
         item for item in payload["families"] if item["key"] == family.key
     )
 
-    assert budget.max_total_open_experiments == 0
+    assert budget.max_total_open_experiments == 1
     assert payload["expected_failed_experiment_count"] == 80
     assert family.status == "exhausted"
     assert family.max_new_experiments == 0
