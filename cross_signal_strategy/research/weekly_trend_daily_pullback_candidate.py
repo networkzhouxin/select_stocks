@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import pandas as pd
 
@@ -285,3 +285,203 @@ def choose_exit_reason(state, snapshot, current_price, hold_days, code=""):
     ):
         return "daily_pullback_failure"
     return None
+
+
+@dataclass
+class TrendPullbackOrderPlanner:
+    """Platform-neutral causal order planner for the frozen candidate rules."""
+
+    signal_adapter: object
+    etf_pool: Iterable[str]
+    trade_dates: list[str] | None = None
+    params: dict = field(
+        default_factory=lambda: {"max_hold": 3, "base_ratio": 0.95}
+    )
+    position_states: dict[str, PositionSignalState] = field(default_factory=dict)
+    sold_today: set[str] = field(default_factory=set)
+    sold_today_date: str | None = None
+    last_scores: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.etf_pool = tuple(str(code) for code in self.etf_pool)
+        self.trade_dates = (
+            None if self.trade_dates is None else [str(day) for day in self.trade_dates]
+        )
+
+    def plan_orders_at(
+        self,
+        current_date,
+        previous_date,
+        broker,
+        decision_time,
+        current_prices=None,
+    ):
+        del previous_date
+        current_day = str(current_date)
+        prices = dict(current_prices or {})
+        self._reset_sold_today(current_day)
+        if str(decision_time) == "14:50":
+            return self._plan_1450_atr(broker, prices)
+        if str(decision_time) != "09:35":
+            raise ValueError("candidate supports only 09:35 and 14:50")
+
+        scores = self._score_pool(current_day)
+        self.last_scores = {item["code"]: item for item in scores}
+
+        plans = []
+        planned_sells = set()
+        positions = getattr(broker, "positions", {})
+        for code in list(positions):
+            state = self.position_states.get(code)
+            if state is None:
+                continue
+            snapshot = self.last_scores.get(code, {})
+            reason = choose_exit_reason(
+                state,
+                snapshot,
+                prices.get(code, math.nan),
+                self._hold_days(state.entry_date, current_day),
+                code=code,
+            )
+            if reason is None:
+                continue
+            plans.append({"code": code, "target_value": 0.0, "reason": reason})
+            planned_sells.add(code)
+
+        held_after_sells = [code for code in positions if code not in planned_sells]
+        slots = int(self.params.get("max_hold", 3)) - len(held_after_sells)
+        if slots <= 0:
+            return plans
+
+        excluded = set(positions) | set(self.sold_today)
+        queue = build_buy_queue(scores, excluded, self.etf_pool)
+        total_value = self._total_value(broker, prices)
+        target = (
+            total_value
+            * _number(self.params.get("base_ratio", 0.95))
+            / float(self.params.get("max_hold", 3))
+        )
+        if not math.isfinite(target) or target <= 0.0:
+            return plans
+        for item in queue:
+            entry_atr = _number(item.get("atr"))
+            if not math.isfinite(entry_atr) or entry_atr <= 0.0:
+                continue
+            plans.append(
+                {
+                    "code": item["code"],
+                    "target_value": target,
+                    "reason": "weekly_pullback_entry",
+                    "entry_atr": entry_atr,
+                }
+            )
+            if sum(1 for plan in plans if plan["target_value"] > 0.0) >= slots:
+                break
+        return plans
+
+    def _plan_1450_atr(self, broker, current_prices):
+        plans = []
+        positions = getattr(broker, "positions", {})
+        for code in list(positions):
+            if code in self.sold_today:
+                continue
+            state = self.position_states.get(code)
+            price = _number(current_prices.get(code))
+            stop = calc_frozen_atr_stop(state, code) if state is not None else math.nan
+            if (
+                math.isfinite(price)
+                and price > 0.0
+                and math.isfinite(stop)
+                and price <= stop
+            ):
+                plans.append(
+                    {"code": code, "target_value": 0.0, "reason": "atr_stop"}
+                )
+        return plans
+
+    def on_orders_processed(self, current_date, decision_time, plans, results):
+        del decision_time
+        current_day = str(current_date)
+        self._reset_sold_today(current_day)
+        buy_plans = {
+            str(plan.get("code")): plan
+            for plan in plans
+            if _number(plan.get("target_value")) > 0.0
+        }
+        for order in results:
+            if not bool(getattr(order, "filled", False)):
+                continue
+            code = str(getattr(order, "code", ""))
+            amount_delta = _number(getattr(order, "amount_delta", 0.0))
+            exec_price = _number(getattr(order, "exec_price", math.nan))
+            if amount_delta > 0.0:
+                plan = buy_plans.get(code)
+                entry_atr = _number(plan.get("entry_atr")) if plan else math.nan
+                if (
+                    plan is None
+                    or not math.isfinite(exec_price)
+                    or exec_price <= 0.0
+                    or not math.isfinite(entry_atr)
+                    or entry_atr <= 0.0
+                ):
+                    continue
+                self.position_states[code] = PositionSignalState(
+                    entry_date=current_day,
+                    entry_price=exec_price,
+                    entry_atr=entry_atr,
+                    highest_close=exec_price,
+                )
+            elif amount_delta < 0.0:
+                self.position_states.pop(code, None)
+                self.sold_today.add(code)
+
+    def on_after_close(self, current_date, marks):
+        del current_date
+        for code, close in marks.items():
+            state = self.position_states.get(str(code))
+            if state is not None:
+                update_highest_close_from_t1(state, close)
+
+    def _score_pool(self, current_date):
+        scores = []
+        for code in self.etf_pool:
+            score, _reason = self.signal_adapter.score(
+                code,
+                current_date,
+                return_reason=True,
+            )
+            if score is None:
+                continue
+            item = dict(score)
+            item["code"] = code
+            scores.append(item)
+        return scores
+
+    def _hold_days(self, entry_date, current_date):
+        if self.trade_dates is None:
+            return 0
+        try:
+            return self.trade_dates.index(str(current_date)) - self.trade_dates.index(
+                str(entry_date)
+            )
+        except ValueError:
+            return 0
+
+    def _total_value(self, broker, prices):
+        reported = _number(getattr(broker, "total_value", math.nan))
+        if math.isfinite(reported) and reported > 0.0:
+            return reported
+        cash = _number(getattr(broker, "cash", 0.0))
+        total = cash if math.isfinite(cash) else 0.0
+        for code, position in getattr(broker, "positions", {}).items():
+            fallback = _number(getattr(position, "avg_cost", math.nan))
+            price = _number(prices.get(code, fallback))
+            amount = _number(getattr(position, "amount", 0.0))
+            if math.isfinite(price) and math.isfinite(amount):
+                total += price * amount
+        return total
+
+    def _reset_sold_today(self, current_date):
+        if self.sold_today_date != str(current_date):
+            self.sold_today.clear()
+            self.sold_today_date = str(current_date)
