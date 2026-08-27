@@ -88,7 +88,7 @@ def test_default_params_and_pool_are_frozen_for_the_independent_candidate():
     assert candidate.STRATEGY_VERSION == (
         "weekly-trend-pullback-v0.1-joinquant-candidate"
     )
-    assert candidate.DEPLOYMENT_BUILD_ID == "20260826.1-candidate"
+    assert candidate.DEPLOYMENT_BUILD_ID == "20260827.1-candidate"
     assert candidate.LOOKBACK == 180
     assert candidate.get_default_params() == {
         "lookback": 180,
@@ -148,6 +148,51 @@ def test_loader_requests_daily_bars_ending_at_explicit_t1(monkeypatch):
     assert snapshot["max_data_date"] == "2021-03-09"
     assert snapshot["weekly_period_end"] == "2021-03-07"
     assert snapshot["weekly_last_trade_date"] == "2021-03-05"
+
+
+@pytest.mark.parametrize("module", [candidate, research])
+def test_weekly_aggregation_accepts_only_legacy_pandas_sort_kinds(
+    monkeypatch,
+    module,
+):
+    original_sort_values = pd.DataFrame.sort_values
+
+    def legacy_sort_values(frame, *args, **kwargs):
+        kind = kwargs.get("kind", "quicksort")
+        if kind not in ("quicksort", "mergesort", "heapsort"):
+            raise ValueError("unsupported legacy pandas sort kind: %s" % kind)
+        return original_sort_values(frame, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "sort_values", legacy_sort_values)
+    frame = _daily_frame()
+
+    weeks = module.aggregate_completed_weeks(frame, date(2021, 3, 10))
+
+    assert weeks.index[-1].end_time.date().isoformat() == "2021-03-07"
+    assert weeks.iloc[-1]["last_trade_date"].date().isoformat() == "2021-03-05"
+
+
+def test_weekly_context_preserves_exception_type_and_message(monkeypatch):
+    def raise_legacy_pandas_error(frame, decision_date):
+        del frame, decision_date
+        raise ValueError("unsupported legacy pandas sort kind: stable")
+
+    monkeypatch.setattr(
+        candidate,
+        "aggregate_completed_weeks",
+        raise_legacy_pandas_error,
+    )
+
+    context, reason = candidate._build_weekly_context(
+        _daily_frame(),
+        date(2021, 3, 10),
+    )
+
+    assert context is None
+    assert reason == (
+        "invalid_weekly_data:ValueError:"
+        "unsupported legacy pandas sort kind: stable"
+    )
 
 
 def test_loader_fails_closed_when_last_daily_bar_is_older_than_t1():
@@ -375,6 +420,10 @@ def test_initialize_registers_only_0935_and_1450(monkeypatch):
     assert ("avoid_future_data", True) in options
     assert candidate.g.position_states == {}
     assert candidate.g.pending_sells == set()
+    assert any(
+        "pandas=%s" % pd.__version__ in message
+        for message in candidate.log.info_messages
+    )
 
 
 def test_joinquant_plan_0935_keeps_sell_first_fixed_slot_and_sold_guard():

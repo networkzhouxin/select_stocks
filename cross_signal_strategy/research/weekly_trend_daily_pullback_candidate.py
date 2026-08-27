@@ -59,7 +59,7 @@ def aggregate_completed_weeks(frame, decision_date):
         return pd.DataFrame(columns=_WEEKLY_COLUMNS)
 
     work["date"] = dates.loc[completed_mask]
-    work = work.sort_values("date", kind="stable")
+    work = work.sort_values("date", kind="mergesort")
     work["week"] = work["date"].dt.to_period("W-SUN")
     return work.groupby("week", sort=True).agg(
         open=("open", "first"),

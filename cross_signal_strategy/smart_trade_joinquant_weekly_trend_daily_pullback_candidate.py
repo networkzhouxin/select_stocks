@@ -15,7 +15,7 @@ from jqdata import *
 
 
 STRATEGY_VERSION = "weekly-trend-pullback-v0.1-joinquant-candidate"
-DEPLOYMENT_BUILD_ID = "20260826.1-candidate"
+DEPLOYMENT_BUILD_ID = "20260827.1-candidate"
 LOOKBACK = 180
 
 
@@ -81,7 +81,8 @@ def initialize(context):
     run_daily(check_atr_1450, time="14:50")
     log.info(
         "[%s] initialized build=%s exact T-1 daily/completed-week signals; "
-        "14:50 ATR-only" % (STRATEGY_VERSION, DEPLOYMENT_BUILD_ID)
+        "14:50 ATR-only; pandas=%s"
+        % (STRATEGY_VERSION, DEPLOYMENT_BUILD_ID, pd.__version__)
     )
 
 
@@ -375,7 +376,7 @@ def aggregate_completed_weeks(frame, decision_date):
             columns=["open", "high", "low", "close", "last_trade_date"]
         )
     work["date"] = dates.loc[completed]
-    work = work.sort_values("date", kind="stable")
+    work = work.sort_values("date", kind="mergesort")
     work["week"] = work["date"].dt.to_period("W-SUN")
     grouped = work.groupby("week", sort=True)
     weeks = grouped.agg(
@@ -388,8 +389,12 @@ def aggregate_completed_weeks(frame, decision_date):
 def _build_weekly_context(frame, decision_date):
     try:
         weeks = aggregate_completed_weeks(frame, decision_date)
-    except Exception:
-        return None, "invalid_weekly_data"
+    except Exception as exc:
+        detail = " ".join(str(exc).split())[:160]
+        reason = "invalid_weekly_data:%s" % exc.__class__.__name__
+        if detail:
+            reason = "%s:%s" % (reason, detail)
+        return None, reason
     if len(weeks) < 21:
         return None, "insufficient_weekly_history"
     closes = pd.to_numeric(weeks["close"], errors="coerce")
