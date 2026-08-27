@@ -158,6 +158,26 @@ def _emit_structured_log(event, payload):
         return
 
 
+def _safe_relative_observation_diagnostic(event, payload):
+    try:
+        _emit_structured_log(event, payload)
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+
+
+def _relative_observation_log_identity(observation):
+    if not isinstance(observation, dict):
+        return {
+            "relative_observation_id": None,
+            "code": None,
+        }
+    return {
+        "relative_observation_id": observation.get("relative_observation_id"),
+        "code": observation.get("code"),
+    }
+
+
 def _runtime_params_and_pool():
     runtime = globals().get("g")
     params = getattr(runtime, "params", get_default_params())
@@ -500,15 +520,14 @@ def try_register_relative_observation_event(observation):
     except Exception as error:
         if _is_future_data_error(error):
             raise
-        _emit_structured_log("relative_observation_registration", {
-            "relative_observation_id": (
-                observation.get("relative_observation_id")
-                if observation is not None else None
-            ),
-            "code": observation.get("code") if observation is not None else None,
+        payload = _relative_observation_log_identity(observation)
+        payload.update({
             "reason": "RELATIVE_OBSERVATION_REGISTRATION_FAILED",
             "error_type": type(error).__name__,
         })
+        _safe_relative_observation_diagnostic(
+            "relative_observation_registration", payload,
+        )
         return False
 
 
@@ -539,17 +558,29 @@ def log_relative_resonance_observation(observation):
 def run_relative_observation_stage(snapshots):
     try:
         observations = collect_relative_resonance_observations(snapshots)
+        for observation in observations:
+            try:
+                if try_register_relative_observation_event(observation):
+                    log_relative_resonance_observation(observation)
+            except Exception as error:
+                if _is_future_data_error(error):
+                    raise
+                payload = _relative_observation_log_identity(observation)
+                payload.update({
+                    "reason": "RELATIVE_OBSERVATION_LOG_FAILED",
+                    "error_type": type(error).__name__,
+                })
+                _safe_relative_observation_diagnostic(
+                    "relative_observation_pipeline", payload,
+                )
     except Exception as error:
         if _is_future_data_error(error):
             raise
-        _emit_structured_log("relative_observation_pipeline", {
+        _safe_relative_observation_diagnostic("relative_observation_pipeline", {
             "reason": "RELATIVE_OBSERVATION_COLLECTION_FAILED",
             "error_type": type(error).__name__,
         })
         return None
-    for observation in observations:
-        if try_register_relative_observation_event(observation):
-            log_relative_resonance_observation(observation)
     return None
 
 
@@ -789,9 +820,23 @@ def build_signal_snapshot(code, prev_date, params, decision_date):
     event_book = collect_latest_events(
         indicators, signal_date, decision_date,
     )
-    relative_event_book = collect_latest_relative_events(
-        indicators, signal_date, decision_date,
-    )
+    try:
+        relative_event_book = collect_latest_relative_events(
+            indicators, signal_date, decision_date,
+        )
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _safe_relative_observation_diagnostic(
+            "relative_observation_snapshot", {
+                "code": code,
+                "signal_date": signal_date,
+                "decision_date": decision_date,
+                "reason": "RELATIVE_EVENT_COLLECTION_FAILED",
+                "error_type": type(error).__name__,
+            },
+        )
+        relative_event_book = empty_event_book()
     event_detection_trace = build_event_detection_trace(indicators, params)
     return {
         "code": code,

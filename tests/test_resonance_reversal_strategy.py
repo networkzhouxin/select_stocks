@@ -3839,6 +3839,145 @@ def test_trading_functions_have_no_relative_observation_dependency():
         assert forbidden.isdisjoint(names | strings), function.__name__
 
 
+def test_relative_snapshot_runtime_error_keeps_formal_trading_pipeline(
+        monkeypatch):
+    code = "510300.XSHG"
+    calls = []
+    formal_snapshots = []
+    formal_book = strategy.empty_event_book()
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_default_etf_pool", lambda: [code])
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: make_ohlcv_frame(120),
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_events", lambda *args: formal_book,
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_relative_events",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("relative snapshot")),
+    )
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_exits",
+        lambda context, current_data, snapshots: calls.append("exits")
+        or formal_snapshots.append(snapshots),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_buys",
+        lambda context, current_data, snapshots: calls.append("buys")
+        or snapshots,
+    )
+
+    strategy.do_trading(fake_context())
+
+    assert calls == ["retry", "atr", "exits", "buys"]
+    assert formal_snapshots[0][code]["event_book"] is formal_book
+    assert formal_snapshots[0][code]["relative_event_book"] == (
+        strategy.empty_event_book()
+    )
+
+
+def test_relative_snapshot_future_data_error_is_rethrown_unchanged(
+        monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future relative snapshot")
+    frame = make_ohlcv_frame(120)
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: frame,
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_relative_events",
+        lambda *args: (_ for _ in ()).throw(expected),
+    )
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.build_signal_snapshot(
+            "510300.XSHG", frame.index[-1], strategy.get_default_params(),
+            frame.index[-1] + pd.offsets.BDay(1),
+        )
+
+    assert raised.value is expected
+
+
+def test_relative_observation_log_runtime_error_keeps_formal_trading_pipeline(
+        monkeypatch):
+    code = "510300.XSHG"
+    calls = []
+    observation = {
+        "relative_observation_id": "RELATIVE:log-failure",
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": "SOFT_ALL_THREE",
+        "code": code,
+        "direction": strategy.TurnDirection.BUY_TURN,
+        "signal_date": date(2021, 1, 5),
+        "supporters": ("BOLL", "KDJ", "RSI"),
+        "supporter_event_dates": {},
+        "hard_or_relative_source_by_indicator": {},
+        "expires_date": date(2021, 1, 6),
+        "event_close": 10.0,
+    }
+    snapshot = dict(resonance_snapshot(code), relative_event_book={})
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: calls.append("retry"))
+    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: calls.append("atr"))
+    monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
+    monkeypatch.setattr(
+        strategy, "collect_relative_resonance_observations", lambda snapshots: [observation],
+    )
+    monkeypatch.setattr(
+        strategy, "log_relative_resonance_observation",
+        lambda value: (_ for _ in ()).throw(RuntimeError("relative log")),
+    )
+    monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: calls.append("exits"))
+    monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: calls.append("buys"))
+
+    strategy.do_trading(fake_context())
+
+    assert calls == ["retry", "atr", "exits", "buys"]
+
+
+def test_malformed_relative_candidate_keeps_formal_trading_pipeline(
+        monkeypatch):
+    code = "510300.XSHG"
+    calls = []
+    logs = []
+    snapshot = dict(resonance_snapshot(code), relative_event_book={})
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: calls.append("retry"))
+    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: calls.append("atr"))
+    monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
+    monkeypatch.setattr(
+        strategy, "collect_relative_resonance_observations", lambda snapshots: [object()],
+    )
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: logs.append((event, payload)),
+    )
+    monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: calls.append("exits"))
+    monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: calls.append("buys"))
+
+    strategy.do_trading(fake_context())
+
+    assert calls == ["retry", "atr", "exits", "buys"]
+    assert logs[-1] == ("relative_observation_registration", {
+        "relative_observation_id": None,
+        "code": None,
+        "reason": "RELATIVE_OBSERVATION_REGISTRATION_FAILED",
+        "error_type": "TypeError",
+    })
+
+
 def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(
         monkeypatch):
     params = strategy.get_default_params()
