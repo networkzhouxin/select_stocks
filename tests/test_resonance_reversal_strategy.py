@@ -615,6 +615,48 @@ def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
     assert runtime.daily_retried_exits == set()
 
 
+def test_daily_state_same_day_string_does_not_erase_anti_repeat_sets(
+        monkeypatch):
+    runtime = types.SimpleNamespace(
+        state_date="2021-01-05",
+        sold_today={"510300.XSHG"},
+        daily_attempted_buys={"159915.XSHE"},
+        daily_retried_exits={"512100.XSHG"},
+        processed_resonance_ids={},
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    strategy.reset_daily_state(date(2021, 1, 5), date(2021, 1, 5))
+
+    assert runtime.state_date == date(2021, 1, 5)
+    assert runtime.sold_today == {"510300.XSHG"}
+    assert runtime.daily_attempted_buys == {"159915.XSHE"}
+    assert runtime.daily_retried_exits == {"512100.XSHG"}
+
+
+@pytest.mark.parametrize("persisted_state_date", [
+    "2021-01-05",
+    pd.Timestamp("2021-01-05"),
+])
+def test_daily_state_new_calendar_day_clears_every_anti_repeat_set(
+        monkeypatch, persisted_state_date):
+    runtime = types.SimpleNamespace(
+        state_date=persisted_state_date,
+        sold_today={"510300.XSHG"},
+        daily_attempted_buys={"159915.XSHE"},
+        daily_retried_exits={"512100.XSHG"},
+        processed_resonance_ids={},
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    strategy.reset_daily_state(date(2021, 1, 6), date(2021, 1, 5))
+
+    assert runtime.state_date == date(2021, 1, 6)
+    assert runtime.sold_today == set()
+    assert runtime.daily_attempted_buys == set()
+    assert runtime.daily_retried_exits == set()
+
+
 @pytest.mark.parametrize(
     "side,before,after,target,tradability,order_amount,filled,expected",
     [
@@ -2089,6 +2131,91 @@ def test_due_observation_missing_price_is_terminal_and_record_is_cleaned(
     assert runtime.observation_events == {}
 
 
+def test_fully_terminal_observation_is_cleaned_when_no_horizon_is_newly_due(
+        monkeypatch):
+    record = strategy.make_observation_event(
+        "terminal", "510300.XSHG", date(2021, 1, 5), 10.0,
+        horizons=(1, 3, 5),
+    )
+    record["outcomes"] = {
+        1: {"status": "RECORDED", "return": 0.01},
+        3: {"status": "HORIZON_MISSED", "return": None},
+        5: {"status": "PRICE_UNAVAILABLE", "return": None},
+    }
+    runtime = runtime_state()
+    runtime.observation_events = {"terminal": record}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: pd.DatetimeIndex([
+            "2021-01-05", "2021-01-06", "2021-01-07",
+            "2021-01-08", "2021-01-11", "2021-01-12",
+        ]),
+        raising=False,
+    )
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-12"), {},
+    )
+
+    assert runtime.observation_events == {}
+
+
+def test_legacy_due_dates_migrate_without_reading_values_and_stay_cleanable(
+        monkeypatch):
+    code = "510300.XSHG"
+    record = {
+        "resonance_id": "legacy",
+        "code": code,
+        "event_date": date(2021, 1, 5),
+        "event_close": 10.0,
+        "due_dates": {
+            5: date(2099, 1, 12),
+            1: date(2099, 1, 6),
+            3: date(2099, 1, 8),
+        },
+        "outcomes": {1: 0.1},
+    }
+    runtime = runtime_state()
+    runtime.observation_events = {"legacy": record}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    calendar_calls = []
+
+    def retrospective_calendar(**kwargs):
+        calendar_calls.append(kwargs)
+        end_date = kwargs["end_date"]
+        return pd.bdate_range("2021-01-05", end_date)
+
+    monkeypatch.setattr(
+        strategy, "get_trade_days", retrospective_calendar, raising=False,
+    )
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-08"),
+        {code: current_record(12.0)},
+    )
+
+    assert record["horizons"] == (1, 3, 5)
+    assert "due_dates" not in record
+    assert record["outcomes"][1]["status"] == "RECORDED"
+    assert record["outcomes"][1]["return"] == pytest.approx(0.1)
+    assert record["outcomes"][3]["return"] == pytest.approx(0.2)
+    assert "legacy" in runtime.observation_events
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-12"),
+        {code: current_record(13.0)},
+    )
+
+    assert record["outcomes"][1]["return"] == pytest.approx(0.1)
+    assert record["outcomes"][5]["return"] == pytest.approx(0.3)
+    assert runtime.observation_events == {}
+    assert calendar_calls == [
+        {"start_date": date(2021, 1, 5), "end_date": date(2021, 1, 8)},
+        {"start_date": date(2021, 1, 5), "end_date": date(2021, 1, 12)},
+    ]
+
+
 def test_overdue_observation_is_missed_without_using_later_price(monkeypatch):
     due_date = pd.Timestamp("2021-01-06").date()
     record = strategy.make_observation_event(
@@ -2142,6 +2269,62 @@ def test_observation_calendar_future_data_error_propagates(monkeypatch):
         strategy.after_close(fake_context(current_date="2021-01-06"))
 
     assert raised.value is expected
+
+
+def test_structured_logger_propagates_type_error_future_boundary(monkeypatch):
+    class FutureDataError(TypeError):
+        """Local sentinel proving logger isolation cannot hide future data."""
+
+    expected = FutureDataError("future log payload")
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(
+            info=lambda *args: (_ for _ in ()).throw(expected)
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy._emit_structured_log("future_boundary", {"value": 1})
+
+    assert raised.value is expected
+
+
+def test_structured_logger_propagates_future_boundary_named_in_base_mro(
+        monkeypatch):
+    class FutureDataError(TypeError):
+        """Local platform-equivalent boundary type."""
+
+    class WrappedFutureDataError(FutureDataError):
+        """A platform subclass whose concrete name is not FutureDataError."""
+
+    expected = WrappedFutureDataError("wrapped future log payload")
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(
+            info=lambda *args: (_ for _ in ()).throw(expected)
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(WrappedFutureDataError) as raised:
+        strategy._emit_structured_log("future_boundary", {"value": 1})
+
+    assert raised.value is expected
+
+
+def test_structured_logger_still_isolates_ordinary_runtime_error(monkeypatch):
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(
+            info=lambda *args: (_ for _ in ()).throw(
+                RuntimeError("logger unavailable")
+            )
+        ),
+        raising=False,
+    )
+
+    assert strategy._emit_structured_log("ordinary_failure", {}) is None
 
 
 def test_structured_logging_contract_contains_required_audit_fields(

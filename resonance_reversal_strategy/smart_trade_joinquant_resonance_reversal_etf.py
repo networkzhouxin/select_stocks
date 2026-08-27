@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from enum import Enum
+from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
@@ -149,7 +150,9 @@ def _emit_structured_log(event, payload):
             _json_ready(body), ensure_ascii=False, sort_keys=True, default=str,
             allow_nan=False,
         ))
-    except Exception:
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
         return
 
 
@@ -252,6 +255,36 @@ def due_observation_horizons(record, elapsed_sessions):
     )
 
 
+def _normalize_observation_record(record):
+    if "horizons" not in record:
+        due_dates = record.pop("due_dates", {})
+        record["horizons"] = tuple(sorted(due_dates))
+    else:
+        record["horizons"] = tuple(record["horizons"])
+    outcomes = record.setdefault("outcomes", {})
+    for horizon, outcome in list(outcomes.items()):
+        if isinstance(outcome, Real) and not isinstance(outcome, bool):
+            outcomes[horizon] = {
+                "status": "RECORDED",
+                "closing_date": None,
+                "closing_price": None,
+                "return": outcome,
+            }
+        elif (isinstance(outcome, dict) and "status" not in outcome
+                and "return" in outcome):
+            normalized = dict(outcome)
+            normalized["status"] = "RECORDED"
+            outcomes[horizon] = normalized
+    return record
+
+
+def _observation_record_is_terminal(record):
+    return all(
+        horizon in record["outcomes"]
+        for horizon in record["horizons"]
+    )
+
+
 def _calendar_date(value):
     if value is None:
         return None
@@ -266,7 +299,10 @@ def _is_future_data_error(error):
     if (isinstance(future_error_type, type)
             and isinstance(error, future_error_type)):
         return True
-    return type(error).__name__ == "FutureDataError"
+    return any(
+        error_type.__name__ == "FutureDataError"
+        for error_type in type(error).__mro__
+    )
 
 
 def register_observation_event(decision, event_date, event_close):
@@ -302,6 +338,10 @@ def try_register_observation_event(decision, event_date, event_close):
 def record_due_observation_outcomes(context, current_data):
     closing_date = _calendar_date(context.current_dt)
     for resonance_id, record in list(g.observation_events.items()):
+        _normalize_observation_record(record)
+        if _observation_record_is_terminal(record):
+            g.observation_events.pop(resonance_id, None)
+            continue
         event_date = _calendar_date(record["event_date"])
         if event_date is None or closing_date <= event_date:
             continue
@@ -355,9 +395,7 @@ def record_due_observation_outcomes(context, current_data):
                 "horizon": horizon,
                 "outcome": outcome,
             })
-        if all(
-                horizon in record["outcomes"]
-                for horizon in record["horizons"]):
+        if _observation_record_is_terminal(record):
             g.observation_events.pop(resonance_id, None)
 
 
@@ -734,11 +772,12 @@ def reset_daily_state(decision_date, signal_date):
     ensure_runtime_state()
     decision_date = _calendar_date(decision_date)
     signal_date = _calendar_date(signal_date)
-    if getattr(g, "state_date", None) != decision_date:
-        g.state_date = decision_date
+    state_date = _calendar_date(getattr(g, "state_date", None))
+    if state_date != decision_date:
         g.sold_today = set()
         g.daily_attempted_buys = set()
         g.daily_retried_exits = set()
+    g.state_date = decision_date
     g.processed_resonance_ids = prune_processed_resonance_ids(
         g.processed_resonance_ids, signal_date,
     )
