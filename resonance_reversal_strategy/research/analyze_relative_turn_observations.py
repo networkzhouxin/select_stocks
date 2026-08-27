@@ -703,6 +703,14 @@ def _validate_baseline(records, errors):
             else:
                 registrations[resonance_id] = record
     for record in records:
+        if record.get("event") != "resonance_decision":
+            continue
+        resonance_id = record.get("resonance_id")
+        if resonance_id in registrations and (
+                record.get("_record_namespace") != "formal"
+                or not _valid_baseline_registration(record)):
+            invalid_registration_ids.add(resonance_id)
+    for record in records:
         if record.get("_record_namespace") != "formal" or record.get("event") != "observation_outcome":
             continue
         resonance_id = _text(record, "resonance_id", "formal outcome resonance id", errors)

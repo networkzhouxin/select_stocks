@@ -669,6 +669,38 @@ def test_overlap_excludes_incomplete_or_invalid_baseline_canonical_registrations
         assert report["data_quality"]["formal_overlap_count"] == 0
 
 
+def test_overlap_invalidates_id_when_any_registration_replica_is_invalid():
+    baseline = _single_formal_baseline()
+    registration = next(record for record in baseline
+                        if record.get("event") == "resonance_decision")
+    legal_duplicate = dict(registration)
+    baseline.append(legal_duplicate)
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert report["data_quality"]["formal_overlap_count"] == 1
+
+    invalid_duplicate = dict(registration)
+    invalid_duplicate["_log_timestamp"] = "2021-01-06T00:00:00"
+    baseline.append(invalid_duplicate)
+
+    direct_errors = []
+    for record in baseline:
+        record["_record_namespace"] = analyzer._classify_record_namespace(record, direct_errors)
+    _, _, _, canonical = analyzer._validate_baseline(baseline, direct_errors)
+
+    assert any("formal registration log timestamp before 09:35" in error
+               for error in direct_errors)
+    assert canonical == {}
+
+    invalid_duplicate["_log_timestamp"] = "2021-01-06T99:00:00"
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert any("invalid formal registration log timestamp" in error
+               for error in report["data_quality"]["errors"])
+    assert report["data_quality"]["formal_overlap_count"] == 0
+
+
 def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
     candidate = make_candidate_records()
     baseline = make_baseline_records()
