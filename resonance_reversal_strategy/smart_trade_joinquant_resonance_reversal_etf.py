@@ -8,7 +8,7 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.1"
+DEPLOYMENT_BUILD_ID = "20260827.2"
 BENCHMARK = "000300.XSHG"
 
 
@@ -166,11 +166,15 @@ def _runtime_params_and_pool():
 def log_signal_snapshot(snapshot):
     params, etf_pool = _runtime_params_and_pool()
     event_book = snapshot.get("event_book") or empty_event_book()
+    self_check = run_event_logic_self_check(params)
     _emit_structured_log("signal_snapshot", {
         "version": STRATEGY_VERSION,
         "build": DEPLOYMENT_BUILD_ID,
         "parameter_fingerprint": _value_fingerprint(params),
         "pool_fingerprint": _value_fingerprint(etf_pool),
+        "event_logic_fingerprint": event_logic_fingerprint(
+            params, self_check,
+        ),
         "code": snapshot.get("code"),
         "decision_date": snapshot.get("decision_date"),
         "signal_date": snapshot.get("signal_date"),
@@ -178,10 +182,28 @@ def log_signal_snapshot(snapshot):
         "reason": snapshot.get("reason"),
         "trade_values": dict(snapshot.get("trade_values") or {}),
         "observation_values": dict(snapshot.get("observation_values") or {}),
+        "event_detection_trace": dict(
+            snapshot.get("event_detection_trace") or {}
+        ),
         "kdj_cross": snapshot.get("kdj_cross", "NONE"),
         "active_events": dict(event_book.get("active") or {}),
         "invalidated_events": list(event_book.get("invalidated") or []),
     })
+
+
+def _event_detection_trace_requires_logging(trace):
+    trace = trace or {}
+    kdj = trace.get("kdj") or {}
+    boll = trace.get("boll") or {}
+    neutral_values = (
+        None, TurnDirection.NEUTRAL, TurnDirection.NEUTRAL.value,
+    )
+    return (
+        kdj.get("direction") not in neutral_values
+        or boll.get("direction") not in neutral_values
+        or boll.get("lower_touch") is True
+        or boll.get("upper_touch") is True
+    )
 
 
 def log_resonance_decision(decision, accepted, reason):
@@ -524,7 +546,10 @@ def do_trading(context):
         if (snapshot.get("code") in held_codes
                 or event_book.get("active")
                 or event_book.get("invalidated")
-                or snapshot.get("kdj_cross", "NONE") != "NONE"):
+                or snapshot.get("kdj_cross", "NONE") != "NONE"
+                or _event_detection_trace_requires_logging(
+                    snapshot.get("event_detection_trace")
+                )):
             log_signal_snapshot(dict(snapshot, decision_date=decision_date))
     run_signal_exits(context, current_data, snapshots)
     run_signal_buys(context, current_data, snapshots)
@@ -561,11 +586,16 @@ def initialize(context):
     run_daily(do_trading, time="09:35", reference_security=BENCHMARK)
     run_daily(after_close, time="15:30", reference_security=BENCHMARK)
     ensure_runtime_state()
+    self_check = run_event_logic_self_check(g.params)
     _emit_structured_log("strategy_initialized", {
         "version": STRATEGY_VERSION,
         "build": DEPLOYMENT_BUILD_ID,
         "parameter_fingerprint": _value_fingerprint(g.params),
         "pool_fingerprint": _value_fingerprint(g.etf_pool),
+        "event_logic_self_check": self_check,
+        "event_logic_fingerprint": event_logic_fingerprint(
+            g.params, self_check,
+        ),
         "etf_pool": list(g.etf_pool),
     })
 
@@ -625,6 +655,7 @@ def build_signal_snapshot(code, prev_date, params, decision_date):
     event_book = collect_latest_events(
         indicators, signal_date, decision_date,
     )
+    event_detection_trace = build_event_detection_trace(indicators, params)
     return {
         "code": code,
         "valid": True,
@@ -634,6 +665,7 @@ def build_signal_snapshot(code, prev_date, params, decision_date):
         "event_book": event_book,
         "trade_values": latest[required].to_dict(),
         "observation_values": latest[list(OBSERVATION_COLUMNS)].to_dict(),
+        "event_detection_trace": event_detection_trace,
         "kdj_cross": detect_kdj_formal_cross(previous, latest),
     }
 
@@ -1051,6 +1083,221 @@ def detect_boll_direction(previous, current):
             current["close"] < previous["close"]):
         return TurnDirection.SELL_TURN
     return TurnDirection.NEUTRAL
+
+
+def _has_complete_values(previous, current, names):
+    values = [previous.get(name) for name in names]
+    values += [current.get(name) for name in names]
+    return not any(pd.isna(value) for value in values)
+
+
+def build_event_detection_trace(indicator_frame, params):
+    previous = indicator_frame.iloc[-2]
+    current = indicator_frame.iloc[-1]
+    kdj_names = ("k", "d", "j", "kd_diff")
+    boll_names = ("low", "high", "close", "boll_lower", "boll_upper")
+    kdj_complete = _has_complete_values(previous, current, kdj_names)
+    boll_complete = _has_complete_values(previous, current, boll_names)
+
+    buy_extreme = (
+        (min(previous["k"], previous["d"]) <= params["kdj_low"]
+         or previous["j"] <= params["j_low"])
+        if kdj_complete else False
+    )
+    sell_extreme = (
+        (max(previous["k"], previous["d"]) >= params["kdj_high"]
+         or previous["j"] >= params["j_high"])
+        if kdj_complete else False
+    )
+    lower_touch = (
+        (previous["low"] <= previous["boll_lower"]
+         or previous["close"] <= previous["boll_lower"]
+         or current["low"] <= current["boll_lower"]
+         or current["close"] <= current["boll_lower"])
+        if boll_complete else False
+    )
+    upper_touch = (
+        (previous["high"] >= previous["boll_upper"]
+         or previous["close"] >= previous["boll_upper"]
+         or current["high"] >= current["boll_upper"]
+         or current["close"] >= current["boll_upper"])
+        if boll_complete else False
+    )
+
+    return {
+        "previous_date": _calendar_date(indicator_frame.index[-2]),
+        "current_date": _calendar_date(indicator_frame.index[-1]),
+        "kdj": {
+            "previous": {
+                name: previous.get(name) for name in kdj_names
+            },
+            "current": {
+                name: current.get(name) for name in kdj_names
+            },
+            "buy_extreme": bool(buy_extreme),
+            "sell_extreme": bool(sell_extreme),
+            "j_rising": bool(
+                kdj_complete and current["j"] > previous["j"]
+            ),
+            "j_falling": bool(
+                kdj_complete and current["j"] < previous["j"]
+            ),
+            "kd_diff_rising": bool(
+                kdj_complete
+                and current["kd_diff"] > previous["kd_diff"]
+            ),
+            "kd_diff_falling": bool(
+                kdj_complete
+                and current["kd_diff"] < previous["kd_diff"]
+            ),
+            "direction": detect_kdj_direction(previous, current, params),
+            "formal_cross": detect_kdj_formal_cross(previous, current),
+        },
+        "boll": {
+            "previous": {
+                name: previous.get(name) for name in boll_names
+            },
+            "current": {
+                name: current.get(name) for name in boll_names
+            },
+            "lower_touch": bool(lower_touch),
+            "upper_touch": bool(upper_touch),
+            "returned_inside_lower": bool(
+                boll_complete
+                and current["close"] > current["boll_lower"]
+            ),
+            "returned_inside_upper": bool(
+                boll_complete
+                and current["close"] < current["boll_upper"]
+            ),
+            "close_rising": bool(
+                boll_complete and current["close"] > previous["close"]
+            ),
+            "close_falling": bool(
+                boll_complete and current["close"] < previous["close"]
+            ),
+            "direction": detect_boll_direction(previous, current),
+        },
+    }
+
+
+def _run_direction_self_check(previous, current, expected, detector):
+    inputs = {
+        "previous": dict(previous),
+        "current": dict(current),
+    }
+    try:
+        actual = detector(previous, current)
+        if isinstance(actual, TurnDirection):
+            actual_direction = actual.value
+        elif isinstance(actual, str):
+            actual_direction = actual
+        else:
+            actual_direction = "INVALID:%s" % type(actual).__name__
+        error_type = None
+    except Exception as error:
+        actual_direction = "ERROR"
+        error_type = type(error).__name__
+    result = {
+        "inputs": inputs,
+        "actual_direction": actual_direction,
+        "expected_direction": expected.value,
+        "passed": actual_direction == expected.value,
+    }
+    if error_type is not None:
+        result["error_type"] = error_type
+    return result
+
+
+def run_event_logic_self_check(params):
+    kdj_buy_previous = {
+        "k": 18.0, "d": 19.0, "j": -1.0, "kd_diff": -1.0,
+    }
+    kdj_buy_current = {
+        "k": 18.25, "d": 19.0, "j": 0.5, "kd_diff": -0.75,
+    }
+    kdj_sell_previous = {
+        "k": 92.72, "d": 91.23, "j": 95.70, "kd_diff": 1.49,
+    }
+    kdj_sell_current = {
+        "k": 87.34, "d": 89.93, "j": 82.15, "kd_diff": -2.59,
+    }
+    boll_buy_previous = {
+        "low": 8.8, "high": 10.5, "close": 9.0,
+        "boll_lower": 9.0, "boll_upper": 11.0,
+    }
+    boll_buy_current = {
+        "low": 9.2, "high": 10.5, "close": 9.5,
+        "boll_lower": 9.1, "boll_upper": 11.0,
+    }
+    boll_sell_previous = {
+        "low": 9.5, "high": 11.2, "close": 11.0,
+        "boll_lower": 9.0, "boll_upper": 11.0,
+    }
+    boll_sell_current = {
+        "low": 9.5, "high": 10.8, "close": 10.5,
+        "boll_lower": 9.0, "boll_upper": 10.9,
+    }
+
+    cases = {
+        "kdj_buy_before_cross": _run_direction_self_check(
+            kdj_buy_previous, kdj_buy_current, TurnDirection.BUY_TURN,
+            lambda previous, current: detect_kdj_direction(
+                previous, current, params,
+            ),
+        ),
+        "kdj_sell_high": _run_direction_self_check(
+            kdj_sell_previous, kdj_sell_current,
+            TurnDirection.SELL_TURN,
+            lambda previous, current: detect_kdj_direction(
+                previous, current, params,
+            ),
+        ),
+        "boll_buy_return_inside": _run_direction_self_check(
+            boll_buy_previous, boll_buy_current, TurnDirection.BUY_TURN,
+            detect_boll_direction,
+        ),
+        "boll_sell_return_inside": _run_direction_self_check(
+            boll_sell_previous, boll_sell_current, TurnDirection.SELL_TURN,
+            detect_boll_direction,
+        ),
+    }
+    buy_case = cases["kdj_buy_before_cross"]
+    try:
+        formal_cross = detect_kdj_formal_cross(
+            kdj_buy_previous, kdj_buy_current,
+        )
+    except Exception as error:
+        formal_cross = "ERROR:%s" % type(error).__name__
+    buy_case["formal_cross"] = formal_cross
+    buy_case["expected_formal_cross"] = "NONE"
+    buy_case["passed"] = (
+        buy_case["passed"] and formal_cross == "NONE"
+    )
+    return {
+        "cases": cases,
+        "passed": all(case["passed"] for case in cases.values()),
+    }
+
+
+def event_logic_fingerprint(params, self_check=None):
+    if self_check is None:
+        self_check = run_event_logic_self_check(params)
+    boll_period, boll_std_multiplier = params["boll"]
+    contract = {
+        "build": DEPLOYMENT_BUILD_ID,
+        "indicator_names": ["KDJ", "BOLL"],
+        "thresholds": {
+            "kdj_low": params["kdj_low"],
+            "kdj_high": params["kdj_high"],
+            "j_low": params["j_low"],
+            "j_high": params["j_high"],
+            "boll_period": boll_period,
+            "boll_std_multiplier": boll_std_multiplier,
+        },
+        "self_check": self_check,
+    }
+    return _value_fingerprint(contract)
 
 
 def make_turn_event(indicator, direction, event_date, expires_date,

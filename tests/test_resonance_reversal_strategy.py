@@ -3157,3 +3157,405 @@ def test_unheld_complete_sell_resonance_is_recorded_without_order(monkeypatch):
     assert result == set()
     assert len(registrations) == 1
     assert (False, "UNHELD_RECORD_ONLY") in logs
+
+
+def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
+    base = {
+        "low": 9.5,
+        "high": 10.5,
+        "close": 10.0,
+        "boll_lower": 9.0,
+        "boll_upper": 11.0,
+        "rsi14": 50.0,
+        "k": 50.0,
+        "d": 50.0,
+        "j": 50.0,
+        "kd_diff": 0.0,
+    }
+    previous = dict(base)
+    current = dict(base)
+    previous.update(previous_overrides or {})
+    current.update(current_overrides or {})
+    return pd.DataFrame(
+        [previous, current],
+        index=pd.to_datetime(["2021-01-08", "2021-01-11"]),
+    )
+
+
+def test_diagnostic_build_id_is_bumped():
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.2"
+
+
+def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(
+        monkeypatch):
+    params = strategy.get_default_params()
+    price_frame = make_ohlcv_frame(params["lookback_days"])
+    indicators = strategy.build_indicator_frame(price_frame, params).iloc[-2:].copy()
+    previous_index, current_index = indicators.index
+    indicators.loc[previous_index, [
+        "k", "d", "j", "kd_diff", "rsi14", "low", "high", "close",
+        "boll_lower", "boll_upper",
+    ]] = [92.72, 91.23, 95.70, 1.49, 50.0, 9.5, 10.5, 10.0, 9.0, 11.0]
+    indicators.loc[current_index, [
+        "k", "d", "j", "kd_diff", "rsi14", "low", "high", "close",
+        "boll_lower", "boll_upper",
+    ]] = [87.34, 89.93, 82.15, -2.59, 50.0, 9.5, 10.5, 10.0, 9.0, 11.0]
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: price_frame,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_indicator_frame", lambda *args: indicators.copy(),
+        raising=False,
+    )
+
+    snapshot = strategy.build_signal_snapshot(
+        "510300.XSHG", current_index, params,
+        current_index + pd.offsets.BDay(1),
+    )
+
+    trace = snapshot["event_detection_trace"]
+    assert trace["previous_date"] == previous_index.date()
+    assert trace["current_date"] == current_index.date()
+    assert trace["kdj"]["previous"] == {
+        "k": 92.72, "d": 91.23, "j": 95.70, "kd_diff": 1.49,
+    }
+    assert trace["kdj"]["current"] == {
+        "k": 87.34, "d": 89.93, "j": 82.15, "kd_diff": -2.59,
+    }
+    assert trace["kdj"]["sell_extreme"] is True
+    assert trace["kdj"]["j_falling"] is True
+    assert trace["kdj"]["kd_diff_falling"] is True
+    assert trace["kdj"]["direction"] is strategy.TurnDirection.SELL_TURN
+    assert trace["kdj"]["formal_cross"] == "DEATH_CROSS"
+    assert snapshot["event_book"]["active"]["KDJ"]["direction"] is (
+        strategy.TurnDirection.SELL_TURN
+    )
+
+
+@pytest.mark.parametrize(
+    "previous,current,direction,touch_key,inside_key,close_key",
+    [
+        (
+            {"low": 8.8, "close": 9.0, "boll_lower": 9.0},
+            {"low": 9.2, "close": 9.5, "boll_lower": 9.1},
+            strategy.TurnDirection.BUY_TURN,
+            "lower_touch", "returned_inside_lower", "close_rising",
+        ),
+        (
+            {"high": 11.2, "close": 11.0, "boll_upper": 11.0},
+            {"high": 10.8, "close": 10.5, "boll_upper": 10.9},
+            strategy.TurnDirection.SELL_TURN,
+            "upper_touch", "returned_inside_upper", "close_falling",
+        ),
+    ],
+)
+def test_boll_turn_trace_matches_event_collection(
+        previous, current, direction, touch_key, inside_key, close_key):
+    params = strategy.get_default_params()
+    frame = _event_diagnostic_frame(previous, current)
+
+    trace = strategy.build_event_detection_trace(frame, params)
+    event_book = strategy.collect_latest_events(
+        frame, frame.index[-1], frame.index[-1] + pd.offsets.BDay(1),
+    )
+
+    assert trace["boll"][touch_key] is True
+    assert trace["boll"][inside_key] is True
+    assert trace["boll"][close_key] is True
+    assert trace["boll"]["direction"] is direction
+    assert event_book["active"]["BOLL"]["direction"] is direction
+
+
+def test_runtime_event_logic_self_check_covers_literal_turn_contract():
+    result = strategy.run_event_logic_self_check(strategy.get_default_params())
+
+    assert result["passed"] is True
+    assert set(result["cases"]) == {
+        "kdj_buy_before_cross",
+        "kdj_sell_high",
+        "boll_buy_return_inside",
+        "boll_sell_return_inside",
+    }
+    assert all(case["passed"] for case in result["cases"].values())
+    assert result["cases"]["kdj_buy_before_cross"]["actual_direction"] == (
+        "BUY_TURN"
+    )
+    assert result["cases"]["kdj_buy_before_cross"]["formal_cross"] == "NONE"
+    assert result["cases"]["kdj_sell_high"]["actual_direction"] == (
+        "SELL_TURN"
+    )
+    assert result["cases"]["boll_buy_return_inside"]["actual_direction"] == (
+        "BUY_TURN"
+    )
+    assert result["cases"]["boll_sell_return_inside"]["actual_direction"] == (
+        "SELL_TURN"
+    )
+    assert all("inputs" in case for case in result["cases"].values())
+    assert all("expected_direction" in case for case in result["cases"].values())
+
+
+def test_event_logic_fingerprint_is_deterministic_and_contract_sensitive():
+    params = strategy.get_default_params()
+    self_check = strategy.run_event_logic_self_check(params)
+    fingerprint = strategy.event_logic_fingerprint(params, self_check)
+    reordered_params = dict(reversed(list(params.items())))
+    reordered_check = {
+        "cases": dict(reversed(list(self_check["cases"].items()))),
+        "passed": self_check["passed"],
+    }
+
+    assert strategy.event_logic_fingerprint(
+        reordered_params, reordered_check,
+    ) == fingerprint
+    assert len(fingerprint) == 16
+
+    changed_threshold = copy.deepcopy(params)
+    changed_threshold["kdj_high"] += 1
+    assert strategy.event_logic_fingerprint(
+        changed_threshold, self_check,
+    ) != fingerprint
+
+    changed_result = copy.deepcopy(self_check)
+    changed_result["cases"]["kdj_sell_high"]["passed"] = False
+    changed_result["passed"] = False
+    assert strategy.event_logic_fingerprint(
+        params, changed_result,
+    ) != fingerprint
+
+
+def test_event_logic_fingerprint_ignores_unexpected_detector_object_identity(
+        monkeypatch):
+    instances = []
+
+    def unexpected_direction(*args):
+        value = object()
+        instances.append(value)
+        return value
+
+    monkeypatch.setattr(
+        strategy, "detect_boll_direction", unexpected_direction,
+    )
+    params = strategy.get_default_params()
+
+    first_check = strategy.run_event_logic_self_check(params)
+    second_check = strategy.run_event_logic_self_check(params)
+
+    assert first_check == second_check
+    assert first_check["cases"]["boll_buy_return_inside"][
+        "actual_direction"
+    ] == "INVALID:object"
+    assert strategy.event_logic_fingerprint(params, first_check) == (
+        strategy.event_logic_fingerprint(params, second_check)
+    )
+
+
+def test_initialize_logs_runtime_self_check_and_event_logic_fingerprint(
+        monkeypatch):
+    messages = []
+    monkeypatch.setattr(strategy, "set_option", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "set_benchmark", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "PriceRelatedSlippage", lambda value: value, raising=False)
+    monkeypatch.setattr(strategy, "set_slippage", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(strategy, "OrderCost", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(strategy, "set_order_cost", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(strategy, "run_daily", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda message, *args: messages.append(
+            message % args if args else message
+        )),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "g", types.SimpleNamespace(), raising=False)
+
+    strategy.initialize(types.SimpleNamespace())
+
+    payload = json.loads(messages[-1])
+    assert payload["event"] == "strategy_initialized"
+    assert payload["event_logic_self_check"]["passed"] is True
+    assert payload["event_logic_fingerprint"] == strategy.event_logic_fingerprint(
+        strategy.get_default_params(),
+        strategy.run_event_logic_self_check(strategy.get_default_params()),
+    )
+    buy_case = payload["event_logic_self_check"]["cases"][
+        "kdj_buy_before_cross"
+    ]
+    assert buy_case["inputs"]["previous"]["kd_diff"] < 0
+    assert buy_case["inputs"]["current"]["kd_diff"] < 0
+
+
+def test_failed_event_logic_self_check_is_logged_without_blocking_initialize(
+        monkeypatch):
+    messages = []
+    scheduled = []
+    failed_check = {
+        "cases": {
+            "synthetic_failure": {
+                "inputs": {"previous": {}, "current": {}},
+                "actual_direction": "NEUTRAL",
+                "expected_direction": "BUY_TURN",
+                "passed": False,
+            },
+        },
+        "passed": False,
+    }
+    monkeypatch.setattr(strategy, "set_option", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "set_benchmark", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "PriceRelatedSlippage", lambda value: value, raising=False)
+    monkeypatch.setattr(strategy, "set_slippage", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(strategy, "OrderCost", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(strategy, "set_order_cost", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        strategy, "run_daily",
+        lambda function, **kwargs: scheduled.append(function.__name__),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "run_event_logic_self_check", lambda params: failed_check,
+    )
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda message, *args: messages.append(
+            message % args if args else message
+        )),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "g", types.SimpleNamespace(), raising=False)
+
+    strategy.initialize(types.SimpleNamespace())
+
+    payload = json.loads(messages[-1])
+    assert scheduled == ["do_trading", "after_close"]
+    assert payload["event_logic_self_check"] == failed_check
+    assert payload["event_logic_self_check"]["passed"] is False
+    assert payload["event_logic_fingerprint"]
+
+
+def test_signal_snapshot_log_contains_trace_and_event_logic_fingerprint(
+        monkeypatch):
+    messages = []
+    runtime = runtime_state()
+    frame = _event_diagnostic_frame(
+        {"low": 8.8, "close": 9.0, "boll_lower": 9.0},
+        {"low": 9.2, "close": 9.5, "boll_lower": 9.1},
+    )
+    snapshot = resonance_snapshot("510300.XSHG")
+    snapshot.update({
+        "decision_date": "2021-01-12",
+        "event_detection_trace": strategy.build_event_detection_trace(
+            frame, runtime.params,
+        ),
+    })
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda message, *args: messages.append(
+            message % args if args else message
+        )),
+        raising=False,
+    )
+
+    strategy.log_signal_snapshot(snapshot)
+
+    payload = json.loads(messages[-1])
+    assert payload["event_detection_trace"]["boll"]["direction"] == "BUY_TURN"
+    assert payload["event_detection_trace"]["previous_date"] == "2021-01-08"
+    assert payload["event_detection_trace"]["current_date"] == "2021-01-11"
+    assert payload["event_logic_fingerprint"] == strategy.event_logic_fingerprint(
+        runtime.params,
+        strategy.run_event_logic_self_check(runtime.params),
+    )
+
+
+def test_do_trading_logs_boll_touch_trace_without_event_or_cross(monkeypatch):
+    code = "510300.XSHG"
+    runtime = runtime_state()
+    snapshot = {
+        "code": code,
+        "valid": True,
+        "signal_date": "2021-01-05",
+        "close": 10.0,
+        "entry_atr": 1.0,
+        "event_book": strategy.empty_event_book(),
+        "trade_values": {},
+        "observation_values": {},
+        "kdj_cross": "NONE",
+        "event_detection_trace": {
+            "kdj": {"direction": strategy.TurnDirection.NEUTRAL},
+            "boll": {
+                "direction": strategy.TurnDirection.NEUTRAL,
+                "lower_touch": True,
+                "upper_touch": False,
+            },
+        },
+    }
+    logged = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
+    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: set())
+    monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
+    monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set())
+    monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [])
+    monkeypatch.setattr(
+        strategy, "log_signal_snapshot", lambda value: logged.append(value),
+        raising=False,
+    )
+
+    strategy.do_trading(fake_context())
+
+    assert [item["code"] for item in logged] == [code]
+
+
+def test_event_detection_trace_cannot_change_resonance_or_submitted_orders(
+        monkeypatch):
+    code = "510300.XSHG"
+    observations = []
+    traces = [
+        {
+            "kdj": {"direction": strategy.TurnDirection.SELL_TURN},
+            "boll": {
+                "direction": strategy.TurnDirection.SELL_TURN,
+                "lower_touch": False,
+                "upper_touch": True,
+            },
+        },
+        {
+            "kdj": {"direction": strategy.TurnDirection.NEUTRAL},
+            "boll": {
+                "direction": strategy.TurnDirection.NEUTRAL,
+                "lower_touch": True,
+                "upper_touch": False,
+            },
+        },
+    ]
+    for trace in traces:
+        runtime = runtime_state(max_holdings=1)
+        submitted = []
+        snapshot = dict(
+            resonance_snapshot(code), event_detection_trace=trace,
+        )
+        decision = strategy.build_resonance_decision(
+            code, strategy.TurnDirection.BUY_TURN,
+            snapshot["event_book"], snapshot["signal_date"],
+        )
+        monkeypatch.setattr(strategy, "g", runtime, raising=False)
+        monkeypatch.setattr(
+            strategy, "register_observation_event", lambda *args: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            strategy, "submit_buy",
+            lambda context_arg, candidate, snapshot_arg, decision_arg:
+            submitted.append(candidate) or strategy.OrderOutcome.NOT_FILLED,
+            raising=False,
+        )
+
+        strategy.run_signal_buys(
+            fake_context(), {code: current_record()}, {code: snapshot},
+        )
+        observations.append((decision, submitted))
+
+    assert observations[0][0] == observations[1][0]
+    assert observations[0][1] == observations[1][1] == [code]
