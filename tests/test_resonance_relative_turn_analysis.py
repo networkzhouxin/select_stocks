@@ -574,6 +574,66 @@ def test_candidate_session_snapshot_requires_frozen_identity_time_and_consistenc
                for error in errors)
 
 
+def test_all_signal_date_supporters_do_not_require_predecessor_snapshot():
+    registration = make_relative_record(0)
+    registration["signal_date"] = registration["expires_date"] = "2019-01-08"
+    registration["supporter_event_dates"] = {
+        indicator: "2019-01-08" for indicator in registration["supporters"]
+    }
+    registration["_log_timestamp"] = "2019-01-09T09:35:00"
+    _replace_relative_identity(registration, [])
+    candidate = [
+        make_initialized_record(),
+        _session_snapshot("2019-01-09", "2019-01-08"),
+        registration,
+    ]
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert not any("candidate supporter window" in error
+                   for error in report["data_quality"]["errors"])
+
+    registration["supporter_event_dates"][registration["supporters"][0]] = "2019-01-07"
+    _replace_relative_identity(registration, [])
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert any("candidate supporter window unverifiable" in error
+               for error in report["data_quality"]["errors"])
+
+    candidate.append(_session_snapshot("2019-01-08", "2019-01-07"))
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert not any("candidate supporter window" in error
+                   or "invalid candidate supporter trading-session window" in error
+                   for error in report["data_quality"]["errors"])
+
+
+def test_overlap_uses_baseline_formal_registration_when_candidate_has_none():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation"
+                        and record["signal_date"] == "2021-01-05")
+    outcomes = [record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]]
+    registration["code"] = "510300.XSHG"
+    registration["supporter_event_dates"] = {
+        indicator: "2021-01-05" for indicator in registration["supporters"]
+    }
+    registration["_log_timestamp"] = "2021-01-06T09:35:00"
+    _replace_relative_identity(registration, outcomes)
+    for outcome in outcomes:
+        outcome["code"] = registration["code"]
+        outcome["supporter_event_dates"] = dict(registration["supporter_event_dates"])
+        outcome["event_date"] = "2021-01-05"
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["data_quality"]["formal_overlap_count"] == 1
+    assert report["gates"]["data_quality_complete"] is False
+    assert report["continue_candidate"] is False
+
+
 def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
     candidate = make_candidate_records()
     baseline = make_baseline_records()

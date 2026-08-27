@@ -324,7 +324,8 @@ def _validate_support_contract(record, prefix, signal_date, session_evidence, er
                 has_signal_date_evidence = True
         if signal_date is not None and not has_signal_date_evidence:
             errors.append("%s supporters lack signal-date evidence" % prefix)
-        if signal_date is not None and len(supported_dates) == len(dates):
+        if (signal_date is not None and len(supported_dates) == len(dates)
+                and any(value < signal_date for value in supported_dates)):
             previous_session = session_evidence.get(signal_date)
             if previous_session is None:
                 errors.append("%s supporter window unverifiable: missing decision-to-signal session evidence" % prefix)
@@ -1073,12 +1074,10 @@ def analyze_records(candidate_records, baseline_records):
                         errors.append("non-finite aggregate: positive contribution")
                     positive_by_etf[code] = combined
     formal_keys = set()
-    for record in candidate_records:
-        if (record.get("_record_namespace") == "formal"
-                and record.get("event") == "resonance_decision"):
-            key = _overlap_key(record, "formal overlap", errors)
-            if key is not None:
-                formal_keys.add(key)
+    for record in formal_registrations.values():
+        key = _overlap_key(record, "baseline formal overlap", errors)
+        if key is not None:
+            formal_keys.add(key)
     relative_keys = set()
     for record in candidates:
         key = _overlap_key(record, "relative overlap", errors)
