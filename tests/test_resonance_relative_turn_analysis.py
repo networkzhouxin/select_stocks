@@ -81,6 +81,9 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         supporters = ["BOLL", "KDJ", "RSI"]
         source_map = {indicator: "RELATIVE" for indicator in supporters}
     date_map = {indicator: signal_date for indicator in supporters}
+    registration_timestamp = (
+        date.fromisoformat(signal_date) + timedelta(days=1)
+    ).isoformat() + "T09:35:00"
     return {
         "event": "relative_resonance_observation",
         "relative_observation_id": _relative_observation_id(
@@ -101,6 +104,7 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         "pool_fingerprint": "9123995edeb1ed84",
         "event_logic_fingerprint": "1c0b8a22f48c97c3",
         "event_close": 10.0,
+        "_log_timestamp": registration_timestamp,
     }
 
 
@@ -126,6 +130,7 @@ def make_outcome(record, horizon, value):
             "closing_price": record["event_close"] * (1.0 + value),
             "return": value, "direction_adjusted_return": adjusted,
         },
+        "_log_timestamp": closing_date + "T15:30:00",
     }
 
 
@@ -176,6 +181,7 @@ def make_baseline_records():
             "reason": "COMPLETE_RESONANCE", "resonance_id": resonance_id,
             "code": "510300.XSHG", "direction": "BUY_TURN",
             "signal_date": "2021-01-05",
+            "_log_timestamp": "2021-01-06T09:35:00",
         })
         records.append({
             "event": "observation_outcome", "resonance_id": resonance_id,
@@ -185,6 +191,7 @@ def make_baseline_records():
                 "status": "RECORDED", "closing_date": "2021-01-06",
                 "return": 0.01,
             },
+            "_log_timestamp": "2021-01-06T15:30:00",
         })
     return records
 
@@ -317,6 +324,107 @@ def test_frozen_report_passes_only_when_every_gate_and_path_match():
     assert report["continue_candidate"] is True
 
 
+def test_scope_summaries_are_complete_and_deterministically_ordered():
+    report = analyzer.analyze_records(make_candidate_records(), make_baseline_records())
+    scopes = report["metrics"]["scope_summaries"]
+
+    assert list(scopes) == [
+        "formal_resonance", "relative_total",
+        "HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE",
+    ]
+    for summary in scopes.values():
+        assert list(summary) == [
+            "candidate_count", "direction_counts", "year_counts", "etf_counts",
+            "horizon_1", "horizon_3", "horizon_5",
+        ]
+        assert list(summary["direction_counts"]) == ["BUY_TURN", "SELL_TURN"]
+        assert list(summary["year_counts"]) == ["2019", "2020", "2021"]
+        assert list(summary["etf_counts"]) == sorted(summary["etf_counts"])
+    assert scopes["formal_resonance"]["candidate_count"] == 30
+    assert scopes["formal_resonance"]["horizon_1"]["count"] == 0
+    assert scopes["formal_resonance"]["horizon_3"]["count"] == 0
+    assert scopes["formal_resonance"]["horizon_5"]["count"] == 30
+    assert scopes["relative_total"]["candidate_count"] == 30
+    assert scopes["relative_total"]["horizon_1"]["count"] == 30
+    assert scopes["HARD_BOLL_SOFT_OSC"]["candidate_count"] == 15
+    assert scopes["SOFT_ALL_THREE"]["candidate_count"] == 15
+
+
+def test_business_records_require_real_emitter_timestamp_chronology():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    for record in candidate + baseline:
+        if record.get("event") in {
+                "relative_resonance_observation", "observation_outcome",
+                "resonance_decision"}:
+            record["_log_timestamp"] = "2019-01-01T00:00:00"
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is False
+    assert any("log timestamp" in error for error in report["data_quality"]["errors"])
+
+
+def test_cli_rejects_midnight_business_log_chronology(tmp_path):
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    for record in candidate + baseline:
+        if record.get("event") in {
+                "relative_resonance_observation", "observation_outcome",
+                "resonance_decision"}:
+            record["_log_timestamp"] = "2019-01-01T00:00:00"
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, candidate)
+    _write_log(baseline_path, baseline)
+
+    completed = subprocess.run([
+        sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path), "--output", str(output_path),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0
+    assert "Traceback" not in completed.stderr
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["continue_candidate"] is False
+    assert any("log timestamp" in error for error in report["data_quality"]["errors"])
+
+
+def test_relative_outcome_requires_closing_day_after_close_timestamp_and_strict_sequence():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = {record["horizon"]: record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]}
+    outcomes[1]["_log_timestamp"] = outcomes[1]["outcome"]["closing_date"] + "T14:59:00"
+    outcomes[3]["_log_timestamp"] = outcomes[1]["_log_timestamp"]
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any("relative outcome log timestamp before 15:30" in error
+               for error in report["data_quality"]["errors"])
+    assert any("relative outcome log timestamps are not strictly increasing" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_baseline_formal_timestamp_must_match_closing_date_and_after_close():
+    baseline = make_baseline_records()
+    formal_outcome = next(record for record in baseline
+                          if record.get("event") == "observation_outcome")
+    formal_outcome["_log_timestamp"] = "2021-01-05T14:59:00"
+
+    report = analyzer.analyze_records(make_candidate_records(), baseline)
+
+    assert report["continue_candidate"] is False
+    assert any("formal outcome log date mismatch" in error
+               for error in report["data_quality"]["errors"])
+    assert any("formal outcome log timestamp before 15:30" in error
+               for error in report["data_quality"]["errors"])
+
+
 def test_analysis_keeps_branches_directions_and_horizons_separate():
     first = make_relative_record(
         0, direction="BUY_TURN", branch="SOFT_ALL_THREE", code="518880.XSHG",
@@ -419,11 +527,15 @@ def test_cli_writes_only_explicit_output_file_and_keeps_inputs_unchanged(tmp_pat
     baseline_path = tmp_path / "baseline.log"
     output_path = tmp_path / "report" / "relative.json"
     candidate_lines = [
-        "2021-01-05 09:35:00 - INFO - " + json.dumps(record, sort_keys=True)
+        record.get("_log_timestamp", "2021-01-05T09:35:00").replace("T", " ")
+        + " - INFO - "
+        + json.dumps({key: value for key, value in record.items() if not key.startswith("_")}, sort_keys=True)
         for record in make_candidate_records()
     ]
     baseline_lines = [
-        "2021-01-05 09:35:00 - INFO - " + json.dumps(record, sort_keys=True)
+        record.get("_log_timestamp", "2021-01-05T09:35:00").replace("T", " ")
+        + " - INFO - "
+        + json.dumps({key: value for key, value in record.items() if not key.startswith("_")}, sort_keys=True)
         for record in make_baseline_records()
     ]
     candidate_path.write_text("\n".join(candidate_lines), encoding="utf-8")

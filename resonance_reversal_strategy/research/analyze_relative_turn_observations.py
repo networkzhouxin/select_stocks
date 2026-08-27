@@ -12,7 +12,7 @@ import statistics
 import sys
 import tempfile
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 
 TRAIN_START = date(2019, 1, 1)
@@ -33,6 +33,9 @@ DIRECTIONS = ("BUY_TURN", "SELL_TURN")
 HORIZONS = (1, 3, 5)
 INDICATORS = frozenset(("BOLL", "KDJ", "RSI"))
 SOURCES = frozenset(("HARD", "RELATIVE"))
+TRADING_LOG_TIME = time(9, 35)
+AFTER_CLOSE_LOG_TIME = time(15, 30)
+STRICT_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 STRUCTURED_EVENT_TOKENS = frozenset((
     "relative_resonance_observation", "observation_outcome",
     "strategy_initialized", "resonance_decision", "order_transition",
@@ -119,6 +122,50 @@ def _is_training_date(value, label, errors):
     if not TRAIN_START <= parsed <= TRAIN_END:
         errors.append("%s outside 2019-2021: %s" % (label, parsed))
     return parsed
+
+
+def _strict_log_timestamp(record, label, errors):
+    value = record.get("_log_timestamp")
+    if type(value) is not str or not STRICT_TIMESTAMP_RE.fullmatch(value):
+        errors.append("invalid %s log timestamp" % label)
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        errors.append("invalid %s log timestamp" % label)
+        return None
+
+
+def _parse_strict_log_timestamp(record):
+    value = record.get("_log_timestamp")
+    if type(value) is not str or not STRICT_TIMESTAMP_RE.fullmatch(value):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _validate_registration_log_timestamp(record, label, signal_date, errors):
+    timestamp = _strict_log_timestamp(record, label, errors)
+    if timestamp is None or signal_date is None:
+        return timestamp
+    if timestamp.date() < signal_date:
+        errors.append("%s log timestamp before signal date" % label)
+    if timestamp.time() < TRADING_LOG_TIME:
+        errors.append("%s log timestamp before 09:35" % label)
+    return timestamp
+
+
+def _validate_outcome_log_timestamp(record, label, closing_date, errors):
+    timestamp = _strict_log_timestamp(record, label, errors)
+    if timestamp is None or closing_date is None:
+        return timestamp
+    if timestamp.date() != closing_date:
+        errors.append("%s log date mismatch" % label)
+    if timestamp.time() < AFTER_CLOSE_LOG_TIME:
+        errors.append("%s log timestamp before 15:30" % label)
+    return timestamp
 
 
 def _valid_text(value):
@@ -344,6 +391,7 @@ def _validate_relative_registration(record, errors):
             errors.append("registration %s mismatch: %r" % (field, record.get(field)))
     _text(record, "code", "candidate code", errors)
     signal_date = _is_training_date(record.get("signal_date"), "signal", errors)
+    _validate_registration_log_timestamp(record, "relative registration", signal_date, errors)
     expires_date = _is_training_date(record.get("expires_date"), "expires", errors)
     if (signal_date is not None and expires_date is not None
             and expires_date < signal_date):
@@ -383,8 +431,15 @@ def _validate_relative_outcome_shape(record, errors):
     outcome = record.get("outcome")
     if not isinstance(outcome, dict):
         errors.append("invalid relative outcome payload")
+        _strict_log_timestamp(record, "relative outcome", errors)
     else:
-        _is_training_date(outcome.get("closing_date"), "relative outcome closing", errors)
+        closing_date = _is_training_date(
+            outcome.get("closing_date"), "relative outcome closing", errors,
+        )
+        if outcome.get("status") == "RECORDED":
+            _validate_outcome_log_timestamp(record, "relative outcome", closing_date, errors)
+        else:
+            _strict_log_timestamp(record, "relative outcome", errors)
     if isinstance(outcome, dict) and outcome.get("status") == "RECORDED":
         closing_price = _finite_number(outcome.get("closing_price"))
         if closing_price is None or closing_price <= 0:
@@ -451,6 +506,12 @@ def _validate_relative_recorded_closing_order(registrations, outcomes, errors):
         if (signal_date is not None and all(value is not None for value in closing_dates)
                 and not (signal_date < closing_dates[0] < closing_dates[1] < closing_dates[2])):
             errors.append("relative RECORDED closing dates are not strictly ordered: %s" % observation_id)
+        registration_timestamp = _parse_strict_log_timestamp(registration)
+        outcome_timestamps = [_parse_strict_log_timestamp(record) for record in records]
+        if (registration_timestamp is not None and all(value is not None for value in outcome_timestamps)
+                and not (registration_timestamp < outcome_timestamps[0] < outcome_timestamps[1]
+                         < outcome_timestamps[2])):
+            errors.append("relative outcome log timestamps are not strictly increasing: %s" % observation_id)
 
 
 def _validate_filled_orders(records, role, errors):
@@ -497,7 +558,8 @@ def _validate_baseline(records, errors):
         _text(record, "code", "formal code", errors)
         if record.get("direction") not in DIRECTIONS:
             errors.append("invalid formal direction: %r" % record.get("direction"))
-        _is_training_date(record.get("signal_date"), "formal signal", errors)
+        signal_date = _is_training_date(record.get("signal_date"), "formal signal", errors)
+        _validate_registration_log_timestamp(record, "formal registration", signal_date, errors)
         if resonance_id is not None:
             if resonance_id in registrations:
                 public_record = {key: value for key, value in record.items() if not key.startswith("_")}
@@ -523,8 +585,12 @@ def _validate_baseline(records, errors):
         outcome = record.get("outcome")
         if not isinstance(outcome, dict):
             errors.append("invalid formal outcome payload")
+            _strict_log_timestamp(record, "formal outcome", errors)
         else:
-            _is_training_date(outcome.get("closing_date"), "formal outcome closing", errors)
+            closing_date = _is_training_date(
+                outcome.get("closing_date"), "formal outcome closing", errors,
+            )
+            _validate_outcome_log_timestamp(record, "formal outcome", closing_date, errors)
         if isinstance(outcome, dict) and outcome.get("status") == "RECORDED":
             if _finite_number(outcome.get("return")) is None:
                 errors.append("invalid formal outcome return")
@@ -547,6 +613,11 @@ def _validate_baseline(records, errors):
             if (closing_date is not None and signal_date is not None
                     and closing_date <= signal_date):
                 errors.append("formal horizon 5 closing must follow signal date: %s" % resonance_id)
+            registration_timestamp = _parse_strict_log_timestamp(registration)
+            outcome_timestamp = _parse_strict_log_timestamp(record)
+            if (registration_timestamp is not None and outcome_timestamp is not None
+                    and outcome_timestamp <= registration_timestamp):
+                errors.append("formal horizon 5 log timestamp must follow registration: %s" % resonance_id)
         key = (resonance_id, horizon)
         if key in outcomes:
             errors.append("duplicate formal outcome: %s/%s" % key)
@@ -661,6 +732,49 @@ def _grouped_summaries(values_by_group, errors=None):
     return {group: {"horizon_%d" % horizon: summarize_returns(
                         values_by_group[group][horizon], errors, "%s/horizon_%d" % (group, horizon))
                     for horizon in HORIZONS} for group in values_by_group}
+
+
+def _scope_summary(registrations, outcomes, relative):
+    direction_counts = {direction: 0 for direction in DIRECTIONS}
+    year_counts = {str(year): 0 for year in (2019, 2020, 2021)}
+    etf_counts = Counter()
+    returns_by_horizon = {horizon: [] for horizon in HORIZONS}
+    for resonance_id in sorted(registrations):
+        registration = registrations[resonance_id]
+        direction = registration.get("direction")
+        if direction in direction_counts:
+            direction_counts[direction] += 1
+        try:
+            signal_date = _calendar_date(registration.get("signal_date"))
+        except ValueError:
+            signal_date = None
+        if signal_date is not None and str(signal_date.year) in year_counts:
+            year_counts[str(signal_date.year)] += 1
+        code = registration.get("code")
+        if _valid_text(code):
+            etf_counts[code] += 1
+        for horizon in HORIZONS:
+            record = outcomes.get((resonance_id, horizon))
+            payload = record.get("outcome") if record is not None else None
+            if type(payload) is not dict or payload.get("status") != "RECORDED":
+                continue
+            raw_return = _finite_number(payload.get("return"))
+            if raw_return is None:
+                continue
+            value = (_finite_number(payload.get("direction_adjusted_return"))
+                     if relative else
+                     (raw_return if direction == "BUY_TURN" else -raw_return))
+            if value is not None:
+                returns_by_horizon[horizon].append(value)
+    return {
+        "candidate_count": len(registrations),
+        "direction_counts": direction_counts,
+        "year_counts": year_counts,
+        "etf_counts": dict(sorted(etf_counts.items())),
+        "horizon_1": summarize_returns(returns_by_horizon[1]),
+        "horizon_3": summarize_returns(returns_by_horizon[3]),
+        "horizon_5": summarize_returns(returns_by_horizon[5]),
+    }
 
 
 def _formal_five_day_returns(registrations, outcomes):
@@ -907,6 +1021,23 @@ def analyze_records(candidate_records, baseline_records):
                          and math.isclose(candidate_asset, baseline_asset, abs_tol=0.01))
     grouped_by_branch = _grouped_summaries(by_branch, errors)
     grouped_by_direction = _grouped_summaries(by_direction, errors)
+    branch_registrations = {
+        branch: {
+            observation_id: record for observation_id, record in registrations.items()
+            if record.get("branch") == branch
+        }
+        for branch in BRANCHES
+    }
+    scope_summaries = {
+        "formal_resonance": _scope_summary(formal_registrations, formal_outcomes, False),
+        "relative_total": _scope_summary(registrations, outcomes, True),
+        "HARD_BOLL_SOFT_OSC": _scope_summary(
+            branch_registrations["HARD_BOLL_SOFT_OSC"], outcomes, True,
+        ),
+        "SOFT_ALL_THREE": _scope_summary(
+            branch_registrations["SOFT_ALL_THREE"], outcomes, True,
+        ),
+    }
     horizon_1 = summarize_returns(returns_by_horizon[1], errors, "horizon_1")
     horizon_3 = summarize_returns(returns_by_horizon[3], errors, "horizon_3")
     errors = sorted(set(errors))
@@ -936,6 +1067,7 @@ def analyze_records(candidate_records, baseline_records):
                     "direction_counts": direction_counts, "etf_counts": dict(sorted(etf_counts.items())),
                     "by_branch": grouped_by_branch,
                     "by_direction": grouped_by_direction,
+                    "scope_summaries": scope_summaries,
                     "horizon_1": horizon_1,
                     "horizon_3": horizon_3,
                     "horizon_5": horizon_5, "year_2021_horizon_5": year_2021,
