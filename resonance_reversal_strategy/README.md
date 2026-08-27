@@ -88,3 +88,34 @@ buy_target = min(standard_target, max(0, available_cash - cash_reserve))
 
 完整业务规则、测试门槛和失败处理见
 [`docs/strategy_spec.md`](docs/strategy_spec.md)。
+
+## 非极值相对拐点观察（build 20260827.4）
+
+该路径只记录未形成正式完整共振的增量候选：
+
+- `HARD_BOLL_SOFT_OSC`：正式 BOLL 加相对 RSI 或 KDJ；
+- `SOFT_ALL_THREE`：相对 BOLL、RSI、KDJ 三项齐全。
+
+相对事件使用独立事件簿和 `RELATIVE:` 标识，不进入正式共振、排序、仓位、ATR
+或订单。T 日 09:35 的相对事件与正式信号一样只使用截止 T-1 的完整日线；T 日及
+后续到期日 15:30 才回顾性记录 1/3/5 个交易日的收盘结果。
+
+初始化日志同时保留正式事件逻辑指纹，并新增独立的相对观察逻辑指纹；二者不能互相
+替代。普通观察异常只写诊断且不会中断正式交易；`FutureDataError` 仍会让回测明确
+失败。
+
+训练回测完成后，将 `20260827.3` 基线日志和 `20260827.4` 候选日志导出到行情数据
+目录之外，再执行：
+
+```powershell
+python resonance_reversal_strategy/research/analyze_relative_turn_observations.py `
+  --baseline-log D:\logs\resonance-20260827.3.log `
+  --candidate-log D:\logs\resonance-20260827.4.log `
+  --output D:\logs\relative-turn-report.json
+```
+
+分析器只读取用户显式提供的日志，拒绝 2022 年及以后观察记录，也不会搜索阈值、窗口
+或 ETF。输出路径由用户指定，不能与输入日志相同，也不得写入训练、预热、底层指数或
+验证行情数据目录。全部预注册门槛通过只代表可以提出下一份交易候选规格，不代表可以
+自动下单或进入验证期。目前尚无真实聚宽 `.3/.4` 完整日志证据；本地测试不构成订单路径、
+期末资产或观察收益已通过的证据。
