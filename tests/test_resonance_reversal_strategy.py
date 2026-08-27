@@ -1031,11 +1031,15 @@ def test_build_signal_snapshots_uses_trading_calendar_for_next_session(
         monkeypatch):
     calendar_calls = []
     snapshot_calls = []
+
+    def legal_calendar_range(**kwargs):
+        calendar_calls.append(kwargs)
+        assert set(kwargs) == {"start_date", "end_date"}
+        assert "count" not in kwargs
+        return [pd.Timestamp("2021-01-11")]
+
     monkeypatch.setattr(
-        strategy, "get_trade_days",
-        lambda **kw: calendar_calls.append(kw) or [
-            pd.Timestamp("2021-01-08"), pd.Timestamp("2021-01-11"),
-        ],
+        strategy, "get_trade_days", legal_calendar_range,
         raising=False,
     )
     monkeypatch.setattr(
@@ -1050,9 +1054,9 @@ def test_build_signal_snapshots_uses_trading_calendar_for_next_session(
         pd.Timestamp("2021-01-08"), strategy.get_default_params(),
     )
 
-    assert calendar_calls == [{
-        "start_date": pd.Timestamp("2021-01-08"), "count": 2,
-    }]
+    assert len(calendar_calls) == 1
+    assert calendar_calls[0]["start_date"] > pd.Timestamp("2021-01-08")
+    assert calendar_calls[0]["end_date"] >= calendar_calls[0]["start_date"]
     assert list(snapshots) == EXPECTED_POOL
     assert snapshot_calls == [
         (code, pd.Timestamp("2021-01-08"), pd.Timestamp("2021-01-11"))
@@ -1653,7 +1657,21 @@ def test_held_sold_attempted_and_processed_candidates_are_skipped(monkeypatch):
     )
     context = fake_context(positions={held: fake_position(100)})
     submitted = []
+    registrations = []
+    logs = []
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda decision, event_date, event_close: registrations.append(
+            decision["code"]
+        ), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision",
+        lambda decision, accepted, reason: logs.append(
+            (decision["code"], accepted, reason)
+        ), raising=False,
+    )
     monkeypatch.setattr(
         strategy, "submit_buy",
         lambda context_arg, code, snapshot, decision: submitted.append(code)
@@ -1669,6 +1687,11 @@ def test_held_sold_attempted_and_processed_candidates_are_skipped(monkeypatch):
 
     assert results == [(eligible, strategy.OrderOutcome.FILLED)]
     assert submitted == [eligible]
+    assert sorted(registrations) == sorted(snapshots)
+    assert (held, False, "HELD_NO_ADD") in logs
+    assert (sold, False, "SOLD_TODAY") in logs
+    assert (attempted, False, "ALREADY_ATTEMPTED_TODAY") in logs
+    assert (processed, False, "RESONANCE_ALREADY_PROCESSED") in logs
 
 
 def test_processed_resonance_id_prevents_duplicate_buy_submission(monkeypatch):
@@ -1783,10 +1806,19 @@ def test_register_observation_event_uses_only_forward_trading_sessions(
         )
     ]
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
-    monkeypatch.setattr(
-        strategy, "get_trade_days", lambda **kwargs: calendar, raising=False,
-    )
+    calls = []
 
+    def legal_calendar_range(**kwargs):
+        calls.append(kwargs)
+        assert set(kwargs) == {"start_date", "end_date"}
+        assert "count" not in kwargs
+        return calendar[1:]
+
+    monkeypatch.setattr(strategy, "get_trade_days", legal_calendar_range, raising=False)
+
+    strategy.register_observation_event(
+        decision, pd.Timestamp("2021-01-05").date(), 10.0,
+    )
     strategy.register_observation_event(
         decision, pd.Timestamp("2021-01-05").date(), 10.0,
     )
@@ -1798,6 +1830,32 @@ def test_register_observation_event_uses_only_forward_trading_sessions(
     }
     assert runtime.position_states == {}
     assert runtime.processed_resonance_ids == {}
+    assert len(calls) == 1
+
+
+def test_forward_trade_calendar_expands_across_long_holiday(monkeypatch):
+    anchor = pd.Timestamp("2021-01-01")
+    sessions = [
+        pd.Timestamp(date) for date in (
+            "2021-02-01", "2021-02-02", "2021-02-03",
+            "2021-02-04", "2021-02-05",
+        )
+    ]
+    calls = []
+
+    def ranged_calendar(**kwargs):
+        calls.append(kwargs)
+        assert set(kwargs) == {"start_date", "end_date"}
+        assert "count" not in kwargs
+        return [day for day in sessions if day <= kwargs["end_date"]]
+
+    monkeypatch.setattr(strategy, "get_trade_days", ranged_calendar, raising=False)
+
+    result = strategy.get_following_trade_days(anchor, 5)
+
+    assert result == sessions
+    assert len(calls) >= 2
+    assert calls[-1]["end_date"] >= sessions[-1]
 
 
 def test_record_due_observation_outcomes_is_close_only_read_projection(
@@ -1836,6 +1894,7 @@ def test_record_due_observation_outcomes_is_close_only_read_projection(
 
     assert record["outcomes"] == {
         1: {
+            "status": "RECORDED",
             "closing_date": closing_date,
             "closing_price": 11.0,
             "return": pytest.approx(0.1),
@@ -1844,6 +1903,54 @@ def test_record_due_observation_outcomes_is_close_only_read_projection(
     assert "abc" in runtime.observation_events
     assert runtime.position_states == {}
     assert runtime.processed_resonance_ids == {}
+
+
+def test_due_observation_missing_price_is_terminal_and_record_is_cleaned(
+        monkeypatch):
+    due_date = pd.Timestamp("2021-01-06").date()
+    record = strategy.make_observation_event(
+        "missing", "510300.XSHG", pd.Timestamp("2021-01-05").date(),
+        10.0, {1: due_date},
+    )
+    runtime = runtime_state()
+    runtime.observation_events = {"missing": record}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-06"), {},
+    )
+
+    assert record["outcomes"][1] == {
+        "status": "PRICE_UNAVAILABLE",
+        "closing_date": due_date,
+        "closing_price": None,
+        "return": None,
+    }
+    assert runtime.observation_events == {}
+
+
+def test_overdue_observation_is_missed_without_using_later_price(monkeypatch):
+    due_date = pd.Timestamp("2021-01-06").date()
+    record = strategy.make_observation_event(
+        "overdue", "510300.XSHG", pd.Timestamp("2021-01-05").date(),
+        10.0, {1: due_date},
+    )
+    runtime = runtime_state()
+    runtime.observation_events = {"overdue": record}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-07"),
+        {"510300.XSHG": current_record(12.0)},
+    )
+
+    assert record["outcomes"][1] == {
+        "status": "HORIZON_MISSED",
+        "closing_date": due_date,
+        "closing_price": None,
+        "return": None,
+    }
+    assert runtime.observation_events == {}
 
 
 def test_structured_logging_contract_contains_required_audit_fields(
@@ -2155,3 +2262,296 @@ def test_atr_check_log_is_observation_only_and_contains_frozen_risk_state(
         "triggered": False,
         "pending_exit": None,
     })]
+
+
+def test_full_portfolio_still_records_complete_resonance_without_order(
+        monkeypatch):
+    code = "513100.XSHG"
+    runtime = runtime_state(max_holdings=3)
+    context = fake_context(positions={
+        "510300.XSHG": fake_position(100),
+        "159915.XSHE": fake_position(100),
+        "512100.XSHG": fake_position(100),
+    })
+    registrations = []
+    logs = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda decision, event_date, event_close: registrations.append(
+            decision["resonance_id"]
+        ), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision",
+        lambda decision, accepted, reason: logs.append((accepted, reason)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: pytest.fail("full portfolio must not order"),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context, {code: current_record()}, {code: resonance_snapshot(code)},
+    )
+
+    assert results == []
+    assert len(registrations) == 1
+    assert (False, "PORTFOLIO_FULL") in logs
+    assert runtime.daily_attempted_buys == set()
+    assert runtime.processed_resonance_ids == {}
+
+
+def test_held_and_paused_resonances_are_observed_without_changing_trade_state(
+        monkeypatch):
+    held, paused = "510300.XSHG", "159915.XSHE"
+    runtime = runtime_state(max_holdings=3)
+    context = fake_context(positions={held: fake_position(100)})
+    snapshots = {
+        held: resonance_snapshot(held), paused: resonance_snapshot(paused),
+    }
+    registrations = []
+    logs = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda decision, event_date, event_close: registrations.append(
+            decision["code"]
+        ), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision",
+        lambda decision, accepted, reason: logs.append(
+            (decision["code"], accepted, reason)
+        ), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: pytest.fail("held/paused resonance must not order"),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context,
+        {held: current_record(), paused: current_record(paused=True)},
+        snapshots,
+    )
+
+    assert results == [(paused, strategy.OrderOutcome.PAUSED)]
+    assert sorted(registrations) == sorted([held, paused])
+    assert (held, False, "HELD_NO_ADD") in logs
+    assert (paused, False, "PAUSED_BACKFILL") in logs
+    assert runtime.daily_attempted_buys == set()
+    assert runtime.processed_resonance_ids == {}
+
+
+def test_observation_registration_failure_cannot_interrupt_remaining_candidates(
+        monkeypatch):
+    first, second = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=2)
+    context = fake_context()
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("calendar unavailable")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context_arg, code, snapshot, decision: submitted.append(code)
+        or strategy.OrderOutcome.NOT_FILLED,
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context,
+        {first: current_record(), second: current_record()},
+        {first: resonance_snapshot(first), second: resonance_snapshot(second)},
+    )
+
+    assert submitted == [first, second]
+    assert results == [
+        (first, strategy.OrderOutcome.NOT_FILLED),
+        (second, strategy.OrderOutcome.NOT_FILLED),
+    ]
+
+
+def test_logger_failure_cannot_change_candidate_orders(monkeypatch):
+    first, second = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=2)
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda *args: (_ for _ in ()).throw(
+            RuntimeError("logger unavailable")
+        )),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "register_observation_event", lambda *args: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context_arg, code, snapshot, decision: submitted.append(code)
+        or strategy.OrderOutcome.NOT_FILLED,
+        raising=False,
+    )
+
+    strategy.run_signal_buys(
+        fake_context(),
+        {first: current_record(), second: current_record()},
+        {first: resonance_snapshot(first), second: resonance_snapshot(second)},
+    )
+
+    assert submitted == [first, second]
+
+
+@pytest.mark.parametrize(
+    "previous_diff,current_diff,expected",
+    [
+        (-0.5, 0.2, "GOLDEN_CROSS"),
+        (0.5, -0.2, "DEATH_CROSS"),
+        (-0.5, -0.1, "NONE"),
+    ],
+)
+def test_kdj_formal_cross_is_observation_only(
+        previous_diff, current_diff, expected):
+    assert strategy.detect_kdj_formal_cross(
+        {"kd_diff": previous_diff}, {"kd_diff": current_diff},
+    ) == expected
+
+
+def test_build_signal_snapshot_projects_kdj_cross_without_event_dependency(
+        monkeypatch):
+    params = strategy.get_default_params()
+    price_frame = make_ohlcv_frame(params["lookback_days"])
+    indicators = strategy.build_indicator_frame(price_frame, params)
+    indicators.loc[indicators.index[-2], "kd_diff"] = -0.5
+    indicators.loc[indicators.index[-1], "kd_diff"] = 0.2
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: price_frame,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_indicator_frame", lambda *args: indicators,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_events",
+        lambda *args: strategy.empty_event_book(), raising=False,
+    )
+
+    snapshot = strategy.build_signal_snapshot(
+        "510300.XSHG", indicators.index[-1], params,
+        indicators.index[-1] + pd.offsets.BDay(1),
+    )
+
+    assert snapshot["kdj_cross"] == "GOLDEN_CROSS"
+    assert snapshot["event_book"] == strategy.empty_event_book()
+
+
+def test_do_trading_logs_formal_kdj_cross_without_turn_event(monkeypatch):
+    code = "510300.XSHG"
+    runtime = runtime_state()
+    snapshot = {
+        "code": code,
+        "valid": True,
+        "signal_date": "2021-01-05",
+        "close": 10.0,
+        "entry_atr": 1.0,
+        "event_book": strategy.empty_event_book(),
+        "trade_values": {},
+        "observation_values": {},
+        "kdj_cross": "GOLDEN_CROSS",
+    }
+    logged = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
+    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: set())
+    monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
+    monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set())
+    monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [])
+    monkeypatch.setattr(
+        strategy, "log_signal_snapshot",
+        lambda value: logged.append(value), raising=False,
+    )
+
+    strategy.do_trading(fake_context())
+
+    assert len(logged) == 1
+    assert logged[0]["code"] == code
+    assert logged[0]["kdj_cross"] == "GOLDEN_CROSS"
+
+
+def test_kdj_cross_field_cannot_change_candidate_order_or_orders(monkeypatch):
+    first, second = "159915.XSHE", "510300.XSHG"
+    observed = []
+    for first_cross, second_cross in (
+            ("GOLDEN_CROSS", "DEATH_CROSS"),
+            ("NONE", "GOLDEN_CROSS")):
+        runtime = runtime_state(max_holdings=2)
+        submitted = []
+        snapshots = {
+            first: dict(resonance_snapshot(first, support_count=3),
+                        kdj_cross=first_cross),
+            second: dict(resonance_snapshot(second, support_count=2),
+                         kdj_cross=second_cross),
+        }
+        monkeypatch.setattr(strategy, "g", runtime, raising=False)
+        monkeypatch.setattr(
+            strategy, "register_observation_event", lambda *args: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            strategy, "submit_buy",
+            lambda context_arg, code, snapshot, decision: submitted.append(code)
+            or strategy.OrderOutcome.NOT_FILLED,
+            raising=False,
+        )
+
+        strategy.run_signal_buys(
+            fake_context(),
+            {first: current_record(), second: current_record()}, snapshots,
+        )
+        observed.append(submitted)
+
+    assert observed == [[first, second], [first, second]]
+
+
+def test_unheld_complete_sell_resonance_is_recorded_without_order(monkeypatch):
+    code = "510300.XSHG"
+    runtime = runtime_state()
+    snapshot = resonance_snapshot(code, direction="SELL_TURN")
+    registrations = []
+    logs = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda decision, event_date, event_close: registrations.append(
+            decision["resonance_id"]
+        ), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision",
+        lambda decision, accepted, reason: logs.append((accepted, reason)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_sell",
+        lambda *args: pytest.fail("unheld sell resonance is record-only"),
+        raising=False,
+    )
+
+    result = strategy.run_signal_exits(
+        fake_context(), {code: current_record()}, {code: snapshot},
+    )
+
+    assert result == set()
+    assert len(registrations) == 1
+    assert (False, "UNHELD_RECORD_ONLY") in logs
