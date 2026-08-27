@@ -506,3 +506,90 @@ def test_new_supporter_dates_create_new_resonance_id_after_old_expiry():
     assert new_decision["resonance_id"] not in strategy.prune_processed_resonance_ids(
         processed, "2021-01-07",
     )
+
+
+@pytest.mark.parametrize(
+    "total,cash,expected",
+    [
+        (20000.0, 20000.0, 20000.0 * 0.95 / 3),
+        (30000.0, 4000.0, 2500.0),
+        (30000.0, 1000.0, 0.0),
+    ],
+)
+def test_buy_target_adapts_to_current_assets_and_preserves_cash(
+        total, cash, expected):
+    assert strategy.calc_buy_target_value(
+        total, cash, strategy.get_default_params(),
+    ) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "anchor,entry_atr,expected_pct",
+    [(100.0, 1.0, 0.05), (100.0, 4.0, 0.10), (100.0, 10.0, 0.15)],
+)
+def test_atr_stop_clamps_percentage(anchor, entry_atr, expected_pct):
+    result = strategy.calc_stop_state(
+        anchor, entry_atr, strategy.get_default_params(),
+    )
+    assert result["stop_pct"] == pytest.approx(expected_pct)
+    assert result["stop_price"] == pytest.approx(anchor * (1 - expected_pct))
+
+
+def test_highest_anchor_only_moves_up_on_close_and_entry_atr_stays_frozen():
+    state = strategy.make_position_state("2021-01-05", 2.0, 100.0)
+
+    strategy.update_highest_close_anchor(state, 105.0)
+    strategy.update_highest_close_anchor(state, 102.0)
+
+    assert state["highest_close_anchor"] == pytest.approx(105.0)
+    assert state["entry_atr"] == pytest.approx(2.0)
+
+
+def test_signal_sell_is_next_trade_day_only_but_atr_has_no_hold_lock():
+    assert not strategy.can_signal_sell("2021-01-05", "2021-01-05")
+    assert strategy.can_signal_sell("2021-01-05", "2021-01-06")
+
+
+def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
+        monkeypatch):
+    runtime = types.SimpleNamespace(
+        state_date="2021-01-05",
+        sold_today={"510300.XSHG"},
+        daily_attempted_buys={"159915.XSHE"},
+        processed_resonance_ids={"expired": "2021-01-05", "active": "2021-01-06"},
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    strategy.reset_daily_state("2021-01-05", "2021-01-06")
+
+    assert runtime.sold_today == {"510300.XSHG"}
+    assert runtime.daily_attempted_buys == {"159915.XSHE"}
+    assert runtime.processed_resonance_ids == {"active": "2021-01-06"}
+
+    strategy.reset_daily_state("2021-01-06", "2021-01-06")
+
+    assert runtime.state_date == "2021-01-06"
+    assert runtime.sold_today == set()
+    assert runtime.daily_attempted_buys == set()
+
+
+def test_partial_exit_keeps_all_position_risk_state(monkeypatch):
+    position_state = {
+        "buy_date": "2021-01-05",
+        "entry_atr": 2.0,
+        "highest_close_anchor": 105.0,
+        "pending_exit": "ATR_EXIT",
+    }
+    runtime = types.SimpleNamespace(position_states={"510300.XSHG": position_state})
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    assert not strategy.clear_position_state_if_flat("510300.XSHG", actual_amount=100)
+    assert runtime.position_states["510300.XSHG"] == position_state
+
+
+def test_flat_position_clears_only_its_risk_state(monkeypatch):
+    runtime = types.SimpleNamespace(position_states={"510300.XSHG": {"entry_atr": 2.0}})
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    assert strategy.clear_position_state_if_flat("510300.XSHG", actual_amount=0)
+    assert runtime.position_states == {}

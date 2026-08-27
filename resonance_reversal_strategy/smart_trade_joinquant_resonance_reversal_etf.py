@@ -136,6 +136,64 @@ import numpy as np
 import pandas as pd
 
 
+def calc_buy_target_value(total_value, available_cash, params):
+    standard_target = (
+        total_value * params["target_exposure"] / params["max_holdings"]
+    )
+    cash_reserve = total_value * (1.0 - params["target_exposure"])
+    return min(standard_target, max(0.0, available_cash - cash_reserve))
+
+
+def calc_stop_state(highest_close_anchor, entry_atr, params):
+    if highest_close_anchor <= 0 or entry_atr <= 0 or pd.isna(entry_atr):
+        return None
+    raw_pct = params["atr_multiplier"] * entry_atr / highest_close_anchor
+    stop_pct = min(params["stop_cap"], max(params["stop_floor"], raw_pct))
+    return {
+        "raw_pct": raw_pct,
+        "stop_pct": stop_pct,
+        "stop_price": highest_close_anchor * (1.0 - stop_pct),
+    }
+
+
+def make_position_state(buy_date, entry_atr, entry_price):
+    return {
+        "buy_date": buy_date,
+        "entry_atr": float(entry_atr),
+        "highest_close_anchor": float(entry_price),
+        "pending_exit": None,
+    }
+
+
+def update_highest_close_anchor(position_state, closing_price):
+    if closing_price is not None and closing_price > 0:
+        position_state["highest_close_anchor"] = max(
+            position_state["highest_close_anchor"], float(closing_price),
+        )
+
+
+def can_signal_sell(buy_date, decision_date):
+    return buy_date < decision_date
+
+
+def reset_daily_state(decision_date, signal_date):
+    ensure_runtime_state()
+    if getattr(g, "state_date", None) != decision_date:
+        g.state_date = decision_date
+        g.sold_today = set()
+        g.daily_attempted_buys = set()
+    g.processed_resonance_ids = prune_processed_resonance_ids(
+        g.processed_resonance_ids, signal_date,
+    )
+
+
+def clear_position_state_if_flat(code, actual_amount):
+    if actual_amount == 0:
+        g.position_states.pop(code, None)
+        return True
+    return False
+
+
 TRADE_INDICATOR_COLUMNS = (
     "rsi14", "k", "d", "j", "kd_diff", "boll_mid",
     "boll_upper", "boll_lower", "atr14",
