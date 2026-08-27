@@ -7,6 +7,7 @@ import __future__
 import builtins
 from datetime import date
 from datetime import datetime
+from hashlib import sha256
 import pathlib
 import sys
 import types
@@ -24,6 +25,12 @@ CANDIDATE_PATH = (
     ROOT
     / "cross_signal_strategy"
     / "smart_trade_joinquant_weekly_trend_daily_pullback_candidate.py"
+)
+FORMAL_JOINQUANT = (
+    ROOT / "cross_signal_strategy" / "smart_trade_joinquant_cross_signal_etf.py"
+)
+FORMAL_PTRADE = (
+    ROOT / "cross_signal_strategy" / "smart_trade_ptrade_cross_signal_etf.py"
 )
 
 from cross_signal_strategy import (  # noqa: E402
@@ -782,3 +789,12 @@ def test_0935_snapshot_log_contains_exact_causal_fields(monkeypatch):
         "eligible=",
     ):
         assert field in message
+
+
+def test_formal_cross_signal_files_keep_design_time_sha256():
+    assert sha256(FORMAL_JOINQUANT.read_bytes()).hexdigest().upper() == (
+        "9ADB96E523BBA2B1E5C42CB2BDDA06A8BB06065EA1AE25194651177987DF0F52"
+    )
+    assert sha256(FORMAL_PTRADE.read_bytes()).hexdigest().upper() == (
+        "E4FA39CC79350A8E790074E1D3C75D0A4638ECA23DB8155F4EE1203869E7D6F8"
+    )

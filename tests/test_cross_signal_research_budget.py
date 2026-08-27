@@ -258,6 +258,15 @@ def test_experiment_gate_rejects_closed_unknown_and_multi_variant_searches(tmp_p
         "max_new_experiments": 0,
     })
     reexpansion.pop("planned_experiment", None)
+    weekly_pullback = next(
+        item for item in payload["families"]
+        if item["key"] == "weekly_trend_daily_pullback_user_authorized"
+    )
+    weekly_pullback.update({
+        "status": "blocked",
+        "max_new_experiments": 0,
+    })
+    weekly_pullback.pop("planned_experiment", None)
     market = next(item for item in payload["families"] if item["key"] == "market_breadth")
     market.update({
         "status": "open",

@@ -1407,3 +1407,11 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Test-first evidence: Each behavior first failed before implementation, including both entry channels, exact T-1 loading and stale-bar rejection, deterministic ranking, exit priority, 14:50 ATR-only isolation, upload compatibility, missing-snapshot ATR protection, and rejected/pending/partial/full sell lifecycle. An independent review found and prompted regression fixes for Python-runtime compatibility, governance status validation, missing-snapshot ATR suppression, sell-order reconciliation, and `jqdata` shadowing of builtin `any`.
 - Evidence status: Local behavior, governance, syntax, and formal-release isolation checks are required before handoff. No market, training, validation, PTrade, simulation, or live performance result was used to implement the candidate; an actual JoinQuant upload/import and 2019-2021 run remain external steps.
 - Interpretation boundary: A 2019-2021 JoinQuant run is development-period historical diagnosis because that window already influenced the hypothesis. It is not independent out-of-sample evidence and cannot authorize validation, PTrade, simulation, or real funds. No neighboring variant is authorized after the run.
+
+### Prepare Independent Weekly-Trend Daily-Pullback JoinQuant Candidate
+
+- Date: 2026-08-27.
+- Decision: Implement the single user-authorized `weekly-trend-pullback-v0.1-joinquant-candidate` as an isolated research and JoinQuant pair.
+- Causal boundary: Exact T-1 daily signals, the decision week's partial weekly bar excluded, 09:35 full processing, and 14:50 ATR only.
+- Research boundary: No market replay or validation data was read during implementation; the family remains open for exactly one 2019-2021 JoinQuant run.
+- Business boundary: Formal JoinQuant/PTrade hashes remain unchanged; no PTrade candidate or live-readiness conclusion exists.

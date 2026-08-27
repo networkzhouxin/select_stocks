@@ -19,6 +19,8 @@ def test_cross_signal_root_keeps_three_formal_entries_and_labels_candidates():
     assert candidate_entries == {
         "smart_trade_joinquant_cross_signal_etf_late_macd_boll_filter_candidate.py",
         "smart_trade_joinquant_cross_signal_etf_late_veto_early_pre_macd_candidate.py",
+        "smart_trade_joinquant_kdj_rsi_boll_atr_scheme_a_candidate.py",
+        "smart_trade_joinquant_weekly_trend_daily_pullback_candidate.py",
     }
     assert all(name.endswith("_candidate.py") for name in candidate_entries)
 
