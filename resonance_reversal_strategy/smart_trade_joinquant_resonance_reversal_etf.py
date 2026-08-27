@@ -9,7 +9,7 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.3"
+DEPLOYMENT_BUILD_ID = "20260827.4"
 FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
 BENCHMARK = "000300.XSHG"
 
@@ -168,6 +168,7 @@ def _runtime_params_and_pool():
 def log_signal_snapshot(snapshot):
     params, etf_pool = _runtime_params_and_pool()
     event_book = snapshot.get("event_book") or empty_event_book()
+    relative_book = snapshot.get("relative_event_book") or empty_event_book()
     self_check = run_event_logic_self_check(params)
     _emit_structured_log("signal_snapshot", {
         "version": STRATEGY_VERSION,
@@ -177,6 +178,7 @@ def log_signal_snapshot(snapshot):
         "event_logic_fingerprint": event_logic_fingerprint(
             params, self_check,
         ),
+        "relative_observation_fingerprint": relative_observation_fingerprint(),
         "code": snapshot.get("code"),
         "decision_date": snapshot.get("decision_date"),
         "signal_date": snapshot.get("signal_date"),
@@ -190,6 +192,10 @@ def log_signal_snapshot(snapshot):
         "kdj_cross": snapshot.get("kdj_cross", "NONE"),
         "active_events": dict(event_book.get("active") or {}),
         "invalidated_events": list(event_book.get("invalidated") or []),
+        "relative_active_events": dict(relative_book.get("active") or {}),
+        "relative_invalidated_events": list(
+            relative_book.get("invalidated") or []
+        ),
     })
 
 
@@ -269,6 +275,29 @@ def make_observation_event(resonance_id, code, event_date, event_close,
         "horizons": tuple(horizons),
         "outcomes": {},
     }
+
+
+def make_relative_observation_event(observation, horizons=(1, 3, 5)):
+    observation_id = observation["relative_observation_id"]
+    record = make_observation_event(
+        observation_id, observation["code"], observation["signal_date"],
+        observation["event_close"], horizons,
+    )
+    record.update({
+        "relative_observation_id": observation_id,
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": observation["branch"],
+        "direction": observation["direction"],
+        "supporters": tuple(observation["supporters"]),
+        "supporter_event_dates": dict(observation["supporter_event_dates"]),
+        "hard_or_relative_source_by_indicator": dict(
+            observation["hard_or_relative_source_by_indicator"]
+        ),
+        "expires_date": _calendar_date(observation["expires_date"]),
+        "build": DEPLOYMENT_BUILD_ID,
+        "relative_observation_fingerprint": relative_observation_fingerprint(),
+    })
+    return record
 
 
 OBSERVATION_HORIZONS = frozenset((1, 3, 5))
@@ -433,6 +462,20 @@ def register_observation_event(decision, event_date, event_close):
     )
 
 
+def register_relative_observation_event(observation):
+    if observation is None:
+        return False
+    observation_id = observation["relative_observation_id"]
+    if not observation_id.startswith("RELATIVE:"):
+        raise ValueError("relative observation id must use RELATIVE namespace")
+    if observation_id in g.observation_events:
+        return False
+    g.observation_events[observation_id] = make_relative_observation_event(
+        observation,
+    )
+    return True
+
+
 def try_register_observation_event(decision, event_date, event_close):
     try:
         register_observation_event(decision, event_date, event_close)
@@ -449,6 +492,65 @@ def try_register_observation_event(decision, event_date, event_close):
         })
         return False
     return True
+
+
+def try_register_relative_observation_event(observation):
+    try:
+        return register_relative_observation_event(observation)
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _emit_structured_log("relative_observation_registration", {
+            "relative_observation_id": (
+                observation.get("relative_observation_id")
+                if observation is not None else None
+            ),
+            "code": observation.get("code") if observation is not None else None,
+            "reason": "RELATIVE_OBSERVATION_REGISTRATION_FAILED",
+            "error_type": type(error).__name__,
+        })
+        return False
+
+
+def log_relative_resonance_observation(observation):
+    _emit_structured_log("relative_resonance_observation", {
+        "version": STRATEGY_VERSION,
+        "build": DEPLOYMENT_BUILD_ID,
+        "parameter_fingerprint": _value_fingerprint(g.params),
+        "pool_fingerprint": _value_fingerprint(g.etf_pool),
+        "event_logic_fingerprint": event_logic_fingerprint(g.params),
+        "relative_observation_fingerprint": relative_observation_fingerprint(),
+        "relative_observation_id": observation["relative_observation_id"],
+        "observation_kind": observation["observation_kind"],
+        "branch": observation["branch"],
+        "code": observation["code"],
+        "direction": observation["direction"],
+        "signal_date": observation["signal_date"],
+        "supporters": observation["supporters"],
+        "supporter_event_dates": observation["supporter_event_dates"],
+        "hard_or_relative_source_by_indicator": (
+            observation["hard_or_relative_source_by_indicator"]
+        ),
+        "expires_date": observation["expires_date"],
+        "event_close": observation["event_close"],
+    })
+
+
+def run_relative_observation_stage(snapshots):
+    try:
+        observations = collect_relative_resonance_observations(snapshots)
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _emit_structured_log("relative_observation_pipeline", {
+            "reason": "RELATIVE_OBSERVATION_COLLECTION_FAILED",
+            "error_type": type(error).__name__,
+        })
+        return None
+    for observation in observations:
+        if try_register_relative_observation_event(observation):
+            log_relative_resonance_observation(observation)
+    return None
 
 
 def record_due_observation_outcomes(context, current_data):
@@ -500,14 +602,39 @@ def record_due_observation_outcomes(context, current_data):
                         "closing_price": closing_price,
                         "return": closing_price / record["event_close"] - 1.0,
                     }
+                    if record.get("observation_kind") == "RELATIVE_RESONANCE":
+                        direction = record["direction"]
+                        direction_value = (
+                            direction.value
+                            if isinstance(direction, TurnDirection) else direction
+                        )
+                        raw_return = outcome["return"]
+                        outcome["direction_adjusted_return"] = (
+                            raw_return
+                            if direction_value == TurnDirection.BUY_TURN.value
+                            else -raw_return
+                        )
             record["outcomes"][horizon] = outcome
-            _emit_structured_log("observation_outcome", {
+            outcome_payload = {
                 "resonance_id": resonance_id,
                 "code": record["code"],
                 "event_date": record["event_date"],
                 "horizon": horizon,
                 "outcome": outcome,
-            })
+            }
+            if record.get("observation_kind") == "RELATIVE_RESONANCE":
+                outcome_payload.update({
+                    "relative_observation_id": record["relative_observation_id"],
+                    "observation_kind": record["observation_kind"],
+                    "branch": record["branch"],
+                    "direction": record["direction"],
+                    "supporters": record["supporters"],
+                    "build": record["build"],
+                    "relative_observation_fingerprint": (
+                        record["relative_observation_fingerprint"]
+                    ),
+                })
+            _emit_structured_log("observation_outcome", outcome_payload)
         if _observation_record_is_terminal(record):
             g.observation_events.pop(resonance_id, None)
 
@@ -545,14 +672,18 @@ def do_trading(context):
     held_codes = set(get_actual_positions(context))
     for snapshot in snapshots.values():
         event_book = snapshot.get("event_book") or {}
+        relative_book = snapshot.get("relative_event_book") or {}
         if (snapshot.get("code") in held_codes
                 or event_book.get("active")
                 or event_book.get("invalidated")
+                or relative_book.get("active")
+                or relative_book.get("invalidated")
                 or snapshot.get("kdj_cross", "NONE") != "NONE"
                 or _event_detection_trace_requires_logging(
                     snapshot.get("event_detection_trace")
                 )):
             log_signal_snapshot(dict(snapshot, decision_date=decision_date))
+    run_relative_observation_stage(snapshots)
     run_signal_exits(context, current_data, snapshots)
     run_signal_buys(context, current_data, snapshots)
 
@@ -598,6 +729,7 @@ def initialize(context):
         "event_logic_fingerprint": event_logic_fingerprint(
             g.params, self_check,
         ),
+        "relative_observation_fingerprint": relative_observation_fingerprint(),
         "etf_pool": list(g.etf_pool),
     })
 
@@ -657,6 +789,9 @@ def build_signal_snapshot(code, prev_date, params, decision_date):
     event_book = collect_latest_events(
         indicators, signal_date, decision_date,
     )
+    relative_event_book = collect_latest_relative_events(
+        indicators, signal_date, decision_date,
+    )
     event_detection_trace = build_event_detection_trace(indicators, params)
     return {
         "code": code,
@@ -665,6 +800,7 @@ def build_signal_snapshot(code, prev_date, params, decision_date):
         "close": float(latest["close"]),
         "entry_atr": entry_atr,
         "event_book": event_book,
+        "relative_event_book": relative_event_book,
         "trade_values": latest[required].to_dict(),
         "observation_values": latest[list(OBSERVATION_COLUMNS)].to_dict(),
         "event_detection_trace": event_detection_trace,

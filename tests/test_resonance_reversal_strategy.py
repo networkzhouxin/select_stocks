@@ -5,6 +5,7 @@ import inspect
 import json
 import pathlib
 import sys
+import textwrap
 import types
 from datetime import date
 
@@ -3545,7 +3546,297 @@ def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
 
 
 def test_diagnostic_build_id_is_bumped():
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.3"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
+
+
+def test_relative_observation_build_and_formal_fingerprints_are_separated(
+        monkeypatch):
+    messages = []
+    _install_initialize_platform_stubs(monkeypatch, messages, [])
+    monkeypatch.setattr(strategy, "g", types.SimpleNamespace(), raising=False)
+
+    strategy.initialize(types.SimpleNamespace())
+
+    payload = json.loads(messages[-1])
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
+    assert payload["build"] == "20260827.4"
+    assert payload["parameter_fingerprint"] == "e1227fbd8b4a884e"
+    assert payload["pool_fingerprint"] == "9123995edeb1ed84"
+    assert payload["event_logic_fingerprint"] == "1c0b8a22f48c97c3"
+    assert payload["relative_observation_fingerprint"] == (
+        strategy.relative_observation_fingerprint()
+    )
+
+
+def test_signal_snapshot_builds_separate_relative_event_book(monkeypatch):
+    frame = make_ohlcv_frame(120)
+    relative_book = relative_event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "BUY_TURN", frame.index[-1].date(),
+    )
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: frame, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_relative_events",
+        lambda *args: relative_book, raising=False,
+    )
+
+    snapshot = strategy.build_signal_snapshot(
+        "510300.XSHG", frame.index[-1], strategy.get_default_params(),
+        frame.index[-1] + pd.offsets.BDay(1),
+    )
+
+    assert snapshot["relative_event_book"] is relative_book
+    assert snapshot["event_book"] is not relative_book
+
+
+def test_do_trading_runs_relative_stage_without_skipping_formal_pipeline(
+        monkeypatch):
+    calls = []
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshots",
+        lambda *args: calls.append("snapshots") or {},
+    )
+    monkeypatch.setattr(
+        strategy, "run_relative_observation_stage",
+        lambda snapshots: calls.append("relative"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_exits", lambda *args: calls.append("exits"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_buys", lambda *args: calls.append("buys"),
+    )
+
+    strategy.do_trading(fake_context())
+
+    assert calls == ["retry", "atr", "snapshots", "relative", "exits", "buys"]
+
+
+def test_relative_stage_isolates_ordinary_error_but_propagates_future_error(
+        monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: logs.append((event, payload)),
+    )
+    monkeypatch.setattr(
+        strategy, "collect_relative_resonance_observations",
+        lambda snapshots: (_ for _ in ()).throw(RuntimeError("ordinary")),
+    )
+    assert strategy.run_relative_observation_stage({}) is None
+    assert logs[-1][0] == "relative_observation_pipeline"
+
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future")
+    monkeypatch.setattr(
+        strategy, "collect_relative_resonance_observations",
+        lambda snapshots: (_ for _ in ()).throw(expected),
+    )
+    with pytest.raises(FutureDataError) as raised:
+        strategy.run_relative_observation_stage({})
+    assert raised.value is expected
+
+
+def test_relative_stage_returns_none_when_snapshot_input_is_missing(
+        monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: logs.append((event, payload)),
+    )
+
+    assert strategy.run_relative_observation_stage(None) is None
+    assert logs[-1][0] == "relative_observation_pipeline"
+
+
+def test_relative_registration_isolates_ordinary_error_and_rethrows_future(
+        monkeypatch):
+    observation = {
+        "relative_observation_id": "RELATIVE:fixture",
+        "code": "510300.XSHG",
+    }
+    monkeypatch.setattr(
+        strategy, "register_relative_observation_event",
+        lambda value: (_ for _ in ()).throw(RuntimeError("ordinary")),
+    )
+    assert strategy.try_register_relative_observation_event(observation) is False
+
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future registration")
+    monkeypatch.setattr(
+        strategy, "register_relative_observation_event",
+        lambda value: (_ for _ in ()).throw(expected),
+    )
+    with pytest.raises(FutureDataError) as raised:
+        strategy.try_register_relative_observation_event(observation)
+    assert raised.value is expected
+
+
+def test_relative_stage_registers_once_for_repeated_observation_and_empty(
+        monkeypatch):
+    observation = {
+        "relative_observation_id": "RELATIVE:fixture",
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": "SOFT_ALL_THREE",
+        "code": "510300.XSHG",
+        "direction": strategy.TurnDirection.BUY_TURN,
+        "signal_date": date(2021, 1, 5),
+        "supporters": ("BOLL", "KDJ", "RSI"),
+        "supporter_event_dates": {
+            "BOLL": date(2021, 1, 5),
+            "KDJ": date(2021, 1, 5),
+            "RSI": date(2021, 1, 5),
+        },
+        "hard_or_relative_source_by_indicator": {
+            "BOLL": "RELATIVE", "KDJ": "RELATIVE", "RSI": "RELATIVE",
+        },
+        "expires_date": date(2021, 1, 6),
+        "event_close": 10.0,
+    }
+    runtime = runtime_state()
+    logged = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "collect_relative_resonance_observations",
+        lambda snapshots: [observation],
+    )
+    monkeypatch.setattr(
+        strategy, "log_relative_resonance_observation",
+        lambda value: logged.append(value["relative_observation_id"]),
+    )
+
+    assert strategy.run_relative_observation_stage({}) is None
+    strategy.ensure_runtime_state()
+    assert strategy.run_relative_observation_stage({}) is None
+    assert set(runtime.observation_events) == {"RELATIVE:fixture"}
+    assert logged == ["RELATIVE:fixture"]
+
+    monkeypatch.setattr(
+        strategy, "collect_relative_resonance_observations", lambda snapshots: [],
+    )
+    assert strategy.run_relative_observation_stage({}) is None
+    assert set(runtime.observation_events) == {"RELATIVE:fixture"}
+
+
+def test_relative_outcome_adds_direction_adjusted_return_without_orders(
+        monkeypatch):
+    observation = {
+        "relative_observation_id": "RELATIVE:fixture",
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": "SOFT_ALL_THREE",
+        "code": "510300.XSHG",
+        "direction": strategy.TurnDirection.SELL_TURN,
+        "signal_date": date(2021, 1, 5),
+        "supporters": ("BOLL", "KDJ", "RSI"),
+        "supporter_event_dates": {
+            "BOLL": date(2021, 1, 5),
+            "KDJ": date(2021, 1, 5),
+            "RSI": date(2021, 1, 5),
+        },
+        "hard_or_relative_source_by_indicator": {
+            "BOLL": "RELATIVE", "KDJ": "RELATIVE", "RSI": "RELATIVE",
+        },
+        "expires_date": date(2021, 1, 6),
+        "event_close": 10.0,
+    }
+    runtime = runtime_state()
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: [date(2021, 1, 5), date(2021, 1, 6)],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target", lambda *args: pytest.fail("no sell order"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target_value", lambda *args: pytest.fail("no buy order"),
+        raising=False,
+    )
+    assert strategy.register_relative_observation_event(observation) is True
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-06"),
+        {"510300.XSHG": current_record(price=9.0)},
+    )
+
+    outcome = runtime.observation_events["RELATIVE:fixture"]["outcomes"][1]
+    assert outcome["return"] == pytest.approx(-0.1)
+    assert outcome["direction_adjusted_return"] == pytest.approx(0.1)
+
+
+def test_formal_observation_outcome_log_has_no_relative_contract_fields(
+        monkeypatch):
+    runtime = runtime_state()
+    logs = []
+    decision = {
+        "resonance_id": "formal-fixture",
+        "code": "510300.XSHG",
+    }
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: [date(2021, 1, 5), date(2021, 1, 6)],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: logs.append((event, payload)),
+    )
+    strategy.register_observation_event(decision, date(2021, 1, 5), 10.0)
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-06"),
+        {"510300.XSHG": current_record(price=11.0)},
+    )
+
+    payload = [payload for event, payload in logs
+               if event == "observation_outcome"][0]
+    forbidden = {
+        "relative_observation_id", "observation_kind", "branch",
+        "direction", "supporters", "build", "relative_observation_fingerprint",
+    }
+    assert forbidden.isdisjoint(payload)
+
+
+def test_trading_functions_have_no_relative_observation_dependency():
+    forbidden = {
+        "relative_event_book", "relative_observation_id",
+        "relative_observation", "relative_resonance",
+    }
+    for function in (
+        strategy.run_atr_exits,
+        strategy.collect_complete_resonance_decisions,
+        strategy.collect_buy_decisions,
+        strategy.sort_buy_decisions,
+        strategy.run_signal_exits,
+        strategy.run_signal_buys,
+        strategy.submit_buy,
+        strategy.submit_sell,
+    ):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+        names = {
+            node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+        }
+        strings = {
+            node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        assert forbidden.isdisjoint(names | strings), function.__name__
 
 
 def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(
