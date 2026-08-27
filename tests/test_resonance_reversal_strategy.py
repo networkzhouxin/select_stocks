@@ -267,6 +267,15 @@ def make_event(indicator, direction, event_date, expires_date,
     )
 
 
+def relative_indicator_frame(rows):
+    return pd.DataFrame(
+        rows,
+        index=pd.to_datetime([
+            "2021-01-05", "2021-01-06", "2021-01-07", "2021-01-08",
+        ][:len(rows)]),
+    )
+
+
 @pytest.mark.parametrize(
     "previous,current,expected",
     [
@@ -386,6 +395,81 @@ def test_relative_boll_rejects_zero_width_nonfinite_and_new_extreme():
     assert strategy.detect_relative_boll_direction(
         dict(valid, close=9.6), valid, lower_low,
     ) is strategy.TurnDirection.NEUTRAL
+
+
+def test_relative_event_book_detects_t2_and_t1_from_last_four_complete_bars():
+    rows = [
+        {"rsi14": 50.0, "j": 50.0, "kd_diff": 0.0,
+         "close": 9.8, "low": 9.6, "high": 10.0,
+         "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0},
+        {"rsi14": 45.0, "j": 45.0, "kd_diff": -1.0,
+         "close": 9.4, "low": 9.2, "high": 9.7,
+         "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0},
+        {"rsi14": 46.0, "j": 40.0, "kd_diff": -2.0,
+         "close": 9.0, "low": 8.8, "high": 9.3,
+         "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0},
+        {"rsi14": 47.0, "j": 41.0, "kd_diff": -1.5,
+         "close": 9.2, "low": 8.8, "high": 9.5,
+         "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0},
+    ]
+    frame = relative_indicator_frame(rows)
+
+    book = strategy.collect_latest_relative_events(
+        frame, date(2021, 1, 8), date(2021, 1, 11),
+    )
+
+    assert book is not strategy.empty_event_book()
+    assert book["active"]["RSI"]["event_date"] == date(2021, 1, 7)
+    assert book["active"]["KDJ"]["event_date"] == date(2021, 1, 8)
+    assert book["active"]["BOLL"]["event_date"] == date(2021, 1, 8)
+    assert all(
+        event["event_mode"] == "RELATIVE"
+        for event in book["active"].values()
+    )
+    assert book["active"]["BOLL"]["reference_extreme"] == pytest.approx(8.8)
+
+
+def test_relative_opposite_event_replaces_only_relative_book():
+    relative_book = strategy.empty_event_book()
+    hard_book = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-07",
+    )
+    strategy.apply_event(relative_book, strategy.make_relative_turn_event(
+        "RSI", strategy.TurnDirection.BUY_TURN,
+        "2021-01-07", "2021-01-08", {"fixture": "buy"},
+    ))
+    strategy.apply_event(relative_book, strategy.make_relative_turn_event(
+        "RSI", strategy.TurnDirection.SELL_TURN,
+        "2021-01-08", "2021-01-11", {"fixture": "sell"},
+    ))
+
+    assert relative_book["active"]["RSI"]["direction"] is (
+        strategy.TurnDirection.SELL_TURN
+    )
+    assert relative_book["invalidated"][-1]["invalid_reason"] == (
+        "REPLACED_BY_OPPOSITE_EVENT"
+    )
+    assert hard_book["active"]["RSI"]["direction"] is (
+        strategy.TurnDirection.BUY_TURN
+    )
+
+
+def test_relative_boll_invalidates_on_new_extreme_without_band_requirement():
+    book = strategy.empty_event_book()
+    strategy.apply_event(book, strategy.make_relative_turn_event(
+        "BOLL", strategy.TurnDirection.BUY_TURN,
+        "2021-01-07", "2021-01-08", {"fixture": True},
+        reference_extreme=8.8,
+    ))
+
+    strategy.invalidate_relative_boll_structure(
+        book, {"low": 8.7, "high": 9.5},
+    )
+
+    assert "BOLL" not in book["active"]
+    assert book["invalidated"][-1]["invalid_reason"] == (
+        "NEW_LOWER_LOW_AFTER_RELATIVE_TURN"
+    )
 
 
 def test_opposite_event_replaces_old_event_with_auditable_reason():

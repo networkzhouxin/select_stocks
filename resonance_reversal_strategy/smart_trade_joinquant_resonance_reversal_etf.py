@@ -1387,6 +1387,16 @@ def make_turn_event(indicator, direction, event_date, expires_date,
     }
 
 
+def make_relative_turn_event(indicator, direction, event_date, expires_date,
+                             trigger_values, reference_extreme=None):
+    event = make_turn_event(
+        indicator, direction, event_date, expires_date,
+        trigger_values, reference_extreme,
+    )
+    event["event_mode"] = "RELATIVE"
+    return event
+
+
 def empty_event_book():
     return {"active": {}, "invalidated": []}
 
@@ -1435,6 +1445,28 @@ def invalidate_boll_structure(book, latest_row):
     return None
 
 
+def invalidate_relative_boll_structure(book, latest_row):
+    event = book["active"].get("BOLL")
+    if event is None:
+        return None
+    reference = _finite_float(event.get("reference_extreme"))
+    low = _finite_float(latest_row.get("low"))
+    high = _finite_float(latest_row.get("high"))
+    if reference is None:
+        return invalidate_event(book, "BOLL", "INVALID_RELATIVE_EXTREME")
+    if (event["direction"] is TurnDirection.BUY_TURN
+            and low is not None and low < reference):
+        return invalidate_event(
+            book, "BOLL", "NEW_LOWER_LOW_AFTER_RELATIVE_TURN",
+        )
+    if (event["direction"] is TurnDirection.SELL_TURN
+            and high is not None and high > reference):
+        return invalidate_event(
+            book, "BOLL", "NEW_HIGHER_HIGH_AFTER_RELATIVE_TURN",
+        )
+    return None
+
+
 def _trigger_values(indicator, previous, current):
     fields_by_indicator = {
         "BOLL": ("low", "high", "close", "boll_lower", "boll_upper"),
@@ -1464,6 +1496,79 @@ def _make_detected_event(indicator, direction, previous, current,
         trigger_values=_trigger_values(indicator, previous, current),
         reference_extreme=reference_extreme,
     )
+
+
+def _relative_trigger_values(indicator, older, middle, current):
+    fields_by_indicator = {
+        "RSI": ("rsi14",),
+        "KDJ": ("j", "kd_diff"),
+        "BOLL": (
+            "low", "high", "close", "boll_mid",
+            "boll_lower", "boll_upper",
+        ),
+    }
+    fields = fields_by_indicator[indicator]
+    return {
+        "older": {name: older.get(name) for name in fields},
+        "middle": {name: middle.get(name) for name in fields},
+        "current": {name: current.get(name) for name in fields},
+    }
+
+
+def _make_detected_relative_event(indicator, direction, older, middle,
+                                  current, event_date, expires_date):
+    reference_extreme = None
+    if indicator == "BOLL":
+        reference_extreme = (
+            middle.get("low")
+            if direction is TurnDirection.BUY_TURN
+            else middle.get("high")
+        )
+    return make_relative_turn_event(
+        indicator, direction, event_date, expires_date,
+        _relative_trigger_values(indicator, older, middle, current),
+        reference_extreme,
+    )
+
+
+def collect_latest_relative_events(indicator_frame, signal_date,
+                                   decision_date):
+    signal_date = _calendar_date(signal_date)
+    decision_date = _calendar_date(decision_date)
+    frame_dates = tuple(
+        _calendar_date(index_value) for index_value in indicator_frame.index
+    )
+    complete_frame = indicator_frame.loc[[
+        frame_date is not None and frame_date <= signal_date
+        for frame_date in frame_dates
+    ]]
+    book = empty_event_book()
+    first_event_position = max(2, len(complete_frame) - 2)
+    for position in range(first_event_position, len(complete_frame)):
+        older = complete_frame.iloc[position - 2]
+        middle = complete_frame.iloc[position - 1]
+        current = complete_frame.iloc[position]
+        event_date = _calendar_date(complete_frame.index[position])
+        expires_date = (
+            _calendar_date(complete_frame.index[position + 1])
+            if position + 1 < len(complete_frame) else decision_date
+        )
+        expire_events(book, event_date)
+        directions = {
+            "BOLL": detect_relative_boll_direction(older, middle, current),
+            "RSI": detect_relative_rsi_direction(older, middle, current),
+            "KDJ": detect_relative_kdj_direction(older, middle, current),
+        }
+        for indicator in INDICATORS:
+            direction = directions[indicator]
+            if direction is not TurnDirection.NEUTRAL:
+                apply_event(book, _make_detected_relative_event(
+                    indicator, direction, older, middle, current,
+                    event_date, expires_date,
+                ))
+        invalidate_relative_boll_structure(book, current)
+    expire_events(book, signal_date)
+    return book
 
 
 def collect_latest_events(indicator_frame, signal_date, decision_date):
