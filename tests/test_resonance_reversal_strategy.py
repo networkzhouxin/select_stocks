@@ -25,6 +25,27 @@ EXPECTED_POOL = [
 ]
 
 
+def fake_position(amount):
+    return types.SimpleNamespace(total_amount=amount)
+
+
+def fake_context(previous_date="2021-01-05", current_date="2021-01-06",
+                 positions=None, total_value=20000.0, available_cash=20000.0):
+    return types.SimpleNamespace(
+        previous_date=previous_date,
+        current_dt=pd.Timestamp(current_date),
+        portfolio=types.SimpleNamespace(
+            positions={} if positions is None else positions,
+            total_value=total_value,
+            available_cash=available_cash,
+        ),
+    )
+
+
+def current_record(price=10.0, paused=False):
+    return types.SimpleNamespace(last_price=price, paused=paused)
+
+
 def test_default_contract_is_frozen():
     assert strategy.STRATEGY_VERSION == "resonance-v0.1.0"
     assert strategy.get_default_etf_pool() == EXPECTED_POOL
@@ -81,8 +102,14 @@ def test_ensure_runtime_state_initializes_required_state(monkeypatch):
 def test_do_trading_initializes_runtime_state(monkeypatch):
     runtime = types.SimpleNamespace()
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
+    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: set(), raising=False)
+    monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {}, raising=False)
+    monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set(), raising=False)
+    monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [], raising=False)
 
-    strategy.do_trading(types.SimpleNamespace())
+    strategy.do_trading(fake_context())
 
     assert runtime.etf_pool == EXPECTED_POOL
     assert runtime.position_states == {}
@@ -91,8 +118,9 @@ def test_do_trading_initializes_runtime_state(monkeypatch):
 def test_after_close_initializes_runtime_state(monkeypatch):
     runtime = types.SimpleNamespace()
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
 
-    strategy.after_close(types.SimpleNamespace())
+    strategy.after_close(fake_context())
 
     assert runtime.etf_pool == EXPECTED_POOL
     assert runtime.observation_events == {}
@@ -577,6 +605,7 @@ def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
     assert runtime.state_date == "2021-01-06"
     assert runtime.sold_today == set()
     assert runtime.daily_attempted_buys == set()
+    assert runtime.daily_retried_exits == set()
 
 
 @pytest.mark.parametrize(
@@ -795,3 +824,751 @@ def test_flat_position_clears_only_its_risk_state(monkeypatch):
 
     assert strategy.clear_position_state_if_flat("510300.XSHG", actual_amount=0)
     assert runtime.position_states == {}
+
+
+def resonance_snapshot(code, direction="BUY_TURN", signal_date="2021-01-05",
+                       support_count=2):
+    kdj = direction if support_count == 3 else "NEUTRAL"
+    book = event_book_for_directions(
+        direction, direction, kdj, signal_date,
+    )
+    return {
+        "code": code,
+        "valid": True,
+        "signal_date": signal_date,
+        "close": 10.0,
+        "entry_atr": 1.0,
+        "event_book": book,
+        "trade_values": {"atr14": 1.0},
+        "observation_values": {"rsi6": 20.0},
+    }
+
+
+def runtime_state(max_holdings=3, position_states=None, processed=None,
+                  sold=None, attempted=None, retried=None):
+    params = strategy.get_default_params()
+    params["max_holdings"] = max_holdings
+    return types.SimpleNamespace(
+        params=params,
+        etf_pool=list(EXPECTED_POOL),
+        position_states={} if position_states is None else position_states,
+        processed_resonance_ids={} if processed is None else processed,
+        observation_events={},
+        sold_today=set() if sold is None else sold,
+        daily_attempted_buys=set() if attempted is None else attempted,
+        daily_retried_exits=set() if retried is None else retried,
+    )
+
+
+def test_signal_loader_is_strictly_t_minus_one(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        strategy, "get_price",
+        lambda code, **kw: calls.append((code, kw)) or make_ohlcv_frame(120),
+        raising=False,
+    )
+
+    strategy.load_signal_price_frame("510300.XSHG", "2021-01-05", 120)
+
+    assert calls == [("510300.XSHG", {
+        "end_date": "2021-01-05",
+        "count": 120,
+        "frequency": "daily",
+        "fields": ["open", "high", "low", "close", "volume"],
+        "skip_paused": True,
+        "fq": "pre",
+        "panel": False,
+    })]
+
+
+def test_signal_loader_propagates_future_data_error(monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future boundary")
+
+    def reject_future_access(*args, **kwargs):
+        raise expected
+
+    monkeypatch.setattr(strategy, "get_price", reject_future_access, raising=False)
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.load_signal_price_frame("510300.XSHG", "2021-01-05", 120)
+
+    assert raised.value is expected
+
+
+def test_build_signal_snapshot_rejects_insufficient_data_before_indicators(
+        monkeypatch):
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: make_ohlcv_frame(119),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_indicator_frame",
+        lambda *args: pytest.fail("insufficient data must not build indicators"),
+    )
+
+    snapshot = strategy.build_signal_snapshot(
+        "510300.XSHG", "2021-01-05", strategy.get_default_params(),
+        "2021-01-06",
+    )
+
+    assert snapshot == {
+        "code": "510300.XSHG",
+        "valid": False,
+        "reason": "INSUFFICIENT_DATA",
+    }
+
+
+def test_build_signal_snapshot_keeps_observations_out_of_event_builder(
+        monkeypatch):
+    frame = make_ohlcv_frame(120)
+    signal_date = frame.index[-1]
+    captured = []
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: frame, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_events",
+        lambda indicators, date, next_date: captured.append(
+            (indicators, date, next_date)
+        ) or strategy.empty_event_book(),
+    )
+
+    snapshot = strategy.build_signal_snapshot(
+        "510300.XSHG", signal_date, strategy.get_default_params(),
+        signal_date + pd.offsets.BDay(1),
+    )
+
+    assert snapshot["valid"] is True
+    assert snapshot["signal_date"] == signal_date
+    assert snapshot["close"] == pytest.approx(20.0)
+    assert set(snapshot["trade_values"]) == set(strategy.TRADE_INDICATOR_COLUMNS)
+    assert set(snapshot["observation_values"]) == set(strategy.OBSERVATION_COLUMNS)
+    assert captured[0][1:] == (signal_date, signal_date + pd.offsets.BDay(1))
+
+
+def test_build_signal_snapshots_uses_trading_calendar_for_next_session(
+        monkeypatch):
+    calendar_calls = []
+    snapshot_calls = []
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kw: calendar_calls.append(kw) or [
+            pd.Timestamp("2021-01-08"), pd.Timestamp("2021-01-11"),
+        ],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshot",
+        lambda code, prev, params, next_date: snapshot_calls.append(
+            (code, prev, next_date)
+        ) or {"code": code, "valid": False},
+        raising=False,
+    )
+
+    snapshots = strategy.build_signal_snapshots(
+        pd.Timestamp("2021-01-08"), strategy.get_default_params(),
+    )
+
+    assert calendar_calls == [{
+        "start_date": pd.Timestamp("2021-01-08"), "count": 2,
+    }]
+    assert list(snapshots) == EXPECTED_POOL
+    assert snapshot_calls == [
+        (code, pd.Timestamp("2021-01-08"), pd.Timestamp("2021-01-11"))
+        for code in EXPECTED_POOL
+    ]
+
+
+def test_do_trading_stage_order_has_no_broad_early_return(monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        strategy, "reset_daily_state", lambda *args: order.append("reset"),
+    )
+    monkeypatch.setattr(
+        strategy, "retry_pending_exits", lambda *args: order.append("pending"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: order.append("atr"), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshots",
+        lambda *args: order.append("signals") or {}, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_exits",
+        lambda *args: order.append("signal_sells"), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_buys", lambda *args: order.append("buys"),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+
+    strategy.do_trading(fake_context())
+
+    assert order == [
+        "reset", "pending", "atr", "signals", "signal_sells", "buys",
+    ]
+
+
+def test_atr_before_insufficient_signal_data_still_runs(monkeypatch):
+    order = []
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(strategy, "reset_daily_state", lambda *args: None)
+    monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: order.append("atr") or set(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshots",
+        lambda *args: order.append("insufficient") or {
+            "510300.XSHG": {"code": "510300.XSHG", "valid": False},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set(), raising=False)
+    monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [], raising=False)
+
+    strategy.do_trading(fake_context())
+
+    assert order == ["atr", "insufficient"]
+
+
+@pytest.mark.parametrize(
+    "record,expected_tradability,expected_price",
+    [
+        (None, "UNKNOWN", None),
+        (types.SimpleNamespace(paused=True, last_price=10.0), "PAUSED", 10.0),
+        (types.SimpleNamespace(paused=False, last_price=10.0), "TRADEABLE", 10.0),
+        (types.SimpleNamespace(paused=False, last_price=0.0), "TRADEABLE", None),
+        (types.SimpleNamespace(paused=False, last_price=float("nan")), "TRADEABLE", None),
+    ],
+)
+def test_platform_position_tradability_and_execution_price_boundaries(
+        record, expected_tradability, expected_price):
+    code = "510300.XSHG"
+    current_data = {} if record is None else {code: record}
+    context = fake_context(positions={
+        code: fake_position(100), "159915.XSHE": fake_position(0),
+    })
+
+    assert strategy.get_actual_positions(context) == {code: context.portfolio.positions[code]}
+    assert strategy.get_actual_amount(context, code) == 100
+    assert strategy.get_actual_amount(context, "159915.XSHE") == 0
+    assert strategy.get_tradability(current_data, code) is strategy.Tradability[
+        expected_tradability
+    ]
+    if expected_price is None:
+        assert strategy.get_execution_price(current_data, code) is None
+    else:
+        assert strategy.get_execution_price(current_data, code) == pytest.approx(
+            expected_price
+        )
+
+
+def test_after_close_cleans_only_actual_flats_and_updates_held_close_anchor(
+        monkeypatch):
+    held = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 1.0, 10.0)
+    flat = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 20.0)
+    runtime = runtime_state(position_states={
+        "510300.XSHG": held, "159915.XSHE": flat,
+    })
+    context = fake_context(positions={"510300.XSHG": fake_position(100)})
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_current_data",
+        lambda: {"510300.XSHG": current_record(12.0)}, raising=False,
+    )
+
+    strategy.after_close(context)
+
+    assert runtime.position_states == {"510300.XSHG": held}
+    assert held["highest_close_anchor"] == pytest.approx(12.0)
+    assert held["entry_atr"] == pytest.approx(1.0)
+
+
+def test_submit_buy_uses_current_account_values_and_actual_partial_fill(
+        monkeypatch):
+    code = "510300.XSHG"
+    runtime = runtime_state()
+    context = fake_context(total_value=30000.0, available_cash=4000.0)
+    current_data = {code: current_record(11.0)}
+    target_values = []
+
+    def partial_order(order_code, target_value):
+        target_values.append((order_code, target_value))
+        context.portfolio.positions[code] = fake_position(50)
+        return types.SimpleNamespace(amount=100, filled=50)
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
+    monkeypatch.setattr(strategy, "order_target_value", partial_order, raising=False)
+    snapshot = resonance_snapshot(code)
+    snapshot["entry_atr"] = 2.5
+    decision = strategy.build_resonance_decision(
+        code, strategy.TurnDirection.BUY_TURN,
+        snapshot["event_book"], snapshot["signal_date"],
+    )
+
+    outcome = strategy.submit_buy(context, code, snapshot, decision)
+
+    assert outcome is strategy.OrderOutcome.PARTIAL
+    assert target_values[0][0] == code
+    assert target_values[0][1] == pytest.approx(2500.0)
+    assert runtime.position_states[code] == {
+        "buy_date": pd.Timestamp("2021-01-06").date(),
+        "entry_atr": 2.5,
+        "highest_close_anchor": 11.0,
+        "pending_exit": None,
+    }
+
+
+def test_invalid_quote_buy_consumes_slot_without_order_or_backfill(monkeypatch):
+    first, second = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=1)
+    context = fake_context()
+    current_data = {
+        first: current_record(float("nan")), second: current_record(10.0),
+    }
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
+    monkeypatch.setattr(
+        strategy, "order_target_value",
+        lambda *args: pytest.fail("invalid quote must not submit an order"),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context, current_data,
+        {first: resonance_snapshot(first), second: resonance_snapshot(second)},
+    )
+
+    assert results == [(first, strategy.OrderOutcome.NOT_FILLED)]
+    assert runtime.daily_attempted_buys == {first}
+    assert len(runtime.processed_resonance_ids) == 1
+
+
+def test_current_price_changes_entry_anchor_but_not_target_formula(monkeypatch):
+    targets = []
+    anchors = []
+    code = "510300.XSHG"
+    snapshot = resonance_snapshot(code)
+    decision = strategy.build_resonance_decision(
+        code, strategy.TurnDirection.BUY_TURN,
+        snapshot["event_book"], snapshot["signal_date"],
+    )
+
+    for price in (10.0, 20.0):
+        runtime = runtime_state()
+        context = fake_context()
+        current_data = {code: current_record(price)}
+
+        def filled_order(order_code, target_value):
+            targets.append(target_value)
+            context.portfolio.positions[code] = fake_position(100)
+            return types.SimpleNamespace(amount=100, filled=100)
+
+        monkeypatch.setattr(strategy, "g", runtime, raising=False)
+        monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
+        monkeypatch.setattr(strategy, "order_target_value", filled_order, raising=False)
+
+        strategy.submit_buy(context, code, snapshot, decision)
+        anchors.append(runtime.position_states[code]["highest_close_anchor"])
+
+    assert targets == [pytest.approx(20000.0 * 0.95 / 3)] * 2
+    assert anchors == [10.0, 20.0]
+
+
+def test_submit_sell_preserves_exit_reason_and_clears_only_actual_zero(
+        monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 1.0, 10.0)
+    runtime = runtime_state(position_states={code: state})
+    context = fake_context(positions={code: fake_position(100)})
+    current_data = {code: current_record(9.0)}
+    orders = []
+
+    def filled_sell(order_code, target_amount):
+        orders.append((order_code, target_amount))
+        context.portfolio.positions.pop(code)
+        return types.SimpleNamespace(amount=-100, filled=-100)
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
+    monkeypatch.setattr(strategy, "order_target", filled_sell, raising=False)
+
+    outcome = strategy.submit_sell(
+        context, code, strategy.ExitReason.ATR_EXIT, 9.5,
+    )
+
+    assert outcome is strategy.OrderOutcome.FILLED
+    assert orders == [(code, 0)]
+    assert runtime.position_states == {}
+    assert runtime.sold_today == {code}
+
+
+def test_atr_exit_marks_sold_and_blocks_same_day_resonance_rebuy(monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 100.0)
+    runtime = runtime_state(max_holdings=1, position_states={code: state})
+    context = fake_context(positions={code: fake_position(100)})
+    current_data = {code: current_record(90.0)}
+
+    def filled_sell(order_code, target_amount):
+        context.portfolio.positions.pop(code)
+        return types.SimpleNamespace(amount=-100, filled=-100)
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
+    monkeypatch.setattr(strategy, "order_target", filled_sell, raising=False)
+    monkeypatch.setattr(
+        strategy, "order_target_value",
+        lambda *args: pytest.fail("ATR-sold code must not be bought back today"),
+        raising=False,
+    )
+
+    attempted = strategy.run_atr_exits(context, current_data)
+    buy_results = strategy.run_signal_buys(
+        context, current_data, {code: resonance_snapshot(code)},
+    )
+
+    assert attempted == {code}
+    assert runtime.sold_today == {code}
+    assert buy_results == []
+
+
+def test_pending_retry_then_atr_upgrades_reason_without_duplicate_sell(
+        monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 100.0)
+    strategy.set_pending_exit(
+        state, strategy.ExitReason.SIGNAL_EXIT,
+        pd.Timestamp("2021-01-06").date(), 99.0, 100,
+    )
+    runtime = runtime_state(position_states={code: state})
+    context = fake_context(positions={code: fake_position(100)})
+    current_data = {code: current_record(90.0)}
+    sell_calls = []
+
+    def pending_retry(*args):
+        sell_calls.append(args[1:])
+        return strategy.OrderOutcome.NOT_FILLED
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "submit_sell", pending_retry, raising=False)
+
+    retry_results = strategy.retry_pending_exits(context, current_data)
+    atr_attempts = strategy.run_atr_exits(context, current_data)
+
+    assert retry_results == [(code, strategy.OrderOutcome.NOT_FILLED)]
+    assert atr_attempts == set()
+    assert len(sell_calls) == 1
+    assert state["pending_exit"] == {
+        "created_date": pd.Timestamp("2021-01-06").date(),
+        "reason": strategy.ExitReason.ATR_EXIT,
+        "trigger_value": 95.0,
+        "remaining_amount": 100,
+    }
+
+
+def test_pending_retry_code_cannot_receive_second_signal_sell(monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 1.0, 10.0)
+    runtime = runtime_state(
+        position_states={code: state}, retried={code},
+    )
+    context = fake_context(positions={code: fake_position(100)})
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_sell",
+        lambda *args: pytest.fail("retried pending exit cannot sell twice"),
+        raising=False,
+    )
+
+    attempted = strategy.run_signal_exits(
+        context, {code: current_record(10.0)},
+        {code: resonance_snapshot(code, direction="SELL_TURN")},
+    )
+
+    assert attempted == set()
+
+
+def test_atr_pending_exit_overrides_signal_without_second_sell(monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 100.0)
+    runtime = runtime_state(position_states={code: state})
+    context = fake_context(positions={code: fake_position(100)})
+    current_data = {code: current_record(90.0)}
+    sell_calls = []
+
+    def not_filled_atr(context_arg, order_code, reason, trigger_value):
+        sell_calls.append((order_code, reason, trigger_value))
+        if len(sell_calls) > 1:
+            pytest.fail("ATR pending exit must override the ordinary signal sell")
+        return strategy.sync_sell_state_after_order(
+            order_code, strategy.OrderOutcome.NOT_FILLED, reason,
+            context_arg.current_dt.date(), trigger_value, actual_amount=100,
+        )
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "submit_sell", not_filled_atr, raising=False)
+
+    atr_attempts = strategy.run_atr_exits(context, current_data)
+    signal_attempts = strategy.run_signal_exits(
+        context, current_data,
+        {code: resonance_snapshot(code, direction="SELL_TURN")},
+    )
+
+    assert atr_attempts == {code}
+    assert signal_attempts == set()
+    assert sell_calls == [(code, strategy.ExitReason.ATR_EXIT, 95.0)]
+
+
+def test_ordinary_sell_rereads_actual_positions_before_buy_slots(monkeypatch):
+    held, candidate = "510300.XSHG", "159915.XSHE"
+    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 1.0, 10.0)
+    runtime = runtime_state(max_holdings=1, position_states={held: state})
+    context = fake_context(positions={held: fake_position(100)})
+    current_data = {
+        held: current_record(10.0), candidate: current_record(5.0),
+    }
+    sold = []
+    bought = []
+
+    def sell_and_refresh(context_arg, code, reason, trigger_value):
+        sold.append((code, reason, trigger_value))
+        context_arg.portfolio.positions.pop(code)
+        return strategy.OrderOutcome.FILLED
+
+    def buy_after_refresh(context_arg, code, snapshot, decision):
+        bought.append(code)
+        return strategy.OrderOutcome.FILLED
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "submit_sell", sell_and_refresh, raising=False)
+    monkeypatch.setattr(strategy, "submit_buy", buy_after_refresh, raising=False)
+
+    snapshots = {
+        held: resonance_snapshot(held, direction="SELL_TURN"),
+        candidate: resonance_snapshot(candidate),
+    }
+    sell_attempts = strategy.run_signal_exits(context, current_data, snapshots)
+    buy_results = strategy.run_signal_buys(context, current_data, snapshots)
+
+    assert sell_attempts == {held}
+    assert sold == [(held, strategy.ExitReason.SIGNAL_EXIT, 10.0)]
+    assert buy_results == [(candidate, strategy.OrderOutcome.FILLED)]
+    assert bought == [candidate]
+
+
+def test_paused_buy_candidate_does_not_consume_slot_and_backfills(monkeypatch):
+    paused, backfill = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=1)
+    context = fake_context()
+    current_data = {
+        paused: current_record(5.0, paused=True),
+        backfill: current_record(10.0),
+    }
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context_arg, code, snapshot, decision: submitted.append(code)
+        or strategy.OrderOutcome.FILLED,
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context, current_data,
+        {paused: resonance_snapshot(paused), backfill: resonance_snapshot(backfill)},
+    )
+
+    assert results == [
+        (paused, strategy.OrderOutcome.PAUSED),
+        (backfill, strategy.OrderOutcome.FILLED),
+    ]
+    assert submitted == [backfill]
+    assert runtime.daily_attempted_buys == {backfill}
+    assert len(runtime.processed_resonance_ids) == 1
+
+
+def test_unknown_buy_candidate_consumes_slot_without_backfill(monkeypatch):
+    unknown, lower = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=1)
+    context = fake_context()
+    current_data = {lower: current_record(10.0)}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: pytest.fail("unknown first candidate consumes the only slot"),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context, current_data,
+        {unknown: resonance_snapshot(unknown), lower: resonance_snapshot(lower)},
+    )
+
+    assert results == [(unknown, strategy.OrderOutcome.UNKNOWN)]
+    assert runtime.daily_attempted_buys == {unknown}
+    assert len(runtime.processed_resonance_ids) == 1
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        strategy.OrderOutcome.NOT_FILLED,
+        strategy.OrderOutcome.PARTIAL,
+        strategy.OrderOutcome.FILLED,
+    ],
+)
+def test_nonpaused_buy_attempt_outcomes_consume_one_slot_without_chasing(
+        monkeypatch, outcome):
+    first, lower = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=1)
+    context = fake_context()
+    current_data = {first: current_record(5.0), lower: current_record(10.0)}
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context_arg, code, snapshot, decision: submitted.append(code) or outcome,
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context, current_data,
+        {first: resonance_snapshot(first), lower: resonance_snapshot(lower)},
+    )
+
+    assert results == [(first, outcome)]
+    assert submitted == [first]
+    assert runtime.daily_attempted_buys == {first}
+    assert len(runtime.processed_resonance_ids) == 1
+
+
+def test_full_portfolio_never_replaces_or_tops_up_held_resonance(monkeypatch):
+    held_codes = ["510300.XSHG", "159915.XSHE", "512100.XSHG"]
+    positions = {code: fake_position(100) for code in held_codes}
+    runtime = runtime_state(max_holdings=3)
+    context = fake_context(positions=positions)
+    snapshots = {
+        held_codes[0]: resonance_snapshot(held_codes[0], support_count=3),
+        "513100.XSHG": resonance_snapshot("513100.XSHG", support_count=3),
+    }
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: pytest.fail("full portfolio must not replace or top up"),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context,
+        {code: current_record(10.0) for code in snapshots},
+        snapshots,
+    )
+
+    assert results == []
+    assert runtime.daily_attempted_buys == set()
+    assert runtime.processed_resonance_ids == {}
+
+
+def test_held_sold_attempted_and_processed_candidates_are_skipped(monkeypatch):
+    held = "159915.XSHE"
+    sold = "510300.XSHG"
+    attempted = "510880.XSHG"
+    processed = "512100.XSHG"
+    eligible = "513100.XSHG"
+    snapshots = {
+        code: resonance_snapshot(code)
+        for code in (held, sold, attempted, processed, eligible)
+    }
+    processed_decision = strategy.build_resonance_decision(
+        processed, strategy.TurnDirection.BUY_TURN,
+        snapshots[processed]["event_book"], snapshots[processed]["signal_date"],
+    )
+    runtime = runtime_state(
+        max_holdings=3,
+        processed={
+            processed_decision["resonance_id"]: processed_decision["expires_date"],
+        },
+        sold={sold}, attempted={attempted},
+    )
+    context = fake_context(positions={held: fake_position(100)})
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context_arg, code, snapshot, decision: submitted.append(code)
+        or strategy.OrderOutcome.FILLED,
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context,
+        {code: current_record(10.0) for code in snapshots},
+        snapshots,
+    )
+
+    assert results == [(eligible, strategy.OrderOutcome.FILLED)]
+    assert submitted == [eligible]
+
+
+def test_processed_resonance_id_prevents_duplicate_buy_submission(monkeypatch):
+    code = "510300.XSHG"
+    snapshot = resonance_snapshot(code)
+    decision = strategy.build_resonance_decision(
+        code, strategy.TurnDirection.BUY_TURN,
+        snapshot["event_book"], snapshot["signal_date"],
+    )
+    runtime = runtime_state(processed={
+        decision["resonance_id"]: decision["expires_date"],
+    })
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: pytest.fail("processed resonance must not resubmit"),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        fake_context(), {code: current_record(10.0)}, {code: snapshot},
+    )
+
+    assert results == []
+
+
+def test_current_quote_does_not_change_frozen_buy_candidate_order(monkeypatch):
+    first, second = "159915.XSHE", "510300.XSHG"
+    snapshots = {
+        first: resonance_snapshot(first, support_count=3),
+        second: resonance_snapshot(second, support_count=2),
+    }
+    observed_orders = []
+
+    for prices in ((1.0, 100.0), (100.0, 1.0)):
+        runtime = runtime_state(max_holdings=2)
+        context = fake_context()
+        submitted = []
+        current_data = {
+            first: current_record(prices[0]), second: current_record(prices[1]),
+        }
+        monkeypatch.setattr(strategy, "g", runtime, raising=False)
+        monkeypatch.setattr(
+            strategy, "submit_buy",
+            lambda context_arg, code, snapshot, decision: submitted.append(code)
+            or strategy.OrderOutcome.NOT_FILLED,
+            raising=False,
+        )
+
+        strategy.run_signal_buys(context, current_data, snapshots)
+        observed_orders.append(submitted)
+
+    assert observed_orders == [[first, second], [first, second]]

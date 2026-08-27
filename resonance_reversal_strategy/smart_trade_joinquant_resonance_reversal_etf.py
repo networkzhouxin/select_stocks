@@ -127,14 +127,33 @@ def ensure_runtime_state():
         g.sold_today = set()
     if not hasattr(g, "daily_attempted_buys"):
         g.daily_attempted_buys = set()
+    if not hasattr(g, "daily_retried_exits"):
+        g.daily_retried_exits = set()
 
 
 def do_trading(context):
     ensure_runtime_state()
+    decision_date = context.current_dt.date()
+    signal_date = context.previous_date
+    reset_daily_state(decision_date, signal_date)
+    current_data = get_current_data()
+    retry_pending_exits(context, current_data)
+    run_atr_exits(context, current_data)
+    snapshots = build_signal_snapshots(signal_date, g.params)
+    run_signal_exits(context, current_data, snapshots)
+    run_signal_buys(context, current_data, snapshots)
 
 
 def after_close(context):
     ensure_runtime_state()
+    current_data = get_current_data()
+    for code, state in list(g.position_states.items()):
+        actual_amount = get_actual_amount(context, code)
+        if actual_amount == 0:
+            clear_position_state_if_flat(code, actual_amount)
+            continue
+        closing_price = get_execution_price(current_data, code)
+        update_highest_close_anchor(state, closing_price)
 
 
 def initialize(context):
@@ -162,6 +181,66 @@ import numpy as np
 import pandas as pd
 
 
+def load_signal_price_frame(code, prev_date, lookback_days):
+    return get_price(
+        code,
+        end_date=prev_date,
+        count=lookback_days,
+        frequency="daily",
+        fields=["open", "high", "low", "close", "volume"],
+        skip_paused=True,
+        fq="pre",
+        panel=False,
+    )
+
+
+def get_next_trade_date(signal_date):
+    trade_days = get_trade_days(start_date=signal_date, count=2)
+    return trade_days[-1]
+
+
+def build_signal_snapshot(code, prev_date, params, next_trade_date):
+    price_frame = load_signal_price_frame(
+        code, prev_date, params["lookback_days"],
+    )
+    if price_frame is None or len(price_frame) < params["lookback_days"]:
+        return {"code": code, "valid": False, "reason": "INSUFFICIENT_DATA"}
+
+    indicators = build_indicator_frame(price_frame, params)
+    latest = indicators.iloc[-1]
+    required = list(TRADE_INDICATOR_COLUMNS)
+    if latest[required].isna().any() or latest["atr14"] <= 0:
+        return {
+            "code": code,
+            "valid": False,
+            "reason": "INVALID_TRADE_INDICATORS",
+        }
+
+    event_book = collect_latest_events(
+        indicators, prev_date, next_trade_date,
+    )
+    return {
+        "code": code,
+        "valid": True,
+        "signal_date": prev_date,
+        "close": float(latest["close"]),
+        "entry_atr": float(latest["atr14"]),
+        "event_book": event_book,
+        "trade_values": latest[required].to_dict(),
+        "observation_values": latest[list(OBSERVATION_COLUMNS)].to_dict(),
+    }
+
+
+def build_signal_snapshots(prev_date, params):
+    next_trade_date = get_next_trade_date(prev_date)
+    snapshots = {}
+    for code in get_default_etf_pool():
+        snapshots[code] = build_signal_snapshot(
+            code, prev_date, params, next_trade_date,
+        )
+    return snapshots
+
+
 def calc_buy_target_value(total_value, available_cash, params):
     standard_target = (
         total_value * params["target_exposure"] / params["max_holdings"]
@@ -181,6 +260,43 @@ def calc_stop_state(highest_close_anchor, entry_atr, params):
         "stop_pct": stop_pct,
         "stop_price": highest_close_anchor * (1.0 - stop_pct),
     }
+
+
+def get_actual_amount(context, code):
+    position = context.portfolio.positions.get(code)
+    if position is None:
+        return 0
+    return max(0, int(getattr(position, "total_amount", 0) or 0))
+
+
+def get_actual_positions(context):
+    return {
+        code: position
+        for code, position in context.portfolio.positions.items()
+        if get_actual_amount(context, code) > 0
+    }
+
+
+def get_tradability(current_data, code):
+    record = current_data.get(code) if current_data is not None else None
+    if record is None:
+        return Tradability.UNKNOWN
+    paused = getattr(record, "paused", None)
+    if paused is True:
+        return Tradability.PAUSED
+    if paused is False:
+        return Tradability.TRADEABLE
+    return Tradability.UNKNOWN
+
+
+def get_execution_price(current_data, code):
+    record = current_data.get(code) if current_data is not None else None
+    if record is None:
+        return None
+    price = getattr(record, "last_price", None)
+    if price is None or pd.isna(price) or price <= 0:
+        return None
+    return float(price)
 
 
 def make_position_state(buy_date, entry_atr, entry_price):
@@ -231,12 +347,64 @@ def sync_sell_state_after_order(code, outcome, reason, decision_date,
     return outcome
 
 
+def submit_buy(context, code, snapshot, decision):
+    current_data = get_current_data()
+    tradability = get_tradability(current_data, code)
+    before_amount = get_actual_amount(context, code)
+    execution_price = get_execution_price(current_data, code)
+    order = None
+    target_amount = None
+
+    if tradability is Tradability.TRADEABLE and execution_price is not None:
+        target_value = calc_buy_target_value(
+            context.portfolio.total_value,
+            context.portfolio.available_cash,
+            g.params,
+        )
+        if target_value > 0:
+            order = order_target_value(code, target_value)
+            ordered_amount = getattr(order, "amount", 0) if order is not None else 0
+            if ordered_amount and ordered_amount > 0:
+                target_amount = before_amount + int(ordered_amount)
+
+    after_amount = get_actual_amount(context, code)
+    outcome = classify_order_outcome(
+        OrderSide.BUY, before_amount, after_amount, target_amount,
+        tradability, order,
+    )
+    return sync_buy_state_after_order(
+        code, outcome, before_amount, after_amount,
+        context.current_dt.date(), snapshot["entry_atr"], execution_price,
+    )
+
+
+def submit_sell(context, code, reason, trigger_value):
+    current_data = get_current_data()
+    tradability = get_tradability(current_data, code)
+    before_amount = get_actual_amount(context, code)
+    order = None
+    if before_amount > 0 and tradability is Tradability.TRADEABLE:
+        order = order_target(code, 0)
+    after_amount = get_actual_amount(context, code)
+    outcome = classify_order_outcome(
+        OrderSide.SELL, before_amount, after_amount, 0,
+        tradability, order,
+    )
+    return sync_sell_state_after_order(
+        code, outcome, reason, context.current_dt.date(),
+        trigger_value, after_amount,
+    )
+
+
 def retry_pending_exits(context, current_data):
+    if not hasattr(g, "daily_retried_exits"):
+        g.daily_retried_exits = set()
     results = []
     for code, state in list(g.position_states.items()):
         pending_exit = state.get("pending_exit")
         if pending_exit is None:
             continue
+        g.daily_retried_exits.add(code)
         outcome = submit_sell(
             context, code, pending_exit["reason"],
             pending_exit["trigger_value"],
@@ -262,6 +430,7 @@ def reset_daily_state(decision_date, signal_date):
         g.state_date = decision_date
         g.sold_today = set()
         g.daily_attempted_buys = set()
+        g.daily_retried_exits = set()
     g.processed_resonance_ids = prune_processed_resonance_ids(
         g.processed_resonance_ids, signal_date,
     )
@@ -620,3 +789,118 @@ def prune_processed_resonance_ids(processed, signal_date):
 
 def mark_resonance_processed(processed, decision):
     processed[decision["resonance_id"]] = decision["expires_date"]
+
+
+def collect_buy_decisions(snapshots, actual_positions):
+    decisions = []
+    for code, snapshot in snapshots.items():
+        if not snapshot.get("valid"):
+            continue
+        decision = build_resonance_decision(
+            code, TurnDirection.BUY_TURN,
+            snapshot["event_book"], snapshot["signal_date"],
+        )
+        if decision is not None:
+            decisions.append(decision)
+    return decisions
+
+
+def run_atr_exits(context, current_data):
+    attempted = set()
+    decision_date = context.current_dt.date()
+    retried_codes = getattr(g, "daily_retried_exits", set())
+    for code in get_actual_positions(context):
+        if code in g.sold_today:
+            continue
+        state = g.position_states.get(code)
+        if state is None:
+            continue
+        stop_state = calc_stop_state(
+            state["highest_close_anchor"], state["entry_atr"], g.params,
+        )
+        execution_price = get_execution_price(current_data, code)
+        if (stop_state is None or execution_price is None
+                or execution_price > stop_state["stop_price"]):
+            continue
+        if code in retried_codes:
+            set_pending_exit(
+                state, ExitReason.ATR_EXIT, decision_date,
+                stop_state["stop_price"], get_actual_amount(context, code),
+            )
+            continue
+        submit_sell(
+            context, code, ExitReason.ATR_EXIT, stop_state["stop_price"],
+        )
+        attempted.add(code)
+    return attempted
+
+
+def run_signal_exits(context, current_data, snapshots):
+    attempted = set()
+    decision_date = context.current_dt.date()
+    retried_codes = getattr(g, "daily_retried_exits", set())
+    for code in get_actual_positions(context):
+        if code in g.sold_today or code in retried_codes:
+            continue
+        state = g.position_states.get(code)
+        if state is None or not can_signal_sell(state["buy_date"], decision_date):
+            continue
+        pending_exit = state.get("pending_exit")
+        if (pending_exit is not None
+                and pending_exit["reason"] is ExitReason.ATR_EXIT):
+            continue
+        snapshot = snapshots.get(code)
+        if snapshot is None or not snapshot.get("valid"):
+            continue
+        decision = build_resonance_decision(
+            code, TurnDirection.SELL_TURN,
+            snapshot["event_book"], snapshot["signal_date"],
+        )
+        if decision is None:
+            continue
+        if decision["resonance_id"] in g.processed_resonance_ids:
+            continue
+        tradability = get_tradability(current_data, code)
+        if tradability is Tradability.PAUSED:
+            continue
+        mark_resonance_processed(g.processed_resonance_ids, decision)
+        submit_sell(
+            context, code, ExitReason.SIGNAL_EXIT, snapshot["close"],
+        )
+        attempted.add(code)
+    return attempted
+
+
+def run_signal_buys(context, current_data, snapshots):
+    actual_positions = get_actual_positions(context)
+    remaining_slots = max(
+        0, g.params["max_holdings"] - len(actual_positions),
+    )
+    if remaining_slots == 0:
+        return []
+
+    decisions = collect_buy_decisions(snapshots, actual_positions)
+    results = []
+    for decision in sort_buy_decisions(decisions):
+        if remaining_slots == 0:
+            break
+        code = decision["code"]
+        if (code in actual_positions or code in g.sold_today
+                or code in g.daily_attempted_buys):
+            continue
+        if decision["resonance_id"] in g.processed_resonance_ids:
+            continue
+        tradability = get_tradability(current_data, code)
+        if tradability is Tradability.PAUSED:
+            results.append((code, OrderOutcome.PAUSED))
+            continue
+        mark_resonance_processed(g.processed_resonance_ids, decision)
+        g.daily_attempted_buys.add(code)
+        if tradability is Tradability.UNKNOWN:
+            results.append((code, OrderOutcome.UNKNOWN))
+            remaining_slots -= 1
+            continue
+        outcome = submit_buy(context, code, snapshots[code], decision)
+        results.append((code, outcome))
+        remaining_slots -= 1
+    return results
