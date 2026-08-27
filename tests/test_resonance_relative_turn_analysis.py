@@ -608,7 +608,7 @@ def test_all_signal_date_supporters_do_not_require_predecessor_snapshot():
                    for error in report["data_quality"]["errors"])
 
 
-def test_overlap_uses_baseline_formal_registration_when_candidate_has_none():
+def _candidate_overlapping_baseline_formal():
     candidate = make_candidate_records()
     registration = next(record for record in candidate
                         if record.get("event") == "relative_resonance_observation"
@@ -626,12 +626,47 @@ def test_overlap_uses_baseline_formal_registration_when_candidate_has_none():
         outcome["code"] = registration["code"]
         outcome["supporter_event_dates"] = dict(registration["supporter_event_dates"])
         outcome["event_date"] = "2021-01-05"
+    return candidate
+
+
+def _single_formal_baseline():
+    baseline = make_baseline_records()
+    return [record for record in baseline if (
+        record.get("event") not in {"resonance_decision", "observation_outcome"}
+        or record.get("resonance_id") == "FORMAL:00"
+    )]
+
+
+def test_overlap_uses_baseline_formal_registration_when_candidate_has_none():
+    candidate = _candidate_overlapping_baseline_formal()
 
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
     assert report["data_quality"]["formal_overlap_count"] == 1
     assert report["gates"]["data_quality_complete"] is False
     assert report["continue_candidate"] is False
+
+
+def test_overlap_excludes_incomplete_or_invalid_baseline_canonical_registrations():
+    valid = analyzer.analyze_records(
+        _candidate_overlapping_baseline_formal(), _single_formal_baseline(),
+    )
+    assert valid["data_quality"]["formal_overlap_count"] == 1
+
+    bad_initialization = _single_formal_baseline()
+    next(record for record in bad_initialization
+         if record.get("event") == "strategy_initialized")["parameter_fingerprint"] = "bad"
+    bad_timestamp = _single_formal_baseline()
+    next(record for record in bad_timestamp
+         if record.get("event") == "resonance_decision")["_log_timestamp"] = "2021-01-05T09:35:00"
+    missing_horizon_five = [record for record in _single_formal_baseline() if not (
+        record.get("event") == "observation_outcome" and record.get("horizon") == 5
+    )]
+
+    for baseline in (bad_initialization, bad_timestamp, missing_horizon_five):
+        report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+        assert report["data_quality"]["errors"]
+        assert report["data_quality"]["formal_overlap_count"] == 0
 
 
 def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():

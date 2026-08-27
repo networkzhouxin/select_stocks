@@ -618,6 +618,48 @@ def _validate_filled_orders(records, role, errors):
                 errors.append("invalid filled order %s in %s" % (field, role))
 
 
+def _valid_baseline_registration(record):
+    if (not _valid_text(record.get("resonance_id"))
+            or not _valid_text(record.get("code"))
+            or record.get("direction") not in DIRECTIONS):
+        return False
+    try:
+        signal_date = _calendar_date(record.get("signal_date"))
+    except ValueError:
+        return False
+    timestamp = _parse_strict_log_timestamp(record)
+    return (signal_date is not None and TRAIN_START <= signal_date <= TRAIN_END
+            and timestamp is not None and timestamp.date() > signal_date
+            and timestamp.time() >= TRADING_LOG_TIME)
+
+
+def _valid_baseline_horizon_five(registration, outcome_record):
+    if outcome_record is None or outcome_record.get("code") != registration.get("code"):
+        return False
+    if ("direction" in outcome_record
+            and outcome_record.get("direction") != registration.get("direction")):
+        return False
+    payload = outcome_record.get("outcome")
+    if type(payload) is not dict or payload.get("status") != "RECORDED":
+        return False
+    if _finite_number(payload.get("return")) is None:
+        return False
+    try:
+        signal_date = _calendar_date(registration.get("signal_date"))
+        event_date = _calendar_date(outcome_record.get("event_date"))
+        closing_date = _calendar_date(payload.get("closing_date"))
+    except ValueError:
+        return False
+    registration_timestamp = _parse_strict_log_timestamp(registration)
+    outcome_timestamp = _parse_strict_log_timestamp(outcome_record)
+    return (signal_date is not None and event_date == signal_date
+            and closing_date is not None and TRAIN_START <= closing_date <= TRAIN_END
+            and closing_date > signal_date and registration_timestamp is not None
+            and outcome_timestamp is not None and outcome_timestamp.date() == closing_date
+            and outcome_timestamp.time() >= AFTER_CLOSE_LOG_TIME
+            and outcome_timestamp > registration_timestamp)
+
+
 def _validate_baseline(records, errors):
     initialized = [record for record in records if record.get("event") == "strategy_initialized"]
     if not initialized:
@@ -628,12 +670,16 @@ def _validate_baseline(records, errors):
         "pool_fingerprint": POOL_FINGERPRINT,
         "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
     }
+    initialization_valid = bool(initialized)
     for record in initialized:
         for field, expected_value in expected.items():
             if record.get(field) != expected_value:
                 errors.append("baseline initialization %s mismatch: %r" % (field, record.get(field)))
+                initialization_valid = False
     registrations = {}
     outcomes = {}
+    invalid_registration_ids = set()
+    invalid_horizon_five_ids = set()
     for record in records:
         if (record.get("_record_namespace") != "formal"
                 or record.get("event") != "resonance_decision"):
@@ -653,6 +699,7 @@ def _validate_baseline(records, errors):
                 }
                 if public_record != prior_public_record:
                     errors.append("duplicate formal registration: %s" % resonance_id)
+                    invalid_registration_ids.add(resonance_id)
             else:
                 registrations[resonance_id] = record
     for record in records:
@@ -705,6 +752,8 @@ def _validate_baseline(records, errors):
         key = (resonance_id, horizon)
         if key in outcomes:
             errors.append("duplicate formal outcome: %s/%s" % key)
+            if horizon == 5:
+                invalid_horizon_five_ids.add(resonance_id)
         else:
             outcomes[key] = record
     formal_missing_outcome_count = 0
@@ -718,8 +767,17 @@ def _validate_baseline(records, errors):
         if not comparable:
             formal_missing_outcome_count += 1
             errors.append("formal comparison incomplete: %s" % resonance_id)
+    canonical_registrations = {}
+    if initialization_valid:
+        for resonance_id, registration in registrations.items():
+            five_day = outcomes.get((resonance_id, 5))
+            if (resonance_id not in invalid_registration_ids
+                    and resonance_id not in invalid_horizon_five_ids
+                    and _valid_baseline_registration(registration)
+                    and _valid_baseline_horizon_five(registration, five_day)):
+                canonical_registrations[resonance_id] = registration
     _validate_filled_orders(records, "baseline", errors)
-    return registrations, outcomes, formal_missing_outcome_count
+    return registrations, outcomes, formal_missing_outcome_count, canonical_registrations
 
 
 def _filter_candidate_records(records):
@@ -988,9 +1046,8 @@ def analyze_records(candidate_records, baseline_records):
                 or (isinstance(record.get("resonance_id"), str)
                     and record.get("resonance_id").startswith("RELATIVE:")))):
             _validate_relative_outcome_shape(record, errors)
-    formal_registrations, formal_outcomes, formal_missing_outcome_count = _validate_baseline(
-        baseline_records, errors,
-    )
+    (formal_registrations, formal_outcomes, formal_missing_outcome_count,
+     canonical_formal_registrations) = _validate_baseline(baseline_records, errors)
     selected, ignored_record_counts = _filter_candidate_records(candidate_records)
     registrations = {}
     candidates = []
@@ -1074,7 +1131,7 @@ def analyze_records(candidate_records, baseline_records):
                         errors.append("non-finite aggregate: positive contribution")
                     positive_by_etf[code] = combined
     formal_keys = set()
-    for record in formal_registrations.values():
+    for record in canonical_formal_registrations.values():
         key = _overlap_key(record, "baseline formal overlap", errors)
         if key is not None:
             formal_keys.add(key)
