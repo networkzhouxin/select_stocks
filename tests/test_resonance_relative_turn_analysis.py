@@ -30,6 +30,17 @@ strategy_spec.loader.exec_module(strategy)
 
 BUILD = "20260827.4"
 FINGERPRINT = "f47d32b87be6d926"
+SESSION_DATES = {
+    2019: ("2019-01-02", "2019-01-03", "2019-01-04", "2019-01-07", "2019-01-08",
+           "2019-01-09", "2019-01-10", "2019-01-11", "2019-01-14", "2019-01-15",
+           "2019-01-16"),
+    2020: ("2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07", "2020-01-08",
+           "2020-01-09", "2020-01-10", "2020-01-13", "2020-01-14", "2020-01-15",
+           "2020-01-16"),
+    2021: ("2020-12-31", "2021-01-04", "2021-01-05", "2021-01-06", "2021-01-07",
+           "2021-01-08", "2021-01-11", "2021-01-12", "2021-01-13", "2021-01-14",
+           "2021-01-15"),
+}
 
 
 def make_order_path(log_date="2021-01-05"):
@@ -73,7 +84,8 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         "HARD_BOLL_SOFT_OSC" if index % 2 else "SOFT_ALL_THREE"
     )
     code = code or ("510300.XSHG", "159915.XSHE", "518880.XSHG")[index % 3]
-    signal_date = "%04d-01-%02d" % (year, index % 10 + 2)
+    signal_date = (SESSION_DATES[year][index % 10 + 1]
+                   if year in SESSION_DATES else "2028-01-02")
     if branch == "HARD_BOLL_SOFT_OSC":
         supporters = ["BOLL", "RSI"]
         source_map = {"BOLL": "HARD", "RSI": "RELATIVE"}
@@ -136,6 +148,13 @@ def make_outcome(record, horizon, value):
 
 def make_candidate_records():
     records = [make_initialized_record()]
+    for year in sorted(SESSION_DATES):
+        for session_date in SESSION_DATES[year]:
+            records.append({
+                "event": "signal_snapshot", "build": BUILD,
+                "code": "510300.XSHG", "decision_date": session_date,
+                "valid": True, "_log_timestamp": session_date + "T09:35:00",
+            })
     for index in range(30):
         record = make_relative_record(index)
         records.append(record)
@@ -407,6 +426,83 @@ def test_friday_signal_to_monday_registration_timestamp_is_legal():
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
     assert report["continue_candidate"] is True
+
+
+def test_relative_support_window_requires_proven_previous_trading_session():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = [record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]]
+    registration["signal_date"] = registration["expires_date"] = "2019-01-02"
+    registration["supporter_event_dates"] = {
+        "BOLL": "2019-01-01", "KDJ": "2019-01-02", "RSI": "2019-01-02",
+    }
+    registration["_log_timestamp"] = "2019-01-03T09:35:00"
+    _replace_relative_identity(registration, outcomes)
+    for outcome, closing_date in zip(sorted(outcomes, key=lambda item: item["horizon"]),
+                                     ("2019-01-03", "2019-01-07", "2019-01-09")):
+        outcome["event_date"] = "2019-01-02"
+        outcome["supporter_event_dates"] = dict(registration["supporter_event_dates"])
+        outcome["outcome"]["closing_date"] = closing_date
+        outcome["_log_timestamp"] = closing_date + "T15:30:00"
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any("candidate supporter window unverifiable" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_weekend_previous_trading_session_is_legal_with_snapshot_evidence():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = [record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]]
+    registration["signal_date"] = registration["expires_date"] = "2021-01-11"
+    registration["supporter_event_dates"] = {
+        "BOLL": "2021-01-08", "KDJ": "2021-01-11", "RSI": "2021-01-11",
+    }
+    registration["_log_timestamp"] = "2021-01-12T09:35:00"
+    _replace_relative_identity(registration, outcomes)
+    for outcome, closing_date in zip(sorted(outcomes, key=lambda item: item["horizon"]),
+                                     ("2021-01-12", "2021-01-14", "2021-01-18")):
+        outcome["event_date"] = "2021-01-11"
+        outcome["supporter_event_dates"] = dict(registration["supporter_event_dates"])
+        outcome["outcome"]["closing_date"] = closing_date
+        outcome["_log_timestamp"] = closing_date + "T15:30:00"
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is True
+
+
+def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    for record in candidate + baseline:
+        if record.get("event") == "order_transition":
+            record["_log_timestamp"] = record["_log_date"] + "T00:00:00"
+    candidate_summary = next(record for record in candidate
+                             if record.get("event") == "portfolio_summary")
+    baseline_summary = next(record for record in baseline
+                            if record.get("event") == "portfolio_summary")
+    candidate_summary["_log_timestamp"] = "2019-01-05T15:30:00"
+    baseline_summary["_log_timestamp"] = "2021-12-31T14:59:00"
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is False
+    assert any("filled order log timestamp outside 09:35" in error
+               for error in report["data_quality"]["errors"])
+    assert any("candidate frozen portfolio summary log date mismatch" in error
+               for error in report["data_quality"]["errors"])
+    assert any("baseline frozen portfolio summary log timestamp before 15:30" in error
+               for error in report["data_quality"]["errors"])
+    assert report["metrics"]["final_asset"] is None
 
 
 def test_cli_rejects_midnight_business_log_chronology(tmp_path):
@@ -789,7 +885,8 @@ def test_baseline_requires_every_formal_registration_to_have_horizon_five_and_me
 
 def test_strict_record_types_dates_and_overflow_become_quality_errors_not_exceptions():
     candidate = make_candidate_records()
-    candidate[1]["signal_date"] += " trailing"
+    next(record for record in candidate
+         if record.get("event") == "relative_resonance_observation")["signal_date"] += " trailing"
     order = next(record for record in candidate if record.get("event") == "order_transition")
     order["_log_timestamp"] = None
     order["before_amount"] = "0"
@@ -1212,10 +1309,10 @@ def test_real_formal_decision_and_outcome_schema_do_not_enter_overlap_as_outcome
     candidate.extend((
         {"event": "resonance_decision", "accepted": True, "reason": "COMPLETE_RESONANCE",
          "resonance_id": "FORMAL:candidate", "code": "510300.XSHG",
-         "direction": "BUY_TURN", "signal_date": "2021-01-05"},
-        {"event": "observation_outcome", "resonance_id": "FORMAL:candidate",
-         "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 5,
-         "outcome": {"status": "RECORDED", "closing_date": "2021-01-05", "return": 0.01}},
+             "direction": "BUY_TURN", "signal_date": "2021-01-15"},
+            {"event": "observation_outcome", "resonance_id": "FORMAL:candidate",
+             "code": "510300.XSHG", "event_date": "2021-01-15", "horizon": 5,
+             "outcome": {"status": "RECORDED", "closing_date": "2021-01-15", "return": 0.01}},
     ))
 
     report = analyzer.analyze_records(candidate, make_baseline_records())

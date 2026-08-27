@@ -290,7 +290,7 @@ def _finite_number(value):
     return numeric if math.isfinite(numeric) else None
 
 
-def _validate_support_contract(record, prefix, signal_date, errors):
+def _validate_support_contract(record, prefix, signal_date, session_calendar, errors):
     supporters = record.get("supporters")
     if (not isinstance(supporters, (list, tuple)) or not supporters
             or any(not _valid_text(item) for item in supporters)
@@ -305,10 +305,13 @@ def _validate_support_contract(record, prefix, signal_date, errors):
         errors.append("invalid %s supporter_event_dates" % prefix)
     else:
         has_signal_date_evidence = False
+        supported_dates = []
         for indicator in sorted(dates):
             supported_date = _is_training_date(
                 dates[indicator], "%s supporter_event_dates" % prefix, errors,
             )
+            if supported_date is not None:
+                supported_dates.append(supported_date)
             if (supported_date is not None and signal_date is not None
                     and supported_date > signal_date):
                 errors.append("%s supporter date after signal date" % prefix)
@@ -316,6 +319,18 @@ def _validate_support_contract(record, prefix, signal_date, errors):
                 has_signal_date_evidence = True
         if signal_date is not None and not has_signal_date_evidence:
             errors.append("%s supporters lack signal-date evidence" % prefix)
+        if signal_date is not None and len(supported_dates) == len(dates):
+            try:
+                signal_index = session_calendar.index(signal_date)
+            except ValueError:
+                errors.append("%s supporter window unverifiable: missing signal session evidence" % prefix)
+            else:
+                if signal_index == 0:
+                    errors.append("%s supporter window unverifiable: missing previous session evidence" % prefix)
+                else:
+                    allowed_dates = {signal_date, session_calendar[signal_index - 1]}
+                    if any(value not in allowed_dates for value in supported_dates):
+                        errors.append("invalid %s supporter trading-session window" % prefix)
     if (not isinstance(sources, dict) or set(sources) != support_set
             or any(not _valid_text(value) or value not in SOURCES
                    for value in sources.values())):
@@ -361,6 +376,28 @@ def _validate_candidate_initializations(records, errors):
                 ))
 
 
+def _candidate_session_calendar(records, errors):
+    """Use only candidate .4 signal snapshots as verifiable session evidence."""
+    sessions = set()
+    for record in records:
+        if record.get("event") != "signal_snapshot" or record.get("build") != CANDIDATE_BUILD:
+            continue
+        session_date = _is_training_date(
+            record.get("decision_date"), "candidate signal_snapshot decision", errors,
+        )
+        timestamp = _strict_log_timestamp(record, "candidate signal_snapshot", errors)
+        valid = session_date is not None and timestamp is not None
+        if valid and timestamp.date() != session_date:
+            errors.append("candidate signal_snapshot log date mismatch")
+            valid = False
+        if valid and timestamp.time() < TRADING_LOG_TIME:
+            errors.append("candidate signal_snapshot log timestamp before 09:35")
+            valid = False
+        if valid:
+            sessions.add(session_date)
+    return tuple(sorted(sessions))
+
+
 def _validate_relative_common(record, errors):
     observation_id = _text(record, "relative_observation_id", "relative observation id", errors)
     if observation_id is not None and not observation_id.startswith("RELATIVE:"):
@@ -376,7 +413,7 @@ def _validate_relative_common(record, errors):
     return observation_id
 
 
-def _validate_relative_registration(record, errors):
+def _validate_relative_registration(record, session_calendar, errors):
     observation_id = _validate_relative_common(record, errors)
     if record.get("branch") not in BRANCHES:
         errors.append("invalid branch: %r" % record.get("branch"))
@@ -396,7 +433,7 @@ def _validate_relative_registration(record, errors):
     if (signal_date is not None and expires_date is not None
             and expires_date < signal_date):
         errors.append("expired candidate: %s" % observation_id)
-    _validate_support_contract(record, "candidate", signal_date, errors)
+    _validate_support_contract(record, "candidate", signal_date, session_calendar, errors)
     event_close = _finite_number(record.get("event_close"))
     if event_close is None or event_close <= 0:
         errors.append("invalid candidate event_close")
@@ -518,13 +555,11 @@ def _validate_filled_orders(records, role, errors):
     for record in records:
         if not (record.get("event") == "order_transition" and record.get("outcome") == "FILLED"):
             continue
-        timestamp = record.get("_log_timestamp")
-        try:
-            valid_timestamp = isinstance(timestamp, str) and datetime.fromisoformat(timestamp)
-        except ValueError:
-            valid_timestamp = False
-        if not valid_timestamp or not (TRAIN_START <= datetime.fromisoformat(timestamp).date() <= TRAIN_END):
+        timestamp = _strict_log_timestamp(record, "filled order", errors)
+        if timestamp is not None and not (TRAIN_START <= timestamp.date() <= TRAIN_END):
             errors.append("invalid filled order log timestamp in %s" % role)
+        if timestamp is not None and timestamp.time() != TRADING_LOG_TIME:
+            errors.append("filled order log timestamp outside 09:35 in %s" % role)
         if (record.get("side") not in ("BUY", "SELL")
                 or not _valid_text(record.get("code"))):
             errors.append("invalid filled order identity in %s" % role)
@@ -701,7 +736,17 @@ def _validated_final_asset(records, role, errors):
     if not frozen_summaries:
         return None
     canonical = None
+    timestamps_valid = True
     for record in frozen_summaries:
+        timestamp = _strict_log_timestamp(record, "%s frozen portfolio summary" % role, errors)
+        if timestamp is None:
+            timestamps_valid = False
+        elif timestamp.date() != TRAIN_END:
+            errors.append("%s frozen portfolio summary log date mismatch" % role)
+            timestamps_valid = False
+        elif timestamp.time() < AFTER_CLOSE_LOG_TIME:
+            errors.append("%s frozen portfolio summary log timestamp before 15:30" % role)
+            timestamps_valid = False
         value = _finite_number(record.get("total_value"))
         if value is None:
             errors.append("invalid %s frozen portfolio summary total_value" % role)
@@ -711,7 +756,7 @@ def _validated_final_asset(records, role, errors):
             canonical = (public, value)
         elif public != canonical[0]:
             errors.append("conflicting %s frozen portfolio summary" % role)
-    return canonical[1] if canonical is not None and not any(
+    return canonical[1] if timestamps_valid and canonical is not None and not any(
         error.startswith("conflicting %s frozen portfolio summary" % role)
         or error.startswith("invalid %s frozen portfolio summary" % role)
         for error in errors) else None
@@ -883,10 +928,11 @@ def analyze_records(candidate_records, baseline_records):
         baseline_records, "baseline", errors,
     )
     _validate_candidate_initializations(candidate_records, errors)
+    candidate_session_calendar = _candidate_session_calendar(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
         if record.get("event") == "relative_resonance_observation":
-            _validate_relative_registration(record, errors)
+            _validate_relative_registration(record, candidate_session_calendar, errors)
         elif (record.get("event") == "observation_outcome" and (
                 record.get("relative_observation_id") is not None
                 or record.get("observation_kind") == "RELATIVE_RESONANCE"
