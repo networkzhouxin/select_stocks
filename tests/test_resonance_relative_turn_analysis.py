@@ -701,6 +701,28 @@ def test_overlap_invalidates_id_when_any_registration_replica_is_invalid():
     assert report["data_quality"]["formal_overlap_count"] == 0
 
 
+def test_formal_registration_replica_permutation_is_deterministic():
+    baseline = _single_formal_baseline()
+    valid = next(record for record in baseline if record.get("event") == "resonance_decision")
+    identity_invalid = dict(valid)
+    identity_invalid["code"] = "159915.XSHE"
+
+    before_valid = [record for record in baseline if record is not valid]
+    before_valid.insert(1, identity_invalid)
+    before_valid.insert(2, valid)
+    after_valid = [record for record in baseline if record is not valid]
+    after_valid.insert(1, valid)
+    after_valid.insert(2, identity_invalid)
+
+    first = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), before_valid)
+    second = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), after_valid)
+
+    assert first == second
+    assert first["data_quality"]["formal_overlap_count"] == 0
+    assert any("duplicate formal registration" in error
+               for error in first["data_quality"]["errors"])
+
+
 def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
     candidate = make_candidate_records()
     baseline = make_baseline_records()

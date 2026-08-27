@@ -677,6 +677,7 @@ def _validate_baseline(records, errors):
                 errors.append("baseline initialization %s mismatch: %r" % (field, record.get(field)))
                 initialization_valid = False
     registrations = {}
+    registration_replicas = {}
     outcomes = {}
     invalid_registration_ids = set()
     invalid_horizon_five_ids = set()
@@ -691,17 +692,19 @@ def _validate_baseline(records, errors):
         signal_date = _is_training_date(record.get("signal_date"), "formal signal", errors)
         _validate_registration_log_timestamp(record, "formal registration", signal_date, errors)
         if resonance_id is not None:
-            if resonance_id in registrations:
-                public_record = {key: value for key, value in record.items() if not key.startswith("_")}
-                prior_public_record = {
-                    key: value for key, value in registrations[resonance_id].items()
-                    if not key.startswith("_")
-                }
-                if public_record != prior_public_record:
-                    errors.append("duplicate formal registration: %s" % resonance_id)
-                    invalid_registration_ids.add(resonance_id)
-            else:
-                registrations[resonance_id] = record
+            registration_replicas.setdefault(resonance_id, []).append(record)
+    for resonance_id, replicas in registration_replicas.items():
+        public_records = [
+            {key: value for key, value in record.items() if not key.startswith("_")}
+            for record in replicas
+        ]
+        if any(public_record != public_records[0] for public_record in public_records[1:]):
+            errors.append("duplicate formal registration: %s" % resonance_id)
+            invalid_registration_ids.add(resonance_id)
+            continue
+        valid_replicas = [record for record in replicas if _valid_baseline_registration(record)]
+        if valid_replicas:
+            registrations[resonance_id] = min(valid_replicas, key=_sort_key)
     for record in records:
         if record.get("event") != "resonance_decision":
             continue
