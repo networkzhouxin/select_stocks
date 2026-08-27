@@ -580,6 +580,116 @@ def event_book_for_directions(boll, rsi, kdj, event_date):
     return {"active": active, "invalidated": []}
 
 
+def relative_event_book_for_directions(boll, rsi, kdj, event_date):
+    active = {}
+    for indicator, direction_name in (
+            ("BOLL", boll), ("RSI", rsi), ("KDJ", kdj)):
+        enum_direction = strategy.TurnDirection[direction_name]
+        if enum_direction is strategy.TurnDirection.NEUTRAL:
+            continue
+        active[indicator] = strategy.make_relative_turn_event(
+            indicator, enum_direction, event_date, event_date,
+            {"fixture": indicator},
+            reference_extreme=(8.8 if indicator == "BOLL" else None),
+        )
+    return {"active": active, "invalidated": []}
+
+
+def test_relative_branch_a_requires_hard_boll_and_relative_oscillator():
+    hard = event_book_for_directions(
+        "BUY_TURN", "NEUTRAL", "NEUTRAL", "2021-01-08",
+    )
+    relative = relative_event_book_for_directions(
+        "NEUTRAL", "BUY_TURN", "NEUTRAL", "2021-01-08",
+    )
+
+    observation = strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    )
+
+    assert observation["branch"] == "HARD_BOLL_SOFT_OSC"
+    assert observation["supporters"] == ("BOLL", "RSI")
+    assert observation["hard_or_relative_source_by_indicator"] == {
+        "BOLL": "HARD", "RSI": "RELATIVE",
+    }
+    assert observation["relative_observation_id"].startswith("RELATIVE:")
+
+
+def test_relative_branch_b_requires_all_three_relative_indicators():
+    hard = strategy.empty_event_book()
+    relative = relative_event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "BUY_TURN", "2021-01-08",
+    )
+
+    observation = strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    )
+
+    assert observation["branch"] == "SOFT_ALL_THREE"
+    assert observation["supporters"] == ("BOLL", "KDJ", "RSI")
+
+
+@pytest.mark.parametrize(
+    "hard_directions,relative_directions",
+    [
+        (("BUY_TURN", "SELL_TURN", "NEUTRAL"),
+         ("NEUTRAL", "BUY_TURN", "NEUTRAL")),
+        (("NEUTRAL", "NEUTRAL", "NEUTRAL"),
+         ("BUY_TURN", "BUY_TURN", "SELL_TURN")),
+        (("NEUTRAL", "NEUTRAL", "NEUTRAL"),
+         ("BUY_TURN", "BUY_TURN", "NEUTRAL")),
+    ],
+)
+def test_relative_candidate_rejects_opposite_or_incomplete_support(
+        hard_directions, relative_directions):
+    hard = event_book_for_directions(
+        *hard_directions, event_date="2021-01-08",
+    )
+    relative = relative_event_book_for_directions(
+        *relative_directions, event_date="2021-01-08",
+    )
+    assert strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    ) is None
+
+
+def test_existing_complete_hard_resonance_suppresses_relative_candidate():
+    hard = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-08",
+    )
+    relative = relative_event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "BUY_TURN", "2021-01-08",
+    )
+    assert strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    ) is None
+
+
+def test_relative_fingerprint_is_deterministic_and_formal_fingerprints_are_frozen():
+    params = strategy.get_default_params()
+    self_check = strategy.run_event_logic_self_check(params)
+
+    assert strategy._value_fingerprint(params) == "e1227fbd8b4a884e"
+    assert strategy._value_fingerprint(
+        strategy.get_default_etf_pool(),
+    ) == "9123995edeb1ed84"
+    assert strategy.business_config_fingerprint(
+        params, strategy.get_default_etf_pool(),
+    ) == "88fdf95966ea0368"
+    assert strategy.event_logic_fingerprint(
+        params, self_check,
+    ) == "1c0b8a22f48c97c3"
+    first = strategy.relative_observation_fingerprint()
+    second = strategy.relative_observation_fingerprint()
+    assert first == second
+    assert len(first) == 16
+    json.dumps(strategy.relative_observation_logic_contract(), sort_keys=True)
+
+
 @pytest.mark.parametrize(
     "boll,rsi,kdj,buy_allowed,sell_allowed",
     [

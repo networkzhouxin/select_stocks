@@ -10,6 +10,7 @@ from numbers import Real
 
 STRATEGY_VERSION = "resonance-v0.1.0"
 DEPLOYMENT_BUILD_ID = "20260827.3"
+FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
 BENCHMARK = "000300.XSHG"
 
 
@@ -1359,7 +1360,7 @@ def event_logic_fingerprint(params, self_check=None):
         self_check = run_event_logic_self_check(params)
     boll_period, boll_std_multiplier = params["boll"]
     contract = {
-        "build": DEPLOYMENT_BUILD_ID,
+        "build": FORMAL_EVENT_LOGIC_BUILD_ID,
         "indicator_names": ["KDJ", "BOLL"],
         "thresholds": {
             "kdj_low": params["kdj_low"],
@@ -1372,6 +1373,34 @@ def event_logic_fingerprint(params, self_check=None):
         "self_check": self_check,
     }
     return _value_fingerprint(contract)
+
+
+def relative_observation_logic_contract():
+    return {
+        "event_mode": "RELATIVE",
+        "window_sessions": 2,
+        "fresh_supporter_required": True,
+        "opposite_veto": "ANY_ACTIVE_HARD_OR_RELATIVE_OPPOSITE",
+        "relative_predicates": {
+            "RSI": "LOCAL_RSI14_TURN_A_B_C",
+            "KDJ": "LOCAL_J_AND_KD_DIFF_TURN_A_B_C",
+            "BOLL": "LOCAL_PERCENT_B_TURN_WITH_MID_AND_PRICE_STRUCTURE",
+        },
+        "branches": {
+            "HARD_BOLL_SOFT_OSC": [
+                "HARD_BOLL", "RELATIVE_RSI_OR_KDJ",
+            ],
+            "SOFT_ALL_THREE": [
+                "RELATIVE_BOLL", "RELATIVE_RSI", "RELATIVE_KDJ",
+            ],
+        },
+        "deduplication": "EXCLUDE_COMPLETE_HARD_RESONANCE",
+        "boll_invalidation": "NEW_EXTREME_AFTER_RELATIVE_TURN",
+    }
+
+
+def relative_observation_fingerprint():
+    return _value_fingerprint(relative_observation_logic_contract())
 
 
 def make_turn_event(indicator, direction, event_date, expires_date,
@@ -1625,6 +1654,120 @@ def build_resonance_id(code, direction, supporters):
         for event in sorted(supporters, key=lambda item: item["indicator"])
     )
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:20]
+
+
+def _event_mode(event):
+    return event.get("event_mode", "HARD")
+
+
+def _has_active_opposite(hard_book, relative_book, direction):
+    return _builtins.any(
+        event is not None and event["direction"] is OPPOSITE[direction]
+        for book in (hard_book, relative_book)
+        for event in (
+            book["active"].get("BOLL"),
+            book["active"].get("RSI"),
+            book["active"].get("KDJ"),
+        )
+    )
+
+
+def build_relative_observation_id(code, direction, branch, support_events):
+    parts = ["RELATIVE", branch, direction.value, code]
+    for event in sorted(support_events, key=lambda item: item["indicator"]):
+        parts.append("%s:%s:%s" % (
+            event["indicator"], _event_mode(event),
+            _calendar_date(event["event_date"]),
+        ))
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:20]
+    return "RELATIVE:" + digest
+
+
+def build_relative_resonance_observation(
+        code, direction, hard_book, relative_book, signal_date, event_close):
+    signal_date = _calendar_date(signal_date)
+    if build_resonance_decision(
+            code, direction, hard_book, signal_date) is not None:
+        return None
+    if _has_active_opposite(hard_book, relative_book, direction):
+        return None
+
+    hard_boll = hard_book["active"].get("BOLL")
+    relative_active = relative_book["active"]
+    relative_boll = relative_active.get("BOLL")
+    relative_rsi = relative_active.get("RSI")
+    relative_kdj = relative_active.get("KDJ")
+    relative_oscillators = tuple(
+        event for event in (relative_rsi, relative_kdj)
+        if event is not None and event["direction"] is direction
+    )
+
+    if hard_boll is not None and hard_boll["direction"] is direction:
+        if not relative_oscillators:
+            return None
+        branch = "HARD_BOLL_SOFT_OSC"
+        support_events = (hard_boll,) + relative_oscillators
+    elif _builtins.all(
+            event is not None and event["direction"] is direction
+            for event in (relative_boll, relative_rsi, relative_kdj)):
+        branch = "SOFT_ALL_THREE"
+        support_events = (relative_boll, relative_rsi, relative_kdj)
+    else:
+        return None
+
+    if not _builtins.any(
+            _calendar_date(event["event_date"]) == signal_date
+            for event in support_events):
+        return None
+    ordered_events = tuple(sorted(
+        support_events, key=lambda item: item["indicator"],
+    ))
+    source_map = {
+        event["indicator"]: _event_mode(event) for event in ordered_events
+    }
+    date_map = {
+        event["indicator"]: _calendar_date(event["event_date"])
+        for event in ordered_events
+    }
+    return {
+        "relative_observation_id": build_relative_observation_id(
+            code, direction, branch, ordered_events,
+        ),
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": branch,
+        "code": code,
+        "direction": direction,
+        "signal_date": signal_date,
+        "supporters": tuple(sorted(source_map)),
+        "supporter_event_dates": date_map,
+        "hard_or_relative_source_by_indicator": source_map,
+        "expires_date": min(
+            _calendar_date(event["expires_date"])
+            for event in ordered_events
+        ),
+        "event_close": float(event_close),
+    }
+
+
+def collect_relative_resonance_observations(snapshots):
+    observations = []
+    for code in sorted(snapshots):
+        snapshot = snapshots[code]
+        if not snapshot.get("valid"):
+            continue
+        relative_book = (
+            snapshot.get("relative_event_book") or empty_event_book()
+        )
+        for direction in (
+                TurnDirection.BUY_TURN, TurnDirection.SELL_TURN):
+            observation = build_relative_resonance_observation(
+                code, direction,
+                snapshot["event_book"], relative_book,
+                snapshot["signal_date"], snapshot["close"],
+            )
+            if observation is not None:
+                observations.append(observation)
+    return observations
 
 
 def build_resonance_decision(code, direction, event_book, signal_date):
