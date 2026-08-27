@@ -220,7 +220,7 @@ def _validate_support_contract(record, prefix, signal_date, errors):
             }),
         ),
     }
-    if branch in valid and not any(support_set == expected_set and sources == expected_sources
+    if isinstance(branch, str) and branch in valid and not any(support_set == expected_set and sources == expected_sources
                                    for expected_set, expected_sources in valid[branch]):
         errors.append("impossible %s branch/supporters/source contract" % prefix)
 
@@ -322,6 +322,8 @@ def _validate_relative_outcome_shape(record, errors):
 
 
 def _same_supporters(left, right):
+    if not isinstance(left, (list, tuple)) or not isinstance(right, (list, tuple)):
+        return False
     return tuple(left or ()) == tuple(right or ())
 
 
@@ -619,6 +621,25 @@ def _overlap_key(record, label, errors):
     return code, direction, signal_date.isoformat()
 
 
+def _relative_identity_is_scalar(record):
+    supporters = record.get("supporters")
+    return (
+        isinstance(record.get("code"), str) and bool(record.get("code").strip())
+        and isinstance(record.get("direction"), str) and record.get("direction") in DIRECTIONS
+        and isinstance(record.get("branch"), str) and record.get("branch") in BRANCHES
+        and isinstance(supporters, (list, tuple))
+        and all(isinstance(item, str) for item in supporters)
+    )
+
+
+def _audit_outcome_closing_date(record, errors):
+    if record.get("event") != "observation_outcome":
+        return
+    payload = record.get("outcome")
+    if isinstance(payload, dict):
+        _is_training_date(payload.get("closing_date"), "outcome closing", errors)
+
+
 def analyze_records(candidate_records, baseline_records):
     """Validate immutable log contracts and return a deterministic report."""
     candidate_records = _normalized_timeline(candidate_records)
@@ -627,6 +648,7 @@ def analyze_records(candidate_records, baseline_records):
     for record in candidate_records + baseline_records:
         if record.get("_parse_error"):
             errors.append("parse error: %s" % record["_parse_error"])
+        _audit_outcome_closing_date(record, errors)
         record["_record_namespace"] = _classify_record_namespace(record, errors)
     candidate_order_ambiguous = _has_cross_file_filled_timestamp(
         candidate_records, "candidate", errors,
@@ -655,7 +677,7 @@ def analyze_records(candidate_records, baseline_records):
         if record.get("event") != "relative_resonance_observation":
             continue
         observation_id = record.get("relative_observation_id")
-        if not isinstance(observation_id, str):
+        if not isinstance(observation_id, str) or not _relative_identity_is_scalar(record):
             continue
         if observation_id in registrations:
             errors.append("duplicate relative candidate: %s" % observation_id)
@@ -731,7 +753,8 @@ def analyze_records(candidate_records, baseline_records):
                     positive_by_etf[code] = combined
     formal_keys = set()
     for record in candidate_records:
-        if record.get("_record_namespace") == "formal":
+        if (record.get("_record_namespace") == "formal"
+                and record.get("event") == "resonance_decision"):
             key = _overlap_key(record, "formal overlap", errors)
             if key is not None:
                 formal_keys.add(key)

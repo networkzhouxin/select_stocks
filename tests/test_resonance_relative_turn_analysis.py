@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import types
 from datetime import datetime
@@ -910,3 +911,67 @@ def test_cli_replace_and_temporary_cleanup_failures_preserve_primary_io_error(tm
     assert status == 2
     assert capsys.readouterr().err == "output error: replace fault\n"
     assert output_path.read_bytes() == b"old output"
+
+
+def test_real_formal_decision_and_outcome_schema_do_not_enter_overlap_as_outcome_fields():
+    candidate = make_candidate_records()
+    candidate.extend((
+        {"event": "resonance_decision", "accepted": True, "reason": "COMPLETE_RESONANCE",
+         "resonance_id": "FORMAL:candidate", "code": "510300.XSHG",
+         "direction": "BUY_TURN", "signal_date": "2021-01-05"},
+        {"event": "observation_outcome", "resonance_id": "FORMAL:candidate",
+         "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 5,
+         "outcome": {"status": "RECORDED", "closing_date": "2021-01-05", "return": 0.01}},
+    ))
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert not any("formal overlap direction" in error or "formal overlap signal date" in error
+                   for error in report["data_quality"]["errors"])
+    assert report["continue_candidate"] is True
+
+
+def test_candidate_formal_terminal_outcomes_always_audit_closing_date():
+    candidate = [make_initialized_record(), {
+        "event": "observation_outcome", "resonance_id": "FORMAL:candidate",
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 5,
+        "outcome": {"status": "PRICE_UNAVAILABLE", "closing_date": "2022-01-03"},
+    }, {
+        "event": "observation_outcome", "resonance_id": "FORMAL:recorded",
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 5,
+        "outcome": {"status": "RECORDED", "closing_date": "2022-01-04", "return": 0.01},
+    }]
+
+    report = analyzer.analyze_records(candidate, [])
+
+    assert any("outcome closing outside 2019-2021: 2022-01-03" in error
+               for error in report["data_quality"]["errors"])
+    assert any("outcome closing outside 2019-2021: 2022-01-04" in error
+               for error in report["data_quality"]["errors"])
+
+
+@pytest.mark.parametrize("field,value,fragment", [
+    ("direction", ["BUY_TURN"], "candidate direction"),
+    ("branch", ["SOFT_ALL_THREE"], "branch"),
+    ("supporters", 3, "candidate supporters"),
+])
+def test_cli_identity_container_pollution_isolated_without_traceback(tmp_path, field, value, fragment):
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate if record.get("event") == "relative_resonance_observation")
+    registration[field] = value
+    candidate_path = tmp_path / (field + "-candidate.log")
+    baseline_path = tmp_path / (field + "-baseline.log")
+    output_path = tmp_path / (field + "-report.json")
+    _write_log(candidate_path, candidate)
+    _write_log(baseline_path, make_baseline_records())
+
+    completed = subprocess.run([
+        sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path), "--output", str(output_path),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0
+    assert "Traceback" not in completed.stderr
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert any(fragment in error for error in report["data_quality"]["errors"])
+    assert report["continue_candidate"] is False
