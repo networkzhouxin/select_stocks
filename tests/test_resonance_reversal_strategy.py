@@ -350,3 +350,159 @@ def test_collect_latest_events_uses_trading_sessions_for_event_expiry():
 
     assert book["active"]["RSI"]["event_date"] == pd.Timestamp("2021-01-08")
     assert book["active"]["RSI"]["expires_date"] == pd.Timestamp("2021-01-11")
+
+
+def event_book_for_directions(boll, rsi, kdj, event_date):
+    active = {}
+    for indicator, direction_name in (("BOLL", boll), ("RSI", rsi), ("KDJ", kdj)):
+        if direction_name == "NEUTRAL":
+            continue
+        active[indicator] = make_event(
+            indicator,
+            strategy.TurnDirection[direction_name],
+            event_date,
+            "2021-01-06",
+        )
+    return {"active": active, "invalidated": []}
+
+
+@pytest.mark.parametrize(
+    "boll,rsi,kdj,buy_allowed,sell_allowed",
+    [
+        ("BUY_TURN", "BUY_TURN", "NEUTRAL", True, False),
+        ("BUY_TURN", "NEUTRAL", "BUY_TURN", True, False),
+        ("BUY_TURN", "BUY_TURN", "BUY_TURN", True, False),
+        ("BUY_TURN", "BUY_TURN", "SELL_TURN", False, False),
+        ("BUY_TURN", "SELL_TURN", "BUY_TURN", False, False),
+        ("SELL_TURN", "SELL_TURN", "NEUTRAL", False, True),
+        ("SELL_TURN", "NEUTRAL", "SELL_TURN", False, True),
+        ("SELL_TURN", "SELL_TURN", "SELL_TURN", False, True),
+        ("SELL_TURN", "SELL_TURN", "BUY_TURN", False, False),
+        ("SELL_TURN", "BUY_TURN", "SELL_TURN", False, False),
+        ("NEUTRAL", "BUY_TURN", "BUY_TURN", False, False),
+    ],
+)
+def test_complete_resonance_truth_table(
+        boll, rsi, kdj, buy_allowed, sell_allowed):
+    events = event_book_for_directions(boll, rsi, kdj, "2021-01-05")
+
+    buy = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN, events, "2021-01-05",
+    )
+    sell = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.SELL_TURN, events, "2021-01-05",
+    )
+
+    assert (buy is not None) is buy_allowed
+    assert (sell is not None) is sell_allowed
+
+
+def test_two_old_events_cannot_resonate():
+    old_events = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-04",
+    )
+
+    assert strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        old_events, "2021-01-05",
+    ) is None
+
+
+def test_candidate_sort_prefers_support_count_then_boll_freshness_then_code():
+    decisions = [
+        {"code": "513100.XSHG", "support_count": 2, "boll_age": 0},
+        {"code": "159915.XSHE", "support_count": 3, "boll_age": 1},
+        {"code": "510300.XSHG", "support_count": 2, "boll_age": 0},
+        {"code": "512100.XSHG", "support_count": 2, "boll_age": 1},
+    ]
+
+    assert [item["code"] for item in strategy.sort_buy_decisions(decisions)] == [
+        "159915.XSHE", "510300.XSHG", "513100.XSHG", "512100.XSHG",
+    ]
+
+
+def test_observation_values_do_not_change_resonance_or_priority():
+    ordinary = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-05",
+    )
+    changed_observations = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-05",
+    )
+    changed_observations["active"]["BOLL"]["trigger_values"] = {
+        "rsi6": 1.0, "rsi12": 99.0, "rsi24": 50.0, "adx14": 100.0,
+        "volume_ratio": 999.0, "boll_width": 0.001,
+    }
+    changed_observations["active"]["RSI"]["trigger_values"] = {
+        "rsi6": 99.0, "rsi12": 1.0, "rsi24": 50.0, "adx14": 0.0,
+        "volume_ratio": 0.001, "boll_width": 99.0,
+    }
+
+    ordinary_decision = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        ordinary, "2021-01-05",
+    )
+    changed_decision = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        changed_observations, "2021-01-05",
+    )
+
+    assert ordinary_decision["resonance_id"] == changed_decision["resonance_id"]
+    assert ordinary_decision["support_count"] == changed_decision["support_count"]
+    assert ordinary_decision["boll_age"] == changed_decision["boll_age"]
+    assert strategy.sort_buy_decisions([changed_decision, ordinary_decision]) == [
+        changed_decision, ordinary_decision,
+    ]
+
+
+def test_processed_id_is_retained_for_same_support_events_until_expiry():
+    events = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-05",
+    )
+    first = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN, events, "2021-01-05",
+    )
+    repeated = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN, events, "2021-01-05",
+    )
+    processed = {}
+
+    strategy.mark_resonance_processed(processed, first)
+    strategy.mark_resonance_processed(processed, repeated)
+
+    assert first["resonance_id"] == repeated["resonance_id"]
+    assert strategy.prune_processed_resonance_ids(processed, "2021-01-06") == {
+        first["resonance_id"]: "2021-01-06",
+    }
+
+
+def test_processed_id_is_pruned_only_after_expiry():
+    processed = {"expired": "2021-01-05", "still_active": "2021-01-06"}
+
+    assert strategy.prune_processed_resonance_ids(processed, "2021-01-06") == {
+        "still_active": "2021-01-06",
+    }
+    assert strategy.prune_processed_resonance_ids(processed, "2021-01-07") == {}
+
+
+def test_new_supporter_dates_create_new_resonance_id_after_old_expiry():
+    old_events = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-05",
+    )
+    new_events = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-07",
+    )
+    old_decision = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        old_events, "2021-01-05",
+    )
+    new_decision = strategy.build_resonance_decision(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        new_events, "2021-01-07",
+    )
+    processed = {}
+    strategy.mark_resonance_processed(processed, old_decision)
+
+    assert old_decision["resonance_id"] != new_decision["resonance_id"]
+    assert new_decision["resonance_id"] not in strategy.prune_processed_resonance_ids(
+        processed, "2021-01-07",
+    )

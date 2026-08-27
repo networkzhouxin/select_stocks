@@ -16,6 +16,12 @@ class TurnDirection(Enum):
     NEUTRAL = "NEUTRAL"
 
 
+OPPOSITE = {
+    TurnDirection.BUY_TURN: TurnDirection.SELL_TURN,
+    TurnDirection.SELL_TURN: TurnDirection.BUY_TURN,
+}
+
+
 class OrderSide(Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -411,3 +417,68 @@ def collect_latest_events(indicator_frame, signal_date, next_trade_date):
         invalidate_boll_structure(book, current)
     expire_events(book, signal_date)
     return book
+
+
+def active_direction(event_book, indicator):
+    event = event_book["active"].get(indicator)
+    return event["direction"] if event is not None else TurnDirection.NEUTRAL
+
+
+def build_resonance_id(code, direction, supporters):
+    parts = [direction.value, code]
+    parts.extend(
+        "%s:%s" % (event["indicator"], event["event_date"])
+        for event in sorted(supporters, key=lambda item: item["indicator"])
+    )
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:20]
+
+
+def build_resonance_decision(code, direction, event_book, signal_date):
+    boll = event_book["active"].get("BOLL")
+    if boll is None or boll["direction"] is not direction:
+        return None
+
+    oscillators = [
+        event_book["active"].get("RSI"),
+        event_book["active"].get("KDJ"),
+    ]
+    if any(event is not None and event["direction"] is OPPOSITE[direction]
+           for event in oscillators):
+        return None
+
+    supporters = [boll] + [
+        event for event in oscillators
+        if event is not None and event["direction"] is direction
+    ]
+    if len(supporters) < 2:
+        return None
+    if not any(event["event_date"] == signal_date for event in supporters):
+        return None
+
+    return {
+        "code": code,
+        "direction": direction,
+        "supporters": tuple(event["indicator"] for event in supporters),
+        "support_count": len(supporters),
+        "boll_age": 0 if boll["event_date"] == signal_date else 1,
+        "resonance_id": build_resonance_id(code, direction, supporters),
+        "expires_date": min(event["expires_date"] for event in supporters),
+    }
+
+
+def sort_buy_decisions(decisions):
+    return sorted(decisions, key=lambda item: (
+        -item["support_count"], item["boll_age"], item["code"],
+    ))
+
+
+def prune_processed_resonance_ids(processed, signal_date):
+    return {
+        resonance_id: expires_date
+        for resonance_id, expires_date in processed.items()
+        if expires_date >= signal_date
+    }
+
+
+def mark_resonance_processed(processed, decision):
+    processed[decision["resonance_id"]] = decision["expires_date"]
