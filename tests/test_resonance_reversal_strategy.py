@@ -4083,6 +4083,44 @@ def test_relative_sidecar_states_leave_real_formal_execution_equivalent(
     assert outcomes[0]["orders"]
 
 
+def test_damaged_relative_observation_isolated_before_formal_after_close(
+        monkeypatch):
+    code = "510300.XSHG"
+    runtime = runtime_state()
+    formal = strategy.make_observation_event(
+        "formal-fixture", code, date(2021, 1, 5), 10.0,
+    )
+    runtime.observation_events = {
+        "RELATIVE:damaged": {
+            "observation_kind": "RELATIVE_RESONANCE",
+            "horizons": (1, 3, 5),
+            "outcomes": {},
+        },
+        "formal-fixture": formal,
+    }
+    diagnostics = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_current_data", lambda: {code: current_record(11.0)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: [date(2021, 1, 5), date(2021, 1, 6)],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: diagnostics.append((event, payload)),
+    )
+
+    strategy.after_close(fake_context(current_date="2021-01-06"))
+
+    assert "RELATIVE:damaged" not in runtime.observation_events
+    assert formal["outcomes"][1]["return"] == pytest.approx(0.1)
+    assert diagnostics[0][0] == "relative_observation_record"
+
+
 def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(
         monkeypatch):
     params = strategy.get_default_params()

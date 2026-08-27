@@ -467,11 +467,43 @@ def _observation_record_is_terminal(record):
     )
 
 
+def _is_relative_observation_record(resonance_id):
+    return isinstance(resonance_id, str) and resonance_id.startswith("RELATIVE:")
+
+
+def _discard_damaged_relative_observation(resonance_id, error):
+    g.observation_events.pop(resonance_id, None)
+    _safe_relative_observation_diagnostic("relative_observation_record", {
+        "relative_observation_id": resonance_id,
+        "reason": "RELATIVE_OBSERVATION_RECORD_DROPPED",
+        "error_type": type(error).__name__,
+    })
+
+
+def _validate_relative_observation_record(record):
+    _normalize_observation_record(record)
+    for field in (
+            "event_date", "event_close", "code", "direction",
+            "relative_observation_id", "branch", "supporters", "build",
+            "relative_observation_fingerprint"):
+        record[field]
+
+
 def _prune_terminal_observation_records():
     for resonance_id, record in list(g.observation_events.items()):
-        _normalize_observation_record(record)
-        if _observation_record_is_terminal(record):
-            g.observation_events.pop(resonance_id, None)
+        if _is_relative_observation_record(resonance_id):
+            try:
+                _normalize_observation_record(record)
+                if _observation_record_is_terminal(record):
+                    g.observation_events.pop(resonance_id, None)
+            except Exception as error:
+                if _is_future_data_error(error):
+                    raise
+                _discard_damaged_relative_observation(resonance_id, error)
+        else:
+            _normalize_observation_record(record)
+            if _observation_record_is_terminal(record):
+                g.observation_events.pop(resonance_id, None)
 
 
 def _calendar_date(value):
@@ -612,6 +644,14 @@ def record_due_observation_outcomes(context, current_data):
     closing_date = _calendar_date(context.current_dt)
     _prune_terminal_observation_records()
     for resonance_id, record in list(g.observation_events.items()):
+        if _is_relative_observation_record(resonance_id):
+            try:
+                _validate_relative_observation_record(record)
+            except Exception as error:
+                if _is_future_data_error(error):
+                    raise
+                _discard_damaged_relative_observation(resonance_id, error)
+                continue
         event_date = _calendar_date(record["event_date"])
         if event_date is None or closing_date <= event_date:
             continue
