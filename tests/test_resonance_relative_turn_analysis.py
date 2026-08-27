@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+from unittest import mock
 
 import pytest
 
@@ -24,6 +25,7 @@ def make_order_path(log_date="2021-01-05"):
     return [
         {
             "event": "order_transition", "_log_date": log_date,
+            "_log_timestamp": log_date + "T09:35:00",
             "_ordinal": index, "side": "BUY" if index % 2 else "SELL",
             "code": "510300.XSHG", "outcome": "FILLED",
             "before_amount": 0 if index % 2 else 100,
@@ -72,6 +74,9 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         "hard_or_relative_source_by_indicator": source_map,
         "build": BUILD,
         "relative_observation_fingerprint": FINGERPRINT,
+        "parameter_fingerprint": "e1227fbd8b4a884e",
+        "pool_fingerprint": "9123995edeb1ed84",
+        "event_logic_fingerprint": "1c0b8a22f48c97c3",
         "event_close": 10.0,
     }
 
@@ -79,6 +84,7 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
 def make_outcome(record, horizon, value):
     return {
         "event": "observation_outcome",
+        "resonance_id": record["relative_observation_id"],
         "relative_observation_id": record["relative_observation_id"],
         "observation_kind": "RELATIVE_RESONANCE",
         "branch": record["branch"], "direction": record["direction"],
@@ -108,7 +114,7 @@ def make_candidate_records():
     records.extend(make_order_path())
     records.append({
         "event": "portfolio_summary", "closing_date": "2021-12-31",
-        "total_value": 23856.40,
+        "total_value": 23856.40, "_log_timestamp": "2021-12-31T15:30:00",
     })
     return records
 
@@ -123,7 +129,7 @@ def make_baseline_records():
     records.extend(make_order_path())
     records.append({
         "event": "portfolio_summary", "closing_date": "2021-12-31",
-        "total_value": 23856.40,
+        "total_value": 23856.40, "_log_timestamp": "2021-12-31T15:30:00",
     })
     for index in range(30):
         resonance_id = "FORMAL:%02d" % index
@@ -341,11 +347,11 @@ def test_cli_writes_only_explicit_output_file_and_keeps_inputs_unchanged(tmp_pat
     baseline_path = tmp_path / "baseline.log"
     output_path = tmp_path / "report" / "relative.json"
     candidate_lines = [
-        "2021-01-05 - INFO - " + json.dumps(record, sort_keys=True)
+        "2021-01-05 09:35:00 - INFO - " + json.dumps(record, sort_keys=True)
         for record in make_candidate_records()
     ]
     baseline_lines = [
-        "2021-01-05 - INFO - " + json.dumps(record, sort_keys=True)
+        "2021-01-05 09:35:00 - INFO - " + json.dumps(record, sort_keys=True)
         for record in make_baseline_records()
     ]
     candidate_path.write_text("\n".join(candidate_lines), encoding="utf-8")
@@ -415,7 +421,7 @@ def test_baseline_requires_frozen_initialization_and_linked_formal_records():
     baseline[0]["build"] = "20260827.4"
     formal = next(record for record in baseline if record.get("event") == "resonance_decision")
     formal["direction"] = "NEUTRAL"
-    baseline.append(dict(formal))
+    baseline.append(dict(formal, direction="BUY_TURN"))
     mismatched = next(
         record for record in baseline
         if record.get("resonance_id") == "FORMAL:01"
@@ -501,3 +507,126 @@ def test_grouped_return_schema_is_complete_and_deterministic():
             *report["metrics"]["by_direction"].values()):
         assert set(group) == {"horizon_1", "horizon_3", "horizon_5"}
         assert group["horizon_5"]["count"] >= 0
+
+
+def test_relative_contract_rejects_impossible_branch_fingerprints_and_outcome_identity():
+    registration = make_relative_record(0, branch="HARD_BOLL_SOFT_OSC")
+    registration["supporters"] = ["BOLL", "KDJ", "RSI"]
+    registration["hard_or_relative_source_by_indicator"] = {
+        "BOLL": "HARD", "KDJ": "RELATIVE", "RSI": "RELATIVE",
+    }
+    registration["supporter_event_dates"] = {
+        indicator: registration["signal_date"] for indicator in registration["supporters"]
+    }
+    registration["parameter_fingerprint"] = "wrong"
+    outcome = make_outcome(registration, 1, 0.01)
+    outcome["resonance_id"] = "RELATIVE:other"
+    outcome["outcome"]["direction_adjusted_return"] = 0.02
+
+    report = analyzer.analyze_records([make_initialized_record(), registration, outcome], [])
+
+    errors = report["data_quality"]["errors"]
+    assert any("impossible candidate branch/supporters/source contract" in error for error in errors)
+    assert any("registration parameter_fingerprint mismatch" in error for error in errors)
+    assert any("relative outcome resonance_id mismatch" in error for error in errors)
+    assert any("direction_adjusted_return mismatch" in error for error in errors)
+
+
+def test_relative_sell_outcome_requires_negated_direction_adjusted_return():
+    registration = make_relative_record(0, direction="SELL_TURN")
+    outcome = make_outcome(registration, 1, 0.01)
+    outcome["outcome"]["direction_adjusted_return"] = 0.01
+
+    report = analyzer.analyze_records([make_initialized_record(), registration, outcome], [])
+
+    assert any("direction_adjusted_return mismatch" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_baseline_requires_every_formal_registration_to_have_horizon_five_and_merges_identical_diagnostics():
+    baseline = make_baseline_records()
+    baseline[:] = [record for record in baseline if not (
+        record.get("event") == "observation_outcome"
+        and record.get("resonance_id") == "FORMAL:00"
+    )]
+    formal = next(record for record in baseline if record.get("resonance_id") == "FORMAL:01")
+    baseline.append(dict(formal))
+
+    report = analyzer.analyze_records(make_candidate_records(), baseline)
+
+    errors = report["data_quality"]["errors"]
+    assert any("missing formal horizon 5: FORMAL:00" in error for error in errors)
+    assert not any("duplicate formal registration: FORMAL:01" in error for error in errors)
+
+
+def test_strict_record_types_dates_and_overflow_become_quality_errors_not_exceptions():
+    candidate = make_candidate_records()
+    candidate[1]["signal_date"] += " trailing"
+    order = next(record for record in candidate if record.get("event") == "order_transition")
+    order["_log_timestamp"] = None
+    order["before_amount"] = "0"
+    for record in candidate:
+        if record.get("event") == "observation_outcome" and record.get("horizon") == 5:
+            record["outcome"]["return"] = 1e308
+            record["outcome"]["direction_adjusted_return"] = 1e308
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    errors = report["data_quality"]["errors"]
+    assert any("invalid signal date" in error for error in errors)
+    assert any("invalid filled order log timestamp" in error for error in errors)
+    assert any("invalid filled order before_amount" in error for error in errors)
+    assert any("non-finite aggregate" in error for error in errors)
+    assert report["continue_candidate"] is False
+
+
+def _write_log(path, records):
+    lines = []
+    for index, record in enumerate(records):
+        timestamp = record.get("_log_timestamp", "2021-01-05T09:35:00").replace("T", " ")
+        payload = {key: value for key, value in record.items() if not key.startswith("_")}
+        lines.append(timestamp + " - INFO - " + json.dumps(payload, sort_keys=True))
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_cli_atomic_write_keeps_existing_output_when_replace_fails(tmp_path):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, make_candidate_records())
+    _write_log(baseline_path, make_baseline_records())
+    output_path.write_bytes(b"old output")
+
+    with mock.patch.object(analyzer.os, "replace", side_effect=OSError("disk fault")):
+        with pytest.raises(OSError, match="disk fault"):
+            analyzer.main([
+                "--candidate-log", str(candidate_path),
+                "--baseline-log", str(baseline_path), "--output", str(output_path),
+            ])
+
+    assert output_path.read_bytes() == b"old output"
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_cli_normalizes_multi_file_order_and_uses_frozen_closing_summary(tmp_path):
+    candidate = make_candidate_records()
+    candidate.append({"event": "portfolio_summary", "closing_date": "2021-01-01",
+                      "total_value": 1.0, "_log_timestamp": "2021-01-01T15:30:00"})
+    early = tmp_path / "candidate-early.log"
+    late = tmp_path / "candidate-late.log"
+    baseline = tmp_path / "baseline.log"
+    _write_log(early, candidate[::2])
+    _write_log(late, candidate[1::2])
+    _write_log(baseline, make_baseline_records())
+    first_output = tmp_path / "first.json"
+    second_output = tmp_path / "second.json"
+
+    analyzer.main(["--candidate-log", str(early), "--candidate-log", str(late),
+                   "--baseline-log", str(baseline), "--output", str(first_output)])
+    analyzer.main(["--candidate-log", str(late), "--candidate-log", str(early),
+                   "--baseline-log", str(baseline), "--output", str(second_output)])
+
+    first = json.loads(first_output.read_text(encoding="utf-8"))
+    second = json.loads(second_output.read_text(encoding="utf-8"))
+    assert first == second
+    assert first["metrics"]["final_asset"] == pytest.approx(23856.40)

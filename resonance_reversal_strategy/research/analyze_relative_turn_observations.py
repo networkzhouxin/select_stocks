@@ -8,8 +8,9 @@ import os
 import pathlib
 import re
 import statistics
+import tempfile
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 
 
 TRAIN_START = date(2019, 1, 1)
@@ -22,7 +23,9 @@ BASELINE_FINAL_ASSET = 23856.40
 PARAMETER_FINGERPRINT = "e1227fbd8b4a884e"
 POOL_FINGERPRINT = "9123995edeb1ed84"
 FORMAL_EVENT_FINGERPRINT = "1c0b8a22f48c97c3"
-LOG_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+LOG_TIMESTAMP_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})(?:[ T](?P<time>\d{2}:\d{2}:\d{2}))?\s+-"
+)
 BRANCHES = ("HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE")
 DIRECTIONS = ("BUY_TURN", "SELL_TURN")
 HORIZONS = (1, 3, 5)
@@ -46,9 +49,13 @@ def parse_joinquant_log_line(line, ordinal):
         return None
     if not isinstance(payload, dict):
         return None
-    match = LOG_DATE_RE.match(text)
+    match = LOG_TIMESTAMP_RE.match(text)
     result = dict(payload)
-    result["_log_date"] = match.group(1) if match else None
+    result["_log_date"] = match.group("date") if match else None
+    result["_log_timestamp"] = (
+        match.group("date") + "T" + match.group("time")
+        if match and match.group("time") else None
+    )
     result["_ordinal"] = int(ordinal)
     return result
 
@@ -57,12 +64,15 @@ def load_log_records(paths):
     """Read explicit log paths without changing the input files."""
     records = []
     ordinal = 0
-    for path_value in paths:
+    for source_index, path_value in enumerate(paths):
         with pathlib.Path(path_value).open("r", encoding="utf-8-sig") as stream:
-            for line in stream:
+            for line_number, line in enumerate(stream, 1):
                 ordinal += 1
                 record = parse_joinquant_log_line(line, ordinal)
                 if record is not None:
+                    record["_source_path"] = str(pathlib.Path(path_value).resolve())
+                    record["_source_index"] = source_index
+                    record["_source_line"] = line_number
                     records.append(record)
     return records
 
@@ -74,7 +84,9 @@ def _calendar_date(value):
         return value
     if not isinstance(value, str):
         raise ValueError("date must be an ISO string")
-    return date.fromisoformat(value[:10])
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("date must be complete ISO date")
+    return date.fromisoformat(value)
 
 
 def _is_training_date(value, label, errors):
@@ -118,12 +130,9 @@ def _text(record, field, label, errors):
 
 
 def _finite_number(value):
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
+    numeric = float(value)
     return numeric if math.isfinite(numeric) else None
 
 
@@ -151,6 +160,22 @@ def _validate_support_contract(record, prefix, signal_date, errors):
     if (not isinstance(sources, dict) or set(sources) != support_set
             or not set(sources.values()).issubset(SOURCES)):
         errors.append("invalid %s hard_or_relative_source_by_indicator" % prefix)
+        return
+    branch = record.get("branch")
+    valid = {
+        "HARD_BOLL_SOFT_OSC": (
+            ({"BOLL", "RSI"}, {"BOLL": "HARD", "RSI": "RELATIVE"}),
+            ({"BOLL", "KDJ"}, {"BOLL": "HARD", "KDJ": "RELATIVE"}),
+        ),
+        "SOFT_ALL_THREE": (
+            ({"BOLL", "KDJ", "RSI"}, {
+                "BOLL": "RELATIVE", "KDJ": "RELATIVE", "RSI": "RELATIVE",
+            }),
+        ),
+    }
+    if branch in valid and not any(support_set == expected_set and sources == expected_sources
+                                   for expected_set, expected_sources in valid[branch]):
+        errors.append("impossible %s branch/supporters/source contract" % prefix)
 
 
 def _validate_candidate_initializations(records, errors):
@@ -192,6 +217,13 @@ def _validate_relative_registration(record, errors):
         errors.append("invalid branch: %r" % record.get("branch"))
     if record.get("direction") not in DIRECTIONS:
         errors.append("invalid candidate direction: %r" % record.get("direction"))
+    for field, expected in (
+            ("parameter_fingerprint", PARAMETER_FINGERPRINT),
+            ("pool_fingerprint", POOL_FINGERPRINT),
+            ("event_logic_fingerprint", FORMAL_EVENT_FINGERPRINT),
+            ("relative_observation_fingerprint", RELATIVE_OBSERVATION_FINGERPRINT)):
+        if record.get(field) != expected:
+            errors.append("registration %s mismatch: %r" % (field, record.get(field)))
     _text(record, "code", "candidate code", errors)
     signal_date = _is_training_date(record.get("signal_date"), "signal", errors)
     expires_date = _is_training_date(record.get("expires_date"), "expires", errors)
@@ -207,6 +239,9 @@ def _validate_relative_registration(record, errors):
 
 def _validate_relative_outcome_shape(record, errors):
     observation_id = _validate_relative_common(record, errors)
+    resonance_id = _text(record, "resonance_id", "relative outcome resonance id", errors)
+    if observation_id is not None and resonance_id != observation_id:
+        errors.append("relative outcome resonance_id mismatch: %s" % observation_id)
     horizon = record.get("horizon")
     if (isinstance(horizon, bool) or not isinstance(horizon, int)
             or horizon not in HORIZONS):
@@ -251,17 +286,35 @@ def _validate_relative_identity(registration, outcome, errors):
     for field in ("supporter_event_dates", "hard_or_relative_source_by_indicator"):
         if field in outcome and outcome.get(field) != registration.get(field):
             errors.append("relative outcome %s mismatch: %s" % (field, observation_id))
+    if outcome.get("resonance_id") != observation_id:
+        errors.append("relative outcome resonance_id mismatch: %s" % observation_id)
+    payload = outcome.get("outcome")
+    if isinstance(payload, dict) and payload.get("status") == "RECORDED":
+        raw = _finite_number(payload.get("return"))
+        adjusted = _finite_number(payload.get("direction_adjusted_return"))
+        expected = raw if registration.get("direction") == "BUY_TURN" else (-raw if raw is not None else None)
+        if raw is not None and adjusted is not None and not math.isclose(
+                adjusted, expected, rel_tol=0.0, abs_tol=1e-12):
+            errors.append("relative outcome direction_adjusted_return mismatch: %s" % observation_id)
 
 
 def _validate_filled_orders(records, role, errors):
     for record in records:
         if not (record.get("event") == "order_transition" and record.get("outcome") == "FILLED"):
             continue
-        if record.get("side") not in ("BUY", "SELL") or not isinstance(record.get("code"), str):
+        timestamp = record.get("_log_timestamp")
+        try:
+            valid_timestamp = isinstance(timestamp, str) and datetime.fromisoformat(timestamp)
+        except ValueError:
+            valid_timestamp = False
+        if not valid_timestamp or not (TRAIN_START <= datetime.fromisoformat(timestamp).date() <= TRAIN_END):
+            errors.append("invalid filled order log timestamp in %s" % role)
+        if (record.get("side") not in ("BUY", "SELL")
+                or not isinstance(record.get("code"), str) or not record.get("code")):
             errors.append("invalid filled order identity in %s" % role)
         for field in ("before_amount", "after_amount"):
             value = _finite_number(record.get(field))
-            if value is None or value < 0:
+            if value is None or value < 0 or value != int(value):
                 errors.append("invalid filled order %s in %s" % (field, role))
 
 
@@ -293,7 +346,13 @@ def _validate_baseline(records, errors):
         _is_training_date(record.get("signal_date"), "formal signal", errors)
         if resonance_id is not None:
             if resonance_id in registrations:
-                errors.append("duplicate formal registration: %s" % resonance_id)
+                public_record = {key: value for key, value in record.items() if not key.startswith("_")}
+                prior_public_record = {
+                    key: value for key, value in registrations[resonance_id].items()
+                    if not key.startswith("_")
+                }
+                if public_record != prior_public_record:
+                    errors.append("duplicate formal registration: %s" % resonance_id)
             else:
                 registrations[resonance_id] = record
     for record in records:
@@ -329,6 +388,9 @@ def _validate_baseline(records, errors):
             errors.append("duplicate formal outcome: %s/%s" % key)
         else:
             outcomes[key] = record
+    for resonance_id in registrations:
+        if (resonance_id, 5) not in outcomes:
+            errors.append("missing formal horizon 5: %s" % resonance_id)
     _validate_filled_orders(records, "baseline", errors)
     return registrations, outcomes
 
@@ -353,7 +415,7 @@ def _filter_candidate_records(records):
 
 
 def lower_quartile(values):
-    ordered = sorted(float(value) for value in values)
+    ordered = sorted(values)
     if not ordered:
         return None
     position = (len(ordered) - 1) * 0.25
@@ -365,14 +427,22 @@ def lower_quartile(values):
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def summarize_returns(values):
-    values = tuple(float(value) for value in values)
+def summarize_returns(values, errors=None, label="return"):
+    values = tuple(values)
     if not values:
         return {"count": 0, "mean": None, "median": None, "hit_rate": None, "q1": None}
-    return {"count": len(values), "mean": statistics.fmean(values),
-            "median": statistics.median(values),
-            "hit_rate": sum(value > 0 for value in values) / len(values),
-            "q1": lower_quartile(values)}
+    try:
+        mean = math.fsum(values) / len(values)
+        median = statistics.median(values)
+        q1 = lower_quartile(values)
+    except (OverflowError, ValueError):
+        mean = median = q1 = None
+    if not all(value is not None and math.isfinite(value) for value in (mean, median, q1)):
+        if errors is not None:
+            errors.append("non-finite aggregate: %s" % label)
+        mean = median = q1 = None
+    return {"count": len(values), "mean": mean, "median": median,
+            "hit_rate": sum(value > 0 for value in values) / len(values), "q1": q1}
 
 
 def extract_filled_order_path(records):
@@ -384,18 +454,24 @@ def extract_filled_order_path(records):
 
 def extract_final_asset(records):
     summaries = [record for record in records if record.get("event") == "portfolio_summary"
-                 and record.get("total_value") is not None]
-    return None if not summaries else _finite_number(summaries[-1]["total_value"])
+                 and record.get("closing_date") == TRAIN_END.isoformat()
+                 and _finite_number(record.get("total_value")) is not None]
+    return None if not summaries else _finite_number(
+        sorted(summaries, key=_sort_key)[-1]["total_value"])
 
 
 def _sort_key(record):
-    return (str(record.get("signal_date") or record.get("event_date") or ""),
+    return (str(record.get("_log_timestamp") or "9999-12-31T23:59:59"),
+            str(record.get("signal_date") or record.get("event_date") or ""),
             str(record.get("relative_observation_id") or record.get("resonance_id") or ""),
-            str(record.get("horizon") or ""), int(record.get("_ordinal") or 0))
+            str(record.get("horizon") or ""),
+            json.dumps({key: value for key, value in record.items() if not key.startswith("_")},
+                       sort_keys=True, ensure_ascii=False))
 
 
-def _grouped_summaries(values_by_group):
-    return {group: {"horizon_%d" % horizon: summarize_returns(values_by_group[group][horizon])
+def _grouped_summaries(values_by_group, errors=None):
+    return {group: {"horizon_%d" % horizon: summarize_returns(
+                        values_by_group[group][horizon], errors, "%s/horizon_%d" % (group, horizon))
                     for horizon in HORIZONS} for group in values_by_group}
 
 
@@ -411,10 +487,15 @@ def _formal_five_day_returns(registrations, outcomes):
     return values
 
 
+def _normalized_timeline(records):
+    """Stable complete-timestamp ordering; tie-break only on record content."""
+    return sorted((dict(record) for record in records), key=_sort_key)
+
+
 def analyze_records(candidate_records, baseline_records):
     """Validate immutable log contracts and return a deterministic report."""
-    candidate_records = list(candidate_records)
-    baseline_records = list(baseline_records)
+    candidate_records = _normalized_timeline(candidate_records)
+    baseline_records = _normalized_timeline(baseline_records)
     errors = []
     _validate_candidate_initializations(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
@@ -467,7 +548,10 @@ def analyze_records(candidate_records, baseline_records):
     missing_outcome_count = 0
     for candidate in candidates:
         observation_id = candidate["relative_observation_id"]
-        signal_date = _calendar_date(candidate.get("signal_date"))
+        try:
+            signal_date = _calendar_date(candidate.get("signal_date"))
+        except ValueError:
+            signal_date = None
         if signal_date is not None and str(signal_date.year) in year_counts:
             year_counts[str(signal_date.year)] += 1
         direction = candidate.get("direction")
@@ -501,16 +585,21 @@ def analyze_records(candidate_records, baseline_records):
     relative_keys = {(record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
                      for record in candidates}
     formal_overlap_count = len(formal_keys & relative_keys)
-    total_positive = sum(positive_by_etf.values())
+    try:
+        total_positive = math.fsum(positive_by_etf.values())
+    except OverflowError:
+        total_positive = math.inf
+        errors.append("non-finite aggregate: positive contribution")
     max_positive_contribution = (max(positive_by_etf.values()) / total_positive
                                  if total_positive > 0 else None)
     candidate_path = extract_filled_order_path(candidate_records)
     baseline_path = extract_filled_order_path(baseline_records)
     candidate_asset = extract_final_asset(candidate_records)
     baseline_asset = extract_final_asset(baseline_records)
-    horizon_5 = summarize_returns(returns_by_horizon[5])
-    year_2021 = summarize_returns(five_day_2021)
-    formal_horizon_5 = summarize_returns(_formal_five_day_returns(formal_registrations, formal_outcomes))
+    horizon_5 = summarize_returns(returns_by_horizon[5], errors, "horizon_5")
+    year_2021 = summarize_returns(five_day_2021, errors, "year_2021_horizon_5")
+    formal_horizon_5 = summarize_returns(
+        _formal_five_day_returns(formal_registrations, formal_outcomes), errors, "formal_horizon_5")
     formal_order_path_exact = (len(candidate_path) == BASELINE_FILLED_COUNT
                                and len(baseline_path) == BASELINE_FILLED_COUNT
                                and candidate_path == baseline_path)
@@ -518,6 +607,10 @@ def analyze_records(candidate_records, baseline_records):
                          and math.isclose(candidate_asset, BASELINE_FINAL_ASSET, abs_tol=0.01)
                          and math.isclose(baseline_asset, BASELINE_FINAL_ASSET, abs_tol=0.01)
                          and math.isclose(candidate_asset, baseline_asset, abs_tol=0.01))
+    grouped_by_branch = _grouped_summaries(by_branch, errors)
+    grouped_by_direction = _grouped_summaries(by_direction, errors)
+    horizon_1 = summarize_returns(returns_by_horizon[1], errors, "horizon_1")
+    horizon_3 = summarize_returns(returns_by_horizon[3], errors, "horizon_3")
     errors = sorted(set(errors))
     data_quality_complete = not errors and formal_overlap_count == 0 and missing_outcome_count == 0
     gates = {
@@ -542,10 +635,10 @@ def analyze_records(candidate_records, baseline_records):
                          "ignored_record_counts": ignored_record_counts},
         "metrics": {"candidate_count": len(candidates), "year_counts": year_counts,
                     "direction_counts": direction_counts, "etf_counts": dict(sorted(etf_counts.items())),
-                    "by_branch": _grouped_summaries(by_branch),
-                    "by_direction": _grouped_summaries(by_direction),
-                    "horizon_1": summarize_returns(returns_by_horizon[1]),
-                    "horizon_3": summarize_returns(returns_by_horizon[3]),
+                    "by_branch": grouped_by_branch,
+                    "by_direction": grouped_by_direction,
+                    "horizon_1": horizon_1,
+                    "horizon_3": horizon_3,
                     "horizon_5": horizon_5, "year_2021_horizon_5": year_2021,
                     "formal_horizon_5": formal_horizon_5,
                     "max_positive_contribution_by_etf": max_positive_contribution,
@@ -586,7 +679,20 @@ def main(argv=None):
         raise ValueError("output path must not match an input log")
     report = analyze_records(load_log_records(candidate_paths), load_log_records(baseline_paths))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=output_path.parent,
+                prefix=".%s." % output_path.name, suffix=".tmp", delete=False) as stream:
+            temporary_path = pathlib.Path(stream.name)
+            stream.write(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, output_path)
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
     return 0
 
 
