@@ -178,6 +178,34 @@ def _relative_observation_log_identity(observation):
     }
 
 
+def _safe_relative_signal_snapshot_log_fields(snapshot):
+    try:
+        relative_book = snapshot.get("relative_event_book") or empty_event_book()
+        return {
+            "relative_observation_fingerprint": (
+                relative_observation_fingerprint()
+            ),
+            "relative_active_events": dict(relative_book.get("active") or {}),
+            "relative_invalidated_events": list(
+                relative_book.get("invalidated") or []
+            ),
+        }
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _safe_relative_observation_diagnostic(
+            "relative_observation_snapshot", {
+                "reason": "RELATIVE_SIGNAL_SNAPSHOT_LOG_FIELDS_FAILED",
+                "error_type": type(error).__name__,
+            },
+        )
+        return {
+            "relative_observation_fingerprint": None,
+            "relative_active_events": {},
+            "relative_invalidated_events": [],
+        }
+
+
 def _runtime_params_and_pool():
     runtime = globals().get("g")
     params = getattr(runtime, "params", get_default_params())
@@ -188,7 +216,7 @@ def _runtime_params_and_pool():
 def log_signal_snapshot(snapshot):
     params, etf_pool = _runtime_params_and_pool()
     event_book = snapshot.get("event_book") or empty_event_book()
-    relative_book = snapshot.get("relative_event_book") or empty_event_book()
+    relative_fields = _safe_relative_signal_snapshot_log_fields(snapshot)
     self_check = run_event_logic_self_check(params)
     _emit_structured_log("signal_snapshot", {
         "version": STRATEGY_VERSION,
@@ -198,7 +226,6 @@ def log_signal_snapshot(snapshot):
         "event_logic_fingerprint": event_logic_fingerprint(
             params, self_check,
         ),
-        "relative_observation_fingerprint": relative_observation_fingerprint(),
         "code": snapshot.get("code"),
         "decision_date": snapshot.get("decision_date"),
         "signal_date": snapshot.get("signal_date"),
@@ -212,10 +239,7 @@ def log_signal_snapshot(snapshot):
         "kdj_cross": snapshot.get("kdj_cross", "NONE"),
         "active_events": dict(event_book.get("active") or {}),
         "invalidated_events": list(event_book.get("invalidated") or []),
-        "relative_active_events": dict(relative_book.get("active") or {}),
-        "relative_invalidated_events": list(
-            relative_book.get("invalidated") or []
-        ),
+        **relative_fields,
     })
 
 

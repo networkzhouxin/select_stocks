@@ -3978,6 +3978,111 @@ def test_malformed_relative_candidate_keeps_formal_trading_pipeline(
     })
 
 
+def test_relative_signal_snapshot_log_failure_keeps_formal_pipeline(
+        monkeypatch):
+    code = "510300.XSHG"
+    calls = []
+    snapshot = resonance_snapshot(code)
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshots", lambda *args: {code: snapshot},
+    )
+    monkeypatch.setattr(
+        strategy, "relative_observation_fingerprint",
+        lambda: (_ for _ in ()).throw(RuntimeError("relative fingerprint")),
+    )
+    monkeypatch.setattr(
+        strategy, "run_relative_observation_stage", lambda *args: None,
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_exits", lambda *args: calls.append("exits"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_buys", lambda *args: calls.append("buys"),
+    )
+
+    strategy.do_trading(fake_context())
+
+    assert calls == ["retry", "atr", "exits", "buys"]
+
+
+def test_relative_sidecar_states_leave_real_formal_execution_equivalent(
+        monkeypatch):
+    code = "510300.XSHG"
+    observation = {
+        "relative_observation_id": "RELATIVE:metamorphic",
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": "SOFT_ALL_THREE",
+        "code": code,
+        "direction": strategy.TurnDirection.BUY_TURN,
+        "signal_date": date(2021, 1, 5),
+        "supporters": ("BOLL", "KDJ", "RSI"),
+        "supporter_event_dates": {},
+        "hard_or_relative_source_by_indicator": {},
+        "expires_date": date(2021, 1, 6),
+        "event_close": 10.0,
+    }
+
+    def run_with_relative_collector(collector):
+        runtime = runtime_state(max_holdings=1)
+        context = fake_context()
+        orders = []
+        with monkeypatch.context() as local:
+            local.setattr(strategy, "g", runtime, raising=False)
+            local.setattr(
+                strategy, "get_current_data",
+                lambda: {code: current_record(10.0)}, raising=False,
+            )
+            local.setattr(
+                strategy, "build_signal_snapshots",
+                lambda *args: {code: resonance_snapshot(code)},
+            )
+            local.setattr(
+                strategy, "collect_relative_resonance_observations", collector,
+            )
+            local.setattr(
+                strategy, "order_target_value",
+                lambda order_code, target_value: orders.append(
+                    (order_code, target_value)
+                ) or context.portfolio.positions.__setitem__(
+                    order_code, fake_position(100)
+                ) or types.SimpleNamespace(amount=100),
+                raising=False,
+            )
+
+            strategy.do_trading(context)
+
+        return {
+            "orders": orders,
+            "processed": copy.deepcopy(runtime.processed_resonance_ids),
+            "sold_today": set(runtime.sold_today),
+            "attempted": set(runtime.daily_attempted_buys),
+            "positions": {
+                item: position.total_amount
+                for item, position in context.portfolio.positions.items()
+            },
+            "position_states": copy.deepcopy(runtime.position_states),
+        }
+
+    outcomes = [
+        run_with_relative_collector(lambda snapshots: [observation]),
+        run_with_relative_collector(lambda snapshots: []),
+        run_with_relative_collector(
+            lambda snapshots: (_ for _ in ()).throw(RuntimeError("sidecar")),
+        ),
+    ]
+
+    assert outcomes[0] == outcomes[1] == outcomes[2]
+    assert outcomes[0]["orders"]
+
+
 def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(
         monkeypatch):
     params = strategy.get_default_params()
