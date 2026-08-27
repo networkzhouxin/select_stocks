@@ -365,6 +365,50 @@ def test_business_records_require_real_emitter_timestamp_chronology():
     assert any("log timestamp" in error for error in report["data_quality"]["errors"])
 
 
+def test_relative_and_formal_registration_timestamps_must_follow_signal_date():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    relative = next(record for record in candidate
+                    if record.get("event") == "relative_resonance_observation")
+    formal = next(record for record in baseline
+                  if record.get("event") == "resonance_decision")
+    relative["_log_timestamp"] = relative["signal_date"] + "T09:35:00"
+    formal["_log_timestamp"] = formal["signal_date"] + "T09:35:00"
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is False
+    assert any("relative registration log timestamp must follow signal date" in error
+               for error in report["data_quality"]["errors"])
+    assert any("formal registration log timestamp must follow signal date" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_friday_signal_to_monday_registration_timestamp_is_legal():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = [record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]]
+    registration["signal_date"] = registration["expires_date"] = "2019-01-04"
+    registration["supporter_event_dates"] = {
+        indicator: "2019-01-04" for indicator in registration["supporters"]
+    }
+    registration["_log_timestamp"] = "2019-01-07T09:35:00"
+    _replace_relative_identity(registration, outcomes)
+    for outcome, closing_date in zip(sorted(outcomes, key=lambda item: item["horizon"]),
+                                     ("2019-01-07", "2019-01-09", "2019-01-11")):
+        outcome["event_date"] = "2019-01-04"
+        outcome["supporter_event_dates"] = dict(registration["supporter_event_dates"])
+        outcome["outcome"]["closing_date"] = closing_date
+        outcome["_log_timestamp"] = closing_date + "T15:30:00"
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is True
+
+
 def test_cli_rejects_midnight_business_log_chronology(tmp_path):
     candidate = make_candidate_records()
     baseline = make_baseline_records()

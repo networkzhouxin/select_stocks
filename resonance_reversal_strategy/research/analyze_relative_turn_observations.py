@@ -150,8 +150,8 @@ def _validate_registration_log_timestamp(record, label, signal_date, errors):
     timestamp = _strict_log_timestamp(record, label, errors)
     if timestamp is None or signal_date is None:
         return timestamp
-    if timestamp.date() < signal_date:
-        errors.append("%s log timestamp before signal date" % label)
+    if timestamp.date() <= signal_date:
+        errors.append("%s log timestamp must follow signal date" % label)
     if timestamp.time() < TRADING_LOG_TIME:
         errors.append("%s log timestamp before 09:35" % label)
     return timestamp
