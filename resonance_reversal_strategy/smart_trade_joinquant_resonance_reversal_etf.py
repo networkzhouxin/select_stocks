@@ -1087,6 +1087,78 @@ def detect_boll_direction(previous, current):
     return TurnDirection.NEUTRAL
 
 
+def _finite_float(value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _boll_percent_b(row):
+    close = _finite_float(row.get("close"))
+    upper = _finite_float(row.get("boll_upper"))
+    lower = _finite_float(row.get("boll_lower"))
+    if close is None or upper is None or lower is None or upper <= lower:
+        return None
+    return (close - lower) / (upper - lower)
+
+
+def detect_relative_rsi_direction(older, middle, current):
+    values = tuple(_finite_float(row.get("rsi14"))
+                   for row in (older, middle, current))
+    if _builtins.any(value is None for value in values):
+        return TurnDirection.NEUTRAL
+    old_rsi, mid_rsi, current_rsi = values
+    if old_rsi >= mid_rsi and current_rsi > mid_rsi:
+        return TurnDirection.BUY_TURN
+    if old_rsi <= mid_rsi and current_rsi < mid_rsi:
+        return TurnDirection.SELL_TURN
+    return TurnDirection.NEUTRAL
+
+
+def detect_relative_kdj_direction(older, middle, current):
+    rows = (older, middle, current)
+    j_values = tuple(_finite_float(row.get("j")) for row in rows)
+    diff_values = tuple(_finite_float(row.get("kd_diff")) for row in rows)
+    if _builtins.any(value is None for value in j_values + diff_values):
+        return TurnDirection.NEUTRAL
+    old_j, mid_j, current_j = j_values
+    old_diff, mid_diff, current_diff = diff_values
+    if (old_j >= mid_j and old_diff >= mid_diff
+            and current_j > mid_j and current_diff > mid_diff):
+        return TurnDirection.BUY_TURN
+    if (old_j <= mid_j and old_diff <= mid_diff
+            and current_j < mid_j and current_diff < mid_diff):
+        return TurnDirection.SELL_TURN
+    return TurnDirection.NEUTRAL
+
+
+def detect_relative_boll_direction(older, middle, current):
+    percent_b = tuple(_boll_percent_b(row)
+                      for row in (older, middle, current))
+    fields = tuple(
+        _finite_float(row.get(name))
+        for row in (middle, current)
+        for name in ("close", "low", "high", "boll_mid")
+    )
+    if (_builtins.any(value is None for value in percent_b)
+            or _builtins.any(value is None for value in fields)):
+        return TurnDirection.NEUTRAL
+    old_percent, mid_percent, current_percent = percent_b
+    mid_close, mid_low, mid_high, mid_mid = fields[:4]
+    current_close, current_low, current_high, current_mid = fields[4:]
+    if (mid_close < mid_mid and old_percent >= mid_percent
+            and current_percent > mid_percent
+            and current_close > mid_close and current_low >= mid_low):
+        return TurnDirection.BUY_TURN
+    if (mid_close > mid_mid and old_percent <= mid_percent
+            and current_percent < mid_percent
+            and current_close < mid_close and current_high <= mid_high):
+        return TurnDirection.SELL_TURN
+    return TurnDirection.NEUTRAL
+
+
 def _has_complete_values(previous, current, names):
     values = [previous.get(name) for name in names]
     values += [current.get(name) for name in names]

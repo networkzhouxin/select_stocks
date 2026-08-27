@@ -306,6 +306,88 @@ def test_boll_touch_without_return_inside_is_neutral():
     ) is strategy.TurnDirection.NEUTRAL
 
 
+@pytest.mark.parametrize(
+    "values,expected",
+    [
+        ((45.0, 40.0, 41.0), strategy.TurnDirection.BUY_TURN),
+        ((55.0, 60.0, 59.0), strategy.TurnDirection.SELL_TURN),
+        ((40.0, 40.0, 40.0), strategy.TurnDirection.NEUTRAL),
+        ((np.nan, 40.0, 41.0), strategy.TurnDirection.NEUTRAL),
+    ],
+)
+def test_relative_rsi_uses_local_turn_without_fixed_threshold(values, expected):
+    older, middle, current = ({"rsi14": value} for value in values)
+    assert strategy.detect_relative_rsi_direction(
+        older, middle, current,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    "older,middle,current,expected",
+    [
+        (
+            {"j": 45.0, "kd_diff": -1.0},
+            {"j": 40.0, "kd_diff": -2.0},
+            {"j": 41.0, "kd_diff": -1.5},
+            strategy.TurnDirection.BUY_TURN,
+        ),
+        (
+            {"j": 55.0, "kd_diff": 2.0},
+            {"j": 60.0, "kd_diff": 3.0},
+            {"j": 59.0, "kd_diff": 2.5},
+            strategy.TurnDirection.SELL_TURN,
+        ),
+        (
+            {"j": 45.0, "kd_diff": -1.0},
+            {"j": 40.0, "kd_diff": -2.0},
+            {"j": 41.0, "kd_diff": -2.5},
+            strategy.TurnDirection.NEUTRAL,
+        ),
+    ],
+)
+def test_relative_kdj_requires_j_and_kd_diff_to_turn_together(
+    older, middle, current, expected):
+    assert strategy.detect_relative_kdj_direction(
+        older, middle, current,
+    ) is expected
+
+
+def test_relative_boll_uses_percent_b_turn_without_touching_band():
+    older = {
+        "close": 9.6, "low": 9.4, "high": 9.8,
+        "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0,
+    }
+    middle = {
+        "close": 9.0, "low": 8.8, "high": 9.3,
+        "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0,
+    }
+    current = {
+        "close": 9.2, "low": 8.8, "high": 9.5,
+        "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0,
+    }
+
+    assert middle["low"] > middle["boll_lower"]
+    assert strategy.detect_relative_boll_direction(
+        older, middle, current,
+    ) is strategy.TurnDirection.BUY_TURN
+
+
+def test_relative_boll_rejects_zero_width_nonfinite_and_new_extreme():
+    valid = {
+        "close": 9.0, "low": 8.8, "high": 9.3,
+        "boll_mid": 10.0, "boll_upper": 12.0, "boll_lower": 8.0,
+    }
+    zero_width = dict(valid, boll_upper=8.0, boll_lower=8.0)
+    nonfinite = dict(valid, close=np.inf)
+    lower_low = dict(valid, close=9.2, low=8.7)
+
+    assert strategy._boll_percent_b(zero_width) is None
+    assert strategy._boll_percent_b(nonfinite) is None
+    assert strategy.detect_relative_boll_direction(
+        dict(valid, close=9.6), valid, lower_low,
+    ) is strategy.TurnDirection.NEUTRAL
+
+
 def test_opposite_event_replaces_old_event_with_auditable_reason():
     book = strategy.empty_event_book()
     strategy.apply_event(book, make_event(
