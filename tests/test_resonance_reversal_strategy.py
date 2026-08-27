@@ -579,6 +579,202 @@ def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
     assert runtime.daily_attempted_buys == set()
 
 
+@pytest.mark.parametrize(
+    "side,before,after,target,tradability,order_amount,filled,expected",
+    [
+        ("BUY", 0, 0, 100, "PAUSED", None, None, "PAUSED"),
+        ("BUY", 0, 0, 100, "UNKNOWN", None, None, "UNKNOWN"),
+        ("BUY", 0, 100, 100, "TRADEABLE", 100, 100, "FILLED"),
+        ("BUY", 0, 50, 100, "TRADEABLE", 100, 50, "PARTIAL"),
+        ("BUY", 0, 0, 100, "TRADEABLE", 100, 100, "PARTIAL"),
+        ("BUY", 0, 0, 100, "TRADEABLE", 100, 0, "NOT_FILLED"),
+        ("SELL", 100, 0, 0, "TRADEABLE", -100, -100, "FILLED"),
+        ("SELL", 100, 40, 0, "TRADEABLE", -100, -60, "PARTIAL"),
+        ("SELL", 100, 100, 0, "TRADEABLE", -100, -100, "PARTIAL"),
+        ("SELL", 100, 100, 0, "TRADEABLE", -100, 0, "NOT_FILLED"),
+    ],
+)
+def test_order_outcome_truth_table(
+        side, before, after, target, tradability, order_amount, filled,
+        expected):
+    order = None if order_amount is None else types.SimpleNamespace(
+        amount=order_amount, filled=filled,
+    )
+
+    outcome = strategy.classify_order_outcome(
+        strategy.OrderSide[side], before, after, target,
+        strategy.Tradability[tradability], order,
+    )
+
+    assert outcome is strategy.OrderOutcome[expected]
+
+
+def test_partial_buy_establishes_frozen_risk_state_and_consumes_daily_attempt(
+        monkeypatch):
+    runtime = types.SimpleNamespace(
+        position_states={}, daily_attempted_buys=set(),
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    outcome = strategy.sync_buy_state_after_order(
+        "510300.XSHG", strategy.OrderOutcome.PARTIAL,
+        before_amount=0, after_amount=50, decision_date="2021-01-05",
+        entry_atr=2.5, entry_price=10.2,
+    )
+
+    assert outcome is strategy.OrderOutcome.PARTIAL
+    assert runtime.daily_attempted_buys == {"510300.XSHG"}
+    assert runtime.position_states["510300.XSHG"] == {
+        "buy_date": "2021-01-05",
+        "entry_atr": 2.5,
+        "highest_close_anchor": 10.2,
+        "pending_exit": None,
+    }
+
+
+def test_not_filled_buy_consumes_daily_attempt_without_creating_position_state(
+        monkeypatch):
+    runtime = types.SimpleNamespace(
+        position_states={}, daily_attempted_buys=set(),
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    outcome = strategy.sync_buy_state_after_order(
+        "510300.XSHG", strategy.OrderOutcome.NOT_FILLED,
+        before_amount=0, after_amount=0, decision_date="2021-01-05",
+        entry_atr=2.5, entry_price=10.2,
+    )
+
+    assert outcome is strategy.OrderOutcome.NOT_FILLED
+    assert runtime.daily_attempted_buys == {"510300.XSHG"}
+    assert runtime.position_states == {}
+
+
+@pytest.mark.parametrize(
+    "outcome,actual_amount",
+    [
+        (strategy.OrderOutcome.PARTIAL, 40),
+        (strategy.OrderOutcome.NOT_FILLED, 100),
+    ],
+)
+def test_partial_or_not_filled_sell_preserves_risk_state_and_sets_pending_exit(
+        monkeypatch, outcome, actual_amount):
+    position_state = {
+        "buy_date": "2021-01-05",
+        "entry_atr": 2.0,
+        "highest_close_anchor": 105.0,
+        "pending_exit": None,
+    }
+    runtime = types.SimpleNamespace(
+        position_states={"510300.XSHG": position_state}, sold_today=set(),
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    returned = strategy.sync_sell_state_after_order(
+        "510300.XSHG", outcome, strategy.ExitReason.SIGNAL_EXIT,
+        decision_date="2021-01-06", trigger_value=102.0,
+        actual_amount=actual_amount,
+    )
+
+    assert returned is outcome
+    assert runtime.sold_today == set()
+    assert position_state == {
+        "buy_date": "2021-01-05",
+        "entry_atr": 2.0,
+        "highest_close_anchor": 105.0,
+        "pending_exit": {
+            "created_date": "2021-01-06",
+            "reason": strategy.ExitReason.SIGNAL_EXIT,
+            "trigger_value": 102.0,
+            "remaining_amount": actual_amount,
+        },
+    }
+
+
+def test_pending_exit_can_upgrade_to_atr_but_cannot_downgrade_to_signal():
+    state = strategy.make_position_state("2021-01-05", 2.0, 100.0)
+    strategy.set_pending_exit(
+        state, strategy.ExitReason.SIGNAL_EXIT, "2021-01-06", 99.0, 100,
+    )
+
+    upgraded = strategy.set_pending_exit(
+        state, strategy.ExitReason.ATR_EXIT, "2021-01-07", 95.0, 80,
+    )
+    retained = strategy.set_pending_exit(
+        state, strategy.ExitReason.SIGNAL_EXIT, "2021-01-08", 98.0, 80,
+    )
+
+    expected = {
+        "created_date": "2021-01-07",
+        "reason": strategy.ExitReason.ATR_EXIT,
+        "trigger_value": 95.0,
+        "remaining_amount": 80,
+    }
+    assert upgraded == expected
+    assert retained == expected
+    assert state["pending_exit"] == expected
+
+
+def test_filled_sell_clears_state_and_marks_sold_today_only_when_flat(
+        monkeypatch):
+    runtime = types.SimpleNamespace(
+        position_states={
+            "510300.XSHG": strategy.make_position_state(
+                "2021-01-05", 2.0, 100.0,
+            ),
+        },
+        sold_today=set(),
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    outcome = strategy.sync_sell_state_after_order(
+        "510300.XSHG", strategy.OrderOutcome.FILLED,
+        strategy.ExitReason.ATR_EXIT, decision_date="2021-01-06",
+        trigger_value=95.0, actual_amount=0,
+    )
+
+    assert outcome is strategy.OrderOutcome.FILLED
+    assert runtime.position_states == {}
+    assert runtime.sold_today == {"510300.XSHG"}
+
+
+def test_retry_pending_exits_dispatches_only_existing_pending_state(
+        monkeypatch):
+    position_state = strategy.make_position_state("2021-01-05", 2.0, 100.0)
+    position_state["pending_exit"] = {
+        "created_date": "2021-01-06",
+        "reason": strategy.ExitReason.ATR_EXIT,
+        "trigger_value": 95.0,
+        "remaining_amount": 40,
+    }
+    runtime = types.SimpleNamespace(
+        position_states={
+            "510300.XSHG": position_state,
+            "159915.XSHE": strategy.make_position_state(
+                "2021-01-05", 1.0, 5.0,
+            ),
+        },
+        observation_events=types.MappingProxyType({}),
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    dispatched = []
+
+    def fake_submit_sell(context, code, reason, trigger_value):
+        dispatched.append((context, code, reason, trigger_value))
+        return strategy.OrderOutcome.PARTIAL
+
+    monkeypatch.setattr(strategy, "submit_sell", fake_submit_sell, raising=False)
+    context = types.SimpleNamespace(current_dt="2021-01-07 09:35")
+
+    results = strategy.retry_pending_exits(context, current_data=object())
+
+    assert results == [("510300.XSHG", strategy.OrderOutcome.PARTIAL)]
+    assert dispatched == [(
+        context, "510300.XSHG", strategy.ExitReason.ATR_EXIT, 95.0,
+    )]
+    assert position_state["pending_exit"]["remaining_amount"] == 40
+
+
 def test_partial_exit_keeps_all_position_risk_state(monkeypatch):
     position_state = {
         "buy_date": "2021-01-05",

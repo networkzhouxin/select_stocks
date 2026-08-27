@@ -46,6 +46,32 @@ class OrderOutcome(Enum):
     UNKNOWN = "UNKNOWN"
 
 
+EXIT_PRIORITY = {
+    ExitReason.SIGNAL_EXIT: 1,
+    ExitReason.ATR_EXIT: 2,
+}
+
+
+def classify_order_outcome(side, before_amount, after_amount, target_amount,
+                           tradability, order):
+    if tradability is Tradability.PAUSED:
+        return OrderOutcome.PAUSED
+    if tradability is Tradability.UNKNOWN:
+        return OrderOutcome.UNKNOWN
+    if side is OrderSide.SELL and after_amount == 0:
+        return OrderOutcome.FILLED
+    if (side is OrderSide.BUY and target_amount is not None
+            and after_amount >= target_amount):
+        return OrderOutcome.FILLED
+    filled = (
+        abs(getattr(order, "filled", 0) or 0)
+        if order is not None else 0
+    )
+    if after_amount != before_amount or filled > 0:
+        return OrderOutcome.PARTIAL
+    return OrderOutcome.NOT_FILLED
+
+
 def get_default_etf_pool():
     return [
         "510300.XSHG", "159915.XSHE", "512100.XSHG", "159928.XSHE",
@@ -164,6 +190,59 @@ def make_position_state(buy_date, entry_atr, entry_price):
         "highest_close_anchor": float(entry_price),
         "pending_exit": None,
     }
+
+
+def set_pending_exit(position_state, reason, created_date, trigger_value,
+                     remaining_amount):
+    existing = position_state.get("pending_exit")
+    if (existing is not None
+            and EXIT_PRIORITY[existing["reason"]] > EXIT_PRIORITY[reason]):
+        return existing
+    position_state["pending_exit"] = {
+        "created_date": created_date,
+        "reason": reason,
+        "trigger_value": trigger_value,
+        "remaining_amount": remaining_amount,
+    }
+    return position_state["pending_exit"]
+
+
+def sync_buy_state_after_order(code, outcome, before_amount, after_amount,
+                               decision_date, entry_atr, entry_price):
+    g.daily_attempted_buys.add(code)
+    if after_amount > before_amount:
+        g.position_states[code] = make_position_state(
+            decision_date, entry_atr, entry_price,
+        )
+    return outcome
+
+
+def sync_sell_state_after_order(code, outcome, reason, decision_date,
+                                trigger_value, actual_amount):
+    state = g.position_states.get(code)
+    if actual_amount == 0:
+        g.position_states.pop(code, None)
+        g.sold_today.add(code)
+        return outcome
+    if state is not None:
+        set_pending_exit(
+            state, reason, decision_date, trigger_value, actual_amount,
+        )
+    return outcome
+
+
+def retry_pending_exits(context, current_data):
+    results = []
+    for code, state in list(g.position_states.items()):
+        pending_exit = state.get("pending_exit")
+        if pending_exit is None:
+            continue
+        outcome = submit_sell(
+            context, code, pending_exit["reason"],
+            pending_exit["trigger_value"],
+        )
+        results.append((code, outcome))
+    return results
 
 
 def update_highest_close_anchor(position_state, closing_price):
