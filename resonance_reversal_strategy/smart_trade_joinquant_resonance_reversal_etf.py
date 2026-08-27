@@ -3,7 +3,6 @@ from jqdata import *
 import hashlib
 import json
 import math
-from datetime import timedelta
 from enum import Enum
 
 
@@ -65,11 +64,7 @@ def classify_order_outcome(side, before_amount, after_amount, target_amount,
     if (side is OrderSide.BUY and target_amount is not None
             and after_amount >= target_amount):
         return OrderOutcome.FILLED
-    filled = (
-        abs(getattr(order, "filled", 0) or 0)
-        if order is not None else 0
-    )
-    if after_amount != before_amount or filled > 0:
+    if after_amount != before_amount:
         return OrderOutcome.PARTIAL
     return OrderOutcome.NOT_FILLED
 
@@ -238,53 +233,40 @@ def log_portfolio_summary(context):
 
 
 def make_observation_event(resonance_id, code, event_date, event_close,
-                           due_dates):
+                           horizons=(1, 3, 5)):
     return {
         "resonance_id": resonance_id,
         "code": code,
-        "event_date": event_date,
+        "event_date": _calendar_date(event_date),
         "event_close": float(event_close),
-        "due_dates": dict(due_dates),
+        "horizons": tuple(horizons),
         "outcomes": {},
     }
 
 
-def due_observation_horizons(record, closing_date):
+def due_observation_horizons(record, elapsed_sessions):
     return sorted(
         horizon
-        for horizon, due_date in record["due_dates"].items()
-        if due_date <= closing_date and horizon not in record["outcomes"]
+        for horizon in record["horizons"]
+        if horizon <= elapsed_sessions and horizon not in record["outcomes"]
     )
 
 
 def _calendar_date(value):
-    if hasattr(value, "date"):
-        return value.date()
-    return value
+    if value is None:
+        return None
+    timestamp = pd.Timestamp(value)
+    if pd.isna(timestamp):
+        return None
+    return timestamp.date()
 
 
-def get_following_trade_days(anchor_date, required_count):
-    if required_count <= 0:
-        return []
-    anchor = pd.Timestamp(anchor_date)
-    start_date = anchor + timedelta(days=1)
-    span_days = max(14, required_count * 3)
-    for _ in range(9):
-        end_date = anchor + timedelta(days=span_days)
-        trade_days = get_trade_days(
-            start_date=start_date, end_date=end_date,
-        )
-        following = [
-            day for day in trade_days
-            if pd.Timestamp(day) > anchor
-        ]
-        if len(following) >= required_count:
-            return following[:required_count]
-        span_days *= 2
-    raise ValueError(
-        "unable to resolve %s following trading sessions after %s"
-        % (required_count, anchor_date)
-    )
+def _is_future_data_error(error):
+    future_error_type = globals().get("FutureDataError")
+    if (isinstance(future_error_type, type)
+            and isinstance(error, future_error_type)):
+        return True
+    return type(error).__name__ == "FutureDataError"
 
 
 def register_observation_event(decision, event_date, event_close):
@@ -293,14 +275,9 @@ def register_observation_event(decision, event_date, event_close):
     resonance_id = decision["resonance_id"]
     if resonance_id in g.observation_events:
         return
-    trade_days = get_following_trade_days(event_date, 5)
-    due_dates = {
-        horizon: _calendar_date(trade_days[horizon - 1])
-        for horizon in (1, 3, 5)
-    }
     g.observation_events[resonance_id] = make_observation_event(
         resonance_id, decision["code"], _calendar_date(event_date),
-        event_close, due_dates,
+        event_close,
     )
 
 
@@ -308,6 +285,8 @@ def try_register_observation_event(decision, event_date, event_close):
     try:
         register_observation_event(decision, event_date, event_close)
     except Exception as error:
+        if _is_future_data_error(error):
+            raise
         _emit_structured_log("observation_registration", {
             "resonance_id": (
                 decision.get("resonance_id") if decision is not None else None
@@ -321,14 +300,29 @@ def try_register_observation_event(decision, event_date, event_close):
 
 
 def record_due_observation_outcomes(context, current_data):
-    closing_date = context.current_dt.date()
+    closing_date = _calendar_date(context.current_dt)
     for resonance_id, record in list(g.observation_events.items()):
-        due_horizons = due_observation_horizons(record, closing_date)
+        event_date = _calendar_date(record["event_date"])
+        if event_date is None or closing_date <= event_date:
+            continue
+        trade_days = get_trade_days(
+            start_date=event_date, end_date=closing_date,
+        )
+        elapsed_trade_dates = sorted({
+            trade_date
+            for trade_date in (_calendar_date(day) for day in trade_days)
+            if (trade_date is not None
+                and event_date < trade_date <= closing_date)
+        })
+        elapsed_sessions = len(elapsed_trade_dates)
+        due_horizons = due_observation_horizons(
+            record, elapsed_sessions,
+        )
         if not due_horizons:
             continue
         for horizon in due_horizons:
-            due_date = record["due_dates"][horizon]
-            if due_date < closing_date:
+            due_date = elapsed_trade_dates[horizon - 1]
+            if horizon < elapsed_sessions:
                 outcome = {
                     "status": "HORIZON_MISSED",
                     "closing_date": due_date,
@@ -363,7 +357,7 @@ def record_due_observation_outcomes(context, current_data):
             })
         if all(
                 horizon in record["outcomes"]
-                for horizon in record["due_dates"]):
+                for horizon in record["horizons"]):
             g.observation_events.pop(resonance_id, None)
 
 
@@ -388,13 +382,15 @@ def ensure_runtime_state():
 
 def do_trading(context):
     ensure_runtime_state()
-    decision_date = context.current_dt.date()
-    signal_date = context.previous_date
+    decision_date = _calendar_date(context.current_dt)
+    signal_date = _calendar_date(context.previous_date)
     reset_daily_state(decision_date, signal_date)
     current_data = get_current_data()
     retry_pending_exits(context, current_data)
     run_atr_exits(context, current_data)
-    snapshots = build_signal_snapshots(signal_date, g.params)
+    snapshots = build_signal_snapshots(
+        signal_date, g.params, decision_date,
+    )
     held_codes = set(get_actual_positions(context))
     for snapshot in snapshots.values():
         event_book = snapshot.get("event_book") or {}
@@ -461,7 +457,7 @@ def is_finite_positive(value):
 def load_signal_price_frame(code, prev_date, lookback_days):
     return get_price(
         code,
-        end_date=prev_date,
+        end_date=_calendar_date(prev_date),
         count=lookback_days,
         frequency="daily",
         fields=["open", "high", "low", "close", "volume"],
@@ -471,13 +467,11 @@ def load_signal_price_frame(code, prev_date, lookback_days):
     )
 
 
-def get_next_trade_date(signal_date):
-    return get_following_trade_days(signal_date, 1)[0]
-
-
-def build_signal_snapshot(code, prev_date, params, next_trade_date):
+def build_signal_snapshot(code, prev_date, params, decision_date):
+    signal_date = _calendar_date(prev_date)
+    decision_date = _calendar_date(decision_date)
     price_frame = load_signal_price_frame(
-        code, prev_date, params["lookback_days"],
+        code, signal_date, params["lookback_days"],
     )
     if price_frame is None or len(price_frame) < params["lookback_days"]:
         return {"code": code, "valid": False, "reason": "INSUFFICIENT_DATA"}
@@ -501,12 +495,12 @@ def build_signal_snapshot(code, prev_date, params, next_trade_date):
     )
 
     event_book = collect_latest_events(
-        indicators, prev_date, next_trade_date,
+        indicators, signal_date, decision_date,
     )
     return {
         "code": code,
         "valid": True,
-        "signal_date": prev_date,
+        "signal_date": signal_date,
         "close": float(latest["close"]),
         "entry_atr": entry_atr,
         "event_book": event_book,
@@ -516,12 +510,13 @@ def build_signal_snapshot(code, prev_date, params, next_trade_date):
     }
 
 
-def build_signal_snapshots(prev_date, params):
-    next_trade_date = get_next_trade_date(prev_date)
+def build_signal_snapshots(prev_date, params, decision_date):
+    signal_date = _calendar_date(prev_date)
+    decision_date = _calendar_date(decision_date)
     snapshots = {}
     for code in get_default_etf_pool():
         snapshots[code] = build_signal_snapshot(
-            code, prev_date, params, next_trade_date,
+            code, signal_date, params, decision_date,
         )
     return snapshots
 
@@ -562,8 +557,19 @@ def get_actual_positions(context):
     }
 
 
+def _get_current_record(current_data, code):
+    if current_data is None:
+        return None
+    try:
+        return current_data[code]
+    except (KeyError, IndexError, TypeError) as error:
+        if _is_future_data_error(error):
+            raise
+        return None
+
+
 def get_tradability(current_data, code):
-    record = current_data.get(code) if current_data is not None else None
+    record = _get_current_record(current_data, code)
     if record is None:
         return Tradability.UNKNOWN
     paused = getattr(record, "paused", None)
@@ -575,7 +581,7 @@ def get_tradability(current_data, code):
 
 
 def get_execution_price(current_data, code):
-    record = current_data.get(code) if current_data is not None else None
+    record = _get_current_record(current_data, code)
     if record is None:
         return None
     price = getattr(record, "last_price", None)
@@ -721,11 +727,13 @@ def update_highest_close_anchor(position_state, closing_price):
 
 
 def can_signal_sell(buy_date, decision_date):
-    return buy_date < decision_date
+    return _calendar_date(buy_date) < _calendar_date(decision_date)
 
 
 def reset_daily_state(decision_date, signal_date):
     ensure_runtime_state()
+    decision_date = _calendar_date(decision_date)
+    signal_date = _calendar_date(signal_date)
     if getattr(g, "state_date", None) != decision_date:
         g.state_date = decision_date
         g.sold_today = set()
@@ -921,8 +929,8 @@ def make_turn_event(indicator, direction, event_date, expires_date,
     return {
         "indicator": indicator,
         "direction": direction,
-        "event_date": event_date,
-        "expires_date": expires_date,
+        "event_date": _calendar_date(event_date),
+        "expires_date": _calendar_date(expires_date),
         "trigger_values": dict(trigger_values),
         "reference_extreme": reference_extreme,
         "invalid_reason": None,
@@ -950,8 +958,9 @@ def apply_event(book, event):
 
 
 def expire_events(book, signal_date):
+    signal_date = _calendar_date(signal_date)
     for indicator, event in list(book["active"].items()):
-        if event["expires_date"] < signal_date:
+        if _calendar_date(event["expires_date"]) < signal_date:
             invalidate_event(book, indicator, "EVENT_EXPIRED")
 
 
@@ -1007,18 +1016,29 @@ def _make_detected_event(indicator, direction, previous, current,
     )
 
 
-def collect_latest_events(indicator_frame, signal_date, next_trade_date):
+def collect_latest_events(indicator_frame, signal_date, decision_date):
     params = get_default_params()
-    complete_frame = indicator_frame.loc[indicator_frame.index <= signal_date]
+    signal_date = _calendar_date(signal_date)
+    decision_date = _calendar_date(decision_date)
+    frame_dates = [
+        _calendar_date(index_value)
+        for index_value in indicator_frame.index
+    ]
+    complete_frame = indicator_frame.loc[
+        [
+            frame_date is not None and frame_date <= signal_date
+            for frame_date in frame_dates
+        ]
+    ]
     book = empty_event_book()
     first_event_position = max(1, len(complete_frame) - 2)
     for position in range(first_event_position, len(complete_frame)):
         previous = complete_frame.iloc[position - 1]
         current = complete_frame.iloc[position]
-        event_date = complete_frame.index[position]
+        event_date = _calendar_date(complete_frame.index[position])
         expires_date = (
-            complete_frame.index[position + 1]
-            if position + 1 < len(complete_frame) else next_trade_date
+            _calendar_date(complete_frame.index[position + 1])
+            if position + 1 < len(complete_frame) else decision_date
         )
         expire_events(book, event_date)
         directions = {
@@ -1053,6 +1073,7 @@ def build_resonance_id(code, direction, supporters):
 
 
 def build_resonance_decision(code, direction, event_book, signal_date):
+    signal_date = _calendar_date(signal_date)
     boll = event_book["active"].get("BOLL")
     if boll is None or boll["direction"] is not direction:
         return None
@@ -1071,7 +1092,9 @@ def build_resonance_decision(code, direction, event_book, signal_date):
     ]
     if len(supporters) < 2:
         return None
-    if not any(event["event_date"] == signal_date for event in supporters):
+    if not any(
+            _calendar_date(event["event_date"]) == signal_date
+            for event in supporters):
         return None
 
     return {
@@ -1080,13 +1103,19 @@ def build_resonance_decision(code, direction, event_book, signal_date):
         "signal_date": signal_date,
         "supporters": tuple(event["indicator"] for event in supporters),
         "support_count": len(supporters),
-        "boll_age": 0 if boll["event_date"] == signal_date else 1,
+        "boll_age": (
+            0 if _calendar_date(boll["event_date"]) == signal_date else 1
+        ),
         "resonance_id": build_resonance_id(code, direction, supporters),
-        "expires_date": min(event["expires_date"] for event in supporters),
+        "expires_date": min(
+            _calendar_date(event["expires_date"])
+            for event in supporters
+        ),
     }
 
 
 def resonance_rejection_reason(direction, event_book, signal_date):
+    signal_date = _calendar_date(signal_date)
     boll = event_book["active"].get("BOLL")
     if boll is None or boll["direction"] is not direction:
         return "BOLL_NOT_SUPPORTING"
@@ -1104,7 +1133,9 @@ def resonance_rejection_reason(direction, event_book, signal_date):
     ]
     if len(supporters) < 2:
         return "INSUFFICIENT_SUPPORT"
-    if not any(event["event_date"] == signal_date for event in supporters):
+    if not any(
+            _calendar_date(event["event_date"]) == signal_date
+            for event in supporters):
         return "NO_FRESH_SUPPORTER"
     return "RESONANCE_REJECTED"
 
@@ -1116,25 +1147,34 @@ def sort_buy_decisions(decisions):
 
 
 def prune_processed_resonance_ids(processed, signal_date):
+    signal_date = _calendar_date(signal_date)
     return {
-        resonance_id: expires_date
+        resonance_id: normalized_expiry
         for resonance_id, expires_date in processed.items()
-        if expires_date >= signal_date
+        for normalized_expiry in (_calendar_date(expires_date),)
+        if normalized_expiry is not None and normalized_expiry >= signal_date
     }
 
 
 def mark_resonance_processed(processed, decision):
-    processed[decision["resonance_id"]] = decision["expires_date"]
+    processed[decision["resonance_id"]] = _calendar_date(
+        decision["expires_date"],
+    )
 
 
 def collect_complete_resonance_decisions(snapshots, direction):
     decisions = {}
     for code, snapshot in snapshots.items():
         if not snapshot.get("valid"):
-            log_resonance_decision({
-                "code": code, "direction": direction,
-                "signal_date": snapshot.get("signal_date"),
-            }, False, snapshot.get("reason", "INVALID_SIGNAL_SNAPSHOT"))
+            event_book = snapshot.get("event_book") or empty_event_book()
+            if (event_book.get("active")
+                    or event_book.get("invalidated")):
+                log_resonance_decision({
+                    "code": code, "direction": direction,
+                    "signal_date": snapshot.get("signal_date"),
+                }, False, snapshot.get(
+                    "reason", "INVALID_SIGNAL_SNAPSHOT",
+                ))
             continue
         decision = build_resonance_decision(
             code, direction,
@@ -1147,13 +1187,20 @@ def collect_complete_resonance_decisions(snapshots, direction):
                 decision, snapshot["signal_date"], snapshot["close"],
             )
         else:
-            log_resonance_decision({
-                "code": code, "direction": direction,
-                "signal_date": snapshot.get("signal_date"),
-            }, False, resonance_rejection_reason(
+            rejection_reason = resonance_rejection_reason(
                 direction, snapshot["event_book"],
                 snapshot["signal_date"],
-            ))
+            )
+            event_book = snapshot["event_book"]
+            if (event_book.get("active")
+                    or event_book.get("invalidated")
+                    or rejection_reason in (
+                        "THIRD_INDICATOR_CONFLICT", "NO_FRESH_SUPPORTER",
+                    )):
+                log_resonance_decision({
+                    "code": code, "direction": direction,
+                    "signal_date": snapshot.get("signal_date"),
+                }, False, rejection_reason)
     return decisions
 
 
@@ -1263,6 +1310,10 @@ def run_signal_exits(context, current_data, snapshots):
             continue
         tradability = get_tradability(current_data, code)
         if tradability is Tradability.PAUSED:
+            set_pending_exit(
+                state, ExitReason.SIGNAL_EXIT, decision_date,
+                snapshot["close"], get_actual_amount(context, code),
+            )
             log_resonance_decision(decision, False, "PAUSED")
             continue
         mark_resonance_processed(g.processed_resonance_ids, decision)

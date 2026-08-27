@@ -5,6 +5,7 @@ import json
 import pathlib
 import sys
 import types
+from datetime import date
 
 import pytest
 
@@ -376,11 +377,11 @@ def test_collect_latest_events_uses_trading_sessions_for_event_expiry():
     }, index=index)
 
     book = strategy.collect_latest_events(
-        frame, pd.Timestamp("2021-01-11"), pd.Timestamp("2021-01-12"),
+        frame, date(2021, 1, 11), date(2021, 1, 12),
     )
 
-    assert book["active"]["RSI"]["event_date"] == pd.Timestamp("2021-01-08")
-    assert book["active"]["RSI"]["expires_date"] == pd.Timestamp("2021-01-11")
+    assert book["active"]["RSI"]["event_date"] == date(2021, 1, 8)
+    assert book["active"]["RSI"]["expires_date"] == date(2021, 1, 11)
 
 
 def event_book_for_directions(boll, rsi, kdj, event_date):
@@ -502,7 +503,7 @@ def test_processed_id_is_retained_for_same_support_events_until_expiry():
 
     assert first["resonance_id"] == repeated["resonance_id"]
     assert strategy.prune_processed_resonance_ids(processed, "2021-01-06") == {
-        first["resonance_id"]: "2021-01-06",
+        first["resonance_id"]: date(2021, 1, 6),
     }
 
 
@@ -510,7 +511,7 @@ def test_processed_id_is_pruned_only_after_expiry():
     processed = {"expired": "2021-01-05", "still_active": "2021-01-06"}
 
     assert strategy.prune_processed_resonance_ids(processed, "2021-01-06") == {
-        "still_active": "2021-01-06",
+        "still_active": date(2021, 1, 6),
     }
     assert strategy.prune_processed_resonance_ids(processed, "2021-01-07") == {}
 
@@ -590,10 +591,13 @@ def test_signal_sell_is_next_trade_day_only_but_atr_has_no_hold_lock():
 def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
         monkeypatch):
     runtime = types.SimpleNamespace(
-        state_date="2021-01-05",
+        state_date=date(2021, 1, 5),
         sold_today={"510300.XSHG"},
         daily_attempted_buys={"159915.XSHE"},
-        processed_resonance_ids={"expired": "2021-01-05", "active": "2021-01-06"},
+        processed_resonance_ids={
+            "expired": date(2021, 1, 5),
+            "active": date(2021, 1, 6),
+        },
     )
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
 
@@ -601,11 +605,11 @@ def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
 
     assert runtime.sold_today == {"510300.XSHG"}
     assert runtime.daily_attempted_buys == {"159915.XSHE"}
-    assert runtime.processed_resonance_ids == {"active": "2021-01-06"}
+    assert runtime.processed_resonance_ids == {"active": date(2021, 1, 6)}
 
     strategy.reset_daily_state("2021-01-06", "2021-01-06")
 
-    assert runtime.state_date == "2021-01-06"
+    assert runtime.state_date == date(2021, 1, 6)
     assert runtime.sold_today == set()
     assert runtime.daily_attempted_buys == set()
     assert runtime.daily_retried_exits == set()
@@ -618,11 +622,13 @@ def test_daily_state_resets_only_when_decision_date_changes_and_prunes_ids(
         ("BUY", 0, 0, 100, "UNKNOWN", None, None, "UNKNOWN"),
         ("BUY", 0, 100, 100, "TRADEABLE", 100, 100, "FILLED"),
         ("BUY", 0, 50, 100, "TRADEABLE", 100, 50, "PARTIAL"),
-        ("BUY", 0, 0, 100, "TRADEABLE", 100, 100, "PARTIAL"),
+        ("BUY", 0, 50, 100, "TRADEABLE", 100, 0, "PARTIAL"),
+        ("BUY", 0, 0, 100, "TRADEABLE", 100, 100, "NOT_FILLED"),
         ("BUY", 0, 0, 100, "TRADEABLE", 100, 0, "NOT_FILLED"),
         ("SELL", 100, 0, 0, "TRADEABLE", -100, -100, "FILLED"),
         ("SELL", 100, 40, 0, "TRADEABLE", -100, -60, "PARTIAL"),
-        ("SELL", 100, 100, 0, "TRADEABLE", -100, -100, "PARTIAL"),
+        ("SELL", 100, 40, 0, "TRADEABLE", -100, 0, "PARTIAL"),
+        ("SELL", 100, 100, 0, "TRADEABLE", -100, -100, "NOT_FILLED"),
         ("SELL", 100, 100, 0, "TRADEABLE", -100, 0, "NOT_FILLED"),
     ],
 )
@@ -874,7 +880,7 @@ def test_signal_loader_is_strictly_t_minus_one(monkeypatch):
     strategy.load_signal_price_frame("510300.XSHG", "2021-01-05", 120)
 
     assert calls == [("510300.XSHG", {
-        "end_date": "2021-01-05",
+        "end_date": date(2021, 1, 5),
         "count": 120,
         "frequency": "daily",
         "fields": ["open", "high", "low", "close", "volume"],
@@ -927,7 +933,9 @@ def test_build_signal_snapshot_rejects_insufficient_data_before_indicators(
 def test_build_signal_snapshot_keeps_observations_out_of_event_builder(
         monkeypatch):
     frame = make_ohlcv_frame(120)
-    signal_date = frame.index[-1]
+    signal_timestamp = frame.index[-1]
+    signal_date = signal_timestamp.date()
+    decision_date = (signal_timestamp + pd.offsets.BDay(1)).date()
     captured = []
     monkeypatch.setattr(
         strategy, "load_signal_price_frame", lambda *args: frame, raising=False,
@@ -941,7 +949,7 @@ def test_build_signal_snapshot_keeps_observations_out_of_event_builder(
 
     snapshot = strategy.build_signal_snapshot(
         "510300.XSHG", signal_date, strategy.get_default_params(),
-        signal_date + pd.offsets.BDay(1),
+        decision_date,
     )
 
     assert snapshot["valid"] is True
@@ -949,7 +957,7 @@ def test_build_signal_snapshot_keeps_observations_out_of_event_builder(
     assert snapshot["close"] == pytest.approx(20.0)
     assert set(snapshot["trade_values"]) == set(strategy.TRADE_INDICATOR_COLUMNS)
     assert set(snapshot["observation_values"]) == set(strategy.OBSERVATION_COLUMNS)
-    assert captured[0][1:] == (signal_date, signal_date + pd.offsets.BDay(1))
+    assert captured[0][1:] == (signal_date, decision_date)
 
 
 @pytest.mark.parametrize("invalid_atr", [np.nan, np.inf, -np.inf, 0.0])
@@ -1027,19 +1035,13 @@ def test_invalid_current_atr_blocks_only_new_buy_not_existing_signal_exit(
     assert candidate not in runtime.daily_attempted_buys
 
 
-def test_build_signal_snapshots_uses_trading_calendar_for_next_session(
+def test_build_signal_snapshots_uses_known_decision_date_without_calendar_lookup(
         monkeypatch):
-    calendar_calls = []
     snapshot_calls = []
 
-    def legal_calendar_range(**kwargs):
-        calendar_calls.append(kwargs)
-        assert set(kwargs) == {"start_date", "end_date"}
-        assert "count" not in kwargs
-        return [pd.Timestamp("2021-01-11")]
-
     monkeypatch.setattr(
-        strategy, "get_trade_days", legal_calendar_range,
+        strategy, "get_trade_days",
+        lambda **kwargs: pytest.fail("09:35 must not query a future calendar"),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1051,15 +1053,48 @@ def test_build_signal_snapshots_uses_trading_calendar_for_next_session(
     )
 
     snapshots = strategy.build_signal_snapshots(
-        pd.Timestamp("2021-01-08"), strategy.get_default_params(),
+        date(2021, 1, 8), strategy.get_default_params(), date(2021, 1, 11),
     )
 
-    assert len(calendar_calls) == 1
-    assert calendar_calls[0]["start_date"] > pd.Timestamp("2021-01-08")
-    assert calendar_calls[0]["end_date"] >= calendar_calls[0]["start_date"]
     assert list(snapshots) == EXPECTED_POOL
     assert snapshot_calls == [
-        (code, pd.Timestamp("2021-01-08"), pd.Timestamp("2021-01-11"))
+        (code, date(2021, 1, 8), date(2021, 1, 11))
+        for code in EXPECTED_POOL
+    ]
+
+
+def test_full_0935_path_never_requests_a_future_trade_date(monkeypatch):
+    class FutureDataError(RuntimeError):
+        """Local sentinel for forbidden future calendar access."""
+
+    current_date = date(2021, 1, 11)
+    snapshot_calls = []
+
+    def reject_future_calendar(**kwargs):
+        end_date = pd.Timestamp(kwargs["end_date"]).date()
+        if end_date > current_date:
+            raise FutureDataError("future calendar request: %s" % end_date)
+        pytest.fail("09:35 must not query the trade calendar at all")
+
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days", reject_future_calendar, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshot",
+        lambda code, signal_date, params, decision_date: snapshot_calls.append(
+            (code, signal_date, decision_date)
+        ) or {"code": code, "valid": False, "reason": "INSUFFICIENT_DATA"},
+        raising=False,
+    )
+
+    strategy.do_trading(fake_context(
+        previous_date=date(2021, 1, 8), current_date=current_date,
+    ))
+
+    assert snapshot_calls == [
+        (code, date(2021, 1, 8), current_date)
         for code in EXPECTED_POOL
     ]
 
@@ -1152,6 +1187,65 @@ def test_platform_position_tradability_and_execution_price_boundaries(
         assert strategy.get_execution_price(current_data, code) == pytest.approx(
             expected_price
         )
+
+
+def test_lazy_current_data_is_loaded_by_subscript_for_status_and_price():
+    code = "510300.XSHG"
+    record = current_record(10.5, paused=False)
+
+    class LazyCurrentData:
+        def __init__(self):
+            self.loaded = {}
+            self.accesses = []
+
+        def __getitem__(self, key):
+            self.accesses.append(key)
+            self.loaded[key] = record
+            return self.loaded[key]
+
+        def get(self, key, default=None):
+            pytest.fail("JoinQuant current_data must be loaded through subscription")
+
+    current_data = LazyCurrentData()
+
+    assert strategy.get_tradability(
+        current_data, code,
+    ) is strategy.Tradability.TRADEABLE
+    assert strategy.get_execution_price(current_data, code) == pytest.approx(10.5)
+    assert current_data.accesses == [code, code]
+
+
+@pytest.mark.parametrize("missing_error", [KeyError("missing"), IndexError(), TypeError()])
+def test_lazy_current_data_narrow_missing_failures_map_to_unknown(missing_error):
+    class MissingCurrentData:
+        def __getitem__(self, key):
+            raise missing_error
+
+    current_data = MissingCurrentData()
+
+    assert strategy.get_tradability(
+        current_data, "510300.XSHG",
+    ) is strategy.Tradability.UNKNOWN
+    assert strategy.get_execution_price(current_data, "510300.XSHG") is None
+
+
+def test_lazy_current_data_unrelated_error_propagates():
+    class FutureDataError(TypeError):
+        """Local sentinel for unrelated quote access failures."""
+
+    expected = FutureDataError("quote boundary")
+
+    class ExplodingCurrentData:
+        def __getitem__(self, key):
+            raise expected
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.get_tradability(ExplodingCurrentData(), "510300.XSHG")
+    assert raised.value is expected
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.get_execution_price(ExplodingCurrentData(), "510300.XSHG")
+    assert raised.value is expected
 
 
 def test_nonfinite_risk_inputs_and_execution_prices_are_rejected():
@@ -1399,6 +1493,69 @@ def test_pending_retry_code_cannot_receive_second_signal_sell(monkeypatch):
     )
 
     assert attempted == set()
+
+
+def test_paused_signal_exit_freezes_pending_and_retries_first_next_session(
+        monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(date(2021, 1, 4), 1.0, 10.0)
+    runtime = runtime_state(position_states={code: state})
+    positions = {code: fake_position(100)}
+    paused_context = fake_context(
+        previous_date=date(2021, 1, 5), current_date=date(2021, 1, 6),
+        positions=positions,
+    )
+    snapshot = resonance_snapshot(
+        code, direction="SELL_TURN", signal_date=date(2021, 1, 5),
+    )
+    real_submit_sell = strategy.submit_sell
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_sell",
+        lambda *args: pytest.fail("paused signal exit must not submit an order"),
+        raising=False,
+    )
+
+    attempted = strategy.run_signal_exits(
+        paused_context, {code: current_record(10.0, paused=True)},
+        {code: snapshot},
+    )
+
+    assert attempted == set()
+    assert runtime.processed_resonance_ids == {}
+    assert state["pending_exit"] == {
+        "created_date": date(2021, 1, 6),
+        "reason": strategy.ExitReason.SIGNAL_EXIT,
+        "trigger_value": 10.0,
+        "remaining_amount": 100,
+    }
+
+    tradeable_context = fake_context(
+        previous_date=date(2021, 1, 6), current_date=date(2021, 1, 7),
+        positions=positions,
+    )
+    orders = []
+
+    def fill_pending_exit(order_code, target_amount):
+        orders.append((order_code, target_amount))
+        positions.pop(code)
+        return types.SimpleNamespace(amount=-100, filled=-100)
+
+    monkeypatch.setattr(
+        strategy, "get_current_data",
+        lambda: {code: current_record(10.0, paused=False)}, raising=False,
+    )
+    monkeypatch.setattr(strategy, "order_target", fill_pending_exit, raising=False)
+    monkeypatch.setattr(strategy, "submit_sell", real_submit_sell, raising=False)
+
+    retry_results = strategy.retry_pending_exits(
+        tradeable_context, {code: current_record(10.0, paused=False)},
+    )
+
+    assert retry_results == [(code, strategy.OrderOutcome.FILLED)]
+    assert orders == [(code, 0)]
+    assert runtime.position_states == {}
+    assert runtime.sold_today == {code}
 
 
 def test_atr_pending_exit_overrides_signal_without_second_sell(monkeypatch):
@@ -1777,19 +1934,19 @@ def test_observation_outcomes_are_retrospective_and_one_shot():
         code="510300.XSHG",
         event_date="2021-01-05",
         event_close=10.0,
-        due_dates={
-            1: "2021-01-06", 3: "2021-01-08", 5: "2021-01-12",
-        },
+        horizons=(1, 3, 5),
     )
 
-    assert strategy.due_observation_horizons(record, "2021-01-05") == []
-    assert strategy.due_observation_horizons(record, "2021-01-06") == [1]
+    assert "due_dates" not in record
+    assert record["event_date"] == date(2021, 1, 5)
+    assert strategy.due_observation_horizons(record, 0) == []
+    assert strategy.due_observation_horizons(record, 1) == [1]
     record["outcomes"][1] = {"return": 0.01}
-    assert strategy.due_observation_horizons(record, "2021-01-06") == []
+    assert strategy.due_observation_horizons(record, 1) == []
     assert record["event_close"] == pytest.approx(10.0)
 
 
-def test_register_observation_event_uses_only_forward_trading_sessions(
+def test_register_observation_event_never_prefetches_future_trading_sessions(
         monkeypatch):
     code = "510300.XSHG"
     snapshot = resonance_snapshot(code)
@@ -1798,23 +1955,12 @@ def test_register_observation_event_uses_only_forward_trading_sessions(
         snapshot["event_book"], snapshot["signal_date"],
     )
     runtime = runtime_state()
-    calendar = [
-        pd.Timestamp(date).date()
-        for date in (
-            "2021-01-05", "2021-01-06", "2021-01-07",
-            "2021-01-08", "2021-01-11", "2021-01-12",
-        )
-    ]
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
-    calls = []
-
-    def legal_calendar_range(**kwargs):
-        calls.append(kwargs)
-        assert set(kwargs) == {"start_date", "end_date"}
-        assert "count" not in kwargs
-        return calendar[1:]
-
-    monkeypatch.setattr(strategy, "get_trade_days", legal_calendar_range, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: pytest.fail("event registration must not read future dates"),
+        raising=False,
+    )
 
     strategy.register_observation_event(
         decision, pd.Timestamp("2021-01-05").date(), 10.0,
@@ -1823,39 +1969,31 @@ def test_register_observation_event_uses_only_forward_trading_sessions(
         decision, pd.Timestamp("2021-01-05").date(), 10.0,
     )
 
-    assert runtime.observation_events[decision["resonance_id"]]["due_dates"] == {
-        1: pd.Timestamp("2021-01-06").date(),
-        3: pd.Timestamp("2021-01-08").date(),
-        5: pd.Timestamp("2021-01-12").date(),
-    }
+    record = runtime.observation_events[decision["resonance_id"]]
+    assert record["event_date"] == date(2021, 1, 5)
+    assert record["horizons"] == (1, 3, 5)
+    assert "due_dates" not in record
     assert runtime.position_states == {}
     assert runtime.processed_resonance_ids == {}
-    assert len(calls) == 1
 
 
-def test_forward_trade_calendar_expands_across_long_holiday(monkeypatch):
-    anchor = pd.Timestamp("2021-01-01")
-    sessions = [
-        pd.Timestamp(date) for date in (
-            "2021-02-01", "2021-02-02", "2021-02-03",
-            "2021-02-04", "2021-02-05",
+def test_observation_registration_propagates_future_data_error(monkeypatch):
+    class FutureDataError(RuntimeError):
+        """Local sentinel for forbidden future observation access."""
+
+    expected = FutureDataError("future observation access")
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda *args: (_ for _ in ()).throw(expected), raising=False,
+    )
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.try_register_observation_event(
+            {"resonance_id": "abc", "code": "510300.XSHG"},
+            date(2021, 1, 5), 10.0,
         )
-    ]
-    calls = []
 
-    def ranged_calendar(**kwargs):
-        calls.append(kwargs)
-        assert set(kwargs) == {"start_date", "end_date"}
-        assert "count" not in kwargs
-        return [day for day in sessions if day <= kwargs["end_date"]]
-
-    monkeypatch.setattr(strategy, "get_trade_days", ranged_calendar, raising=False)
-
-    result = strategy.get_following_trade_days(anchor, 5)
-
-    assert result == sessions
-    assert len(calls) >= 2
-    assert calls[-1]["end_date"] >= sessions[-1]
+    assert raised.value is expected
 
 
 def test_record_due_observation_outcomes_is_close_only_read_projection(
@@ -1867,7 +2005,7 @@ def test_record_due_observation_outcomes_is_close_only_read_projection(
         code=code,
         event_date=pd.Timestamp("2021-01-05").date(),
         event_close=10.0,
-        due_dates={1: closing_date, 3: pd.Timestamp("2021-01-08").date()},
+        horizons=(1, 3, 5),
     )
     runtime = runtime_state()
     runtime.observation_events = {"abc": record}
@@ -1887,10 +2025,26 @@ def test_record_due_observation_outcomes_is_close_only_read_projection(
         strategy, "log", types.SimpleNamespace(info=lambda *args: None),
         raising=False,
     )
+    calendar_calls = []
 
-    strategy.record_due_observation_outcomes(
-        context, {code: current_record(11.0)},
+    def retrospective_calendar(**kwargs):
+        calendar_calls.append(kwargs)
+        assert kwargs == {
+            "start_date": date(2021, 1, 5),
+            "end_date": closing_date,
+        }
+        return pd.DatetimeIndex(["2021-01-05", "2021-01-06"])
+
+    monkeypatch.setattr(
+        strategy, "get_trade_days", retrospective_calendar, raising=False,
     )
+
+    monkeypatch.setattr(
+        strategy, "get_current_data", lambda: {code: current_record(11.0)},
+        raising=False,
+    )
+
+    strategy.after_close(context)
 
     assert record["outcomes"] == {
         1: {
@@ -1901,6 +2055,7 @@ def test_record_due_observation_outcomes_is_close_only_read_projection(
         },
     }
     assert "abc" in runtime.observation_events
+    assert len(calendar_calls) == 1
     assert runtime.position_states == {}
     assert runtime.processed_resonance_ids == {}
 
@@ -1910,11 +2065,16 @@ def test_due_observation_missing_price_is_terminal_and_record_is_cleaned(
     due_date = pd.Timestamp("2021-01-06").date()
     record = strategy.make_observation_event(
         "missing", "510300.XSHG", pd.Timestamp("2021-01-05").date(),
-        10.0, {1: due_date},
+        10.0, horizons=(1,),
     )
     runtime = runtime_state()
     runtime.observation_events = {"missing": record}
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: pd.DatetimeIndex(["2021-01-05", "2021-01-06"]),
+        raising=False,
+    )
 
     strategy.record_due_observation_outcomes(
         fake_context(current_date="2021-01-06"), {},
@@ -1933,11 +2093,18 @@ def test_overdue_observation_is_missed_without_using_later_price(monkeypatch):
     due_date = pd.Timestamp("2021-01-06").date()
     record = strategy.make_observation_event(
         "overdue", "510300.XSHG", pd.Timestamp("2021-01-05").date(),
-        10.0, {1: due_date},
+        10.0, horizons=(1,),
     )
     runtime = runtime_state()
     runtime.observation_events = {"overdue": record}
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: pd.DatetimeIndex([
+            "2021-01-05", "2021-01-06", "2021-01-07",
+        ]),
+        raising=False,
+    )
 
     strategy.record_due_observation_outcomes(
         fake_context(current_date="2021-01-07"),
@@ -1951,6 +2118,30 @@ def test_overdue_observation_is_missed_without_using_later_price(monkeypatch):
         "return": None,
     }
     assert runtime.observation_events == {}
+
+
+def test_observation_calendar_future_data_error_propagates(monkeypatch):
+    class FutureDataError(RuntimeError):
+        """Local sentinel for forbidden future calendar access."""
+
+    expected = FutureDataError("future calendar blocked")
+    record = strategy.make_observation_event(
+        "future", "510300.XSHG", date(2021, 1, 5), 10.0,
+        horizons=(1,),
+    )
+    runtime = runtime_state()
+    runtime.observation_events = {"future": record}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: (_ for _ in ()).throw(expected), raising=False,
+    )
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.after_close(fake_context(current_date="2021-01-06"))
+
+    assert raised.value is expected
 
 
 def test_structured_logging_contract_contains_required_audit_fields(
@@ -2225,6 +2416,42 @@ def test_buy_rejection_logs_third_indicator_conflict_and_stale_support(
         (conflict_code, False, "THIRD_INDICATOR_CONFLICT"),
         (stale_code, False, "NO_FRESH_SUPPORTER"),
     ]
+
+
+def test_empty_no_event_pool_emits_no_resonance_rejection_logs(monkeypatch):
+    snapshots = {
+        code: {
+            "code": code,
+            "valid": True,
+            "signal_date": date(2021, 1, 5),
+            "close": 10.0,
+            "entry_atr": 1.0,
+            "event_book": strategy.empty_event_book(),
+        }
+        for code in EXPECTED_POOL
+    }
+    logs = []
+    registrations = []
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision",
+        lambda *args: logs.append(args), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda *args: registrations.append(args), raising=False,
+    )
+
+    buy = strategy.collect_complete_resonance_decisions(
+        snapshots, strategy.TurnDirection.BUY_TURN,
+    )
+    sell = strategy.collect_complete_resonance_decisions(
+        snapshots, strategy.TurnDirection.SELL_TURN,
+    )
+
+    assert buy == {}
+    assert sell == {}
+    assert logs == []
+    assert registrations == []
 
 
 def test_atr_check_log_is_observation_only_and_contains_frozen_risk_state(
