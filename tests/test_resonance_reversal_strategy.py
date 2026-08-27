@@ -420,13 +420,28 @@ def test_relative_event_book_detects_t2_and_t1_from_last_four_complete_bars():
 
     assert book is not strategy.empty_event_book()
     assert book["active"]["RSI"]["event_date"] == date(2021, 1, 7)
+    assert book["active"]["RSI"]["expires_date"] == date(2021, 1, 8)
     assert book["active"]["KDJ"]["event_date"] == date(2021, 1, 8)
+    assert book["active"]["KDJ"]["expires_date"] == date(2021, 1, 11)
     assert book["active"]["BOLL"]["event_date"] == date(2021, 1, 8)
+    assert book["active"]["BOLL"]["expires_date"] == date(2021, 1, 11)
     assert all(
         event["event_mode"] == "RELATIVE"
         for event in book["active"].values()
     )
     assert book["active"]["BOLL"]["reference_extreme"] == pytest.approx(8.8)
+
+    strategy.expire_events(book, date(2021, 1, 11))
+    assert "RSI" not in book["active"]
+    assert "KDJ" in book["active"]
+    assert "BOLL" in book["active"]
+
+    strategy.expire_events(book, date(2021, 1, 12))
+    assert "KDJ" not in book["active"]
+    assert "BOLL" not in book["active"]
+    assert [event["invalid_reason"] for event in book["invalidated"]] == [
+        "EVENT_EXPIRED", "EVENT_EXPIRED", "EVENT_EXPIRED",
+    ]
 
 
 def test_relative_opposite_event_replaces_only_relative_book():
