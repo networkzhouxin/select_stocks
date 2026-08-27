@@ -112,16 +112,45 @@ def _is_training_date(value, label, errors):
     return parsed
 
 
+def _classify_record_namespace(record, errors):
+    """Classify one record once; conflicting records enter neither contract."""
+    relative_id = record.get("relative_observation_id")
+    kind = record.get("observation_kind")
+    resonance_id = record.get("resonance_id")
+    event = record.get("event")
+    relative_id_valid = isinstance(relative_id, str) and relative_id.startswith("RELATIVE:")
+    relative_resonance = isinstance(resonance_id, str) and resonance_id.startswith("RELATIVE:")
+    relative_marker = relative_id is not None or kind == "RELATIVE_RESONANCE" or relative_resonance
+    if relative_marker:
+        valid = relative_id_valid and kind == "RELATIVE_RESONANCE"
+        if event == "observation_outcome":
+            valid = valid and resonance_id == relative_id
+        elif event == "relative_resonance_observation":
+            valid = valid and (resonance_id in (None, ""))
+        else:
+            valid = False
+        if not valid:
+            if relative_resonance and relative_id is None and kind is None:
+                errors.append("relative namespace record missing relative markers: %s" % resonance_id)
+            else:
+                errors.append("invalid or conflicting relative record namespace")
+            return "invalid"
+        return "relative"
+    if event == "resonance_decision" and record.get("accepted") is True and record.get("reason") == "COMPLETE_RESONANCE":
+        if isinstance(resonance_id, str) and resonance_id.strip() and not resonance_id.startswith("RELATIVE:"):
+            return "formal"
+        errors.append("invalid formal record namespace")
+        return "invalid"
+    if event == "observation_outcome":
+        if isinstance(resonance_id, str) and resonance_id.strip() and not resonance_id.startswith("RELATIVE:"):
+            return "formal"
+        errors.append("invalid formal outcome namespace")
+        return "invalid"
+    return "other"
+
+
 def _is_relative_record(record):
-    return (
-        record.get("event") == "relative_resonance_observation"
-        or (record.get("event") == "observation_outcome" and (
-            record.get("relative_observation_id")
-            or record.get("observation_kind") == "RELATIVE_RESONANCE"
-            or (isinstance(record.get("resonance_id"), str)
-                and record.get("resonance_id").startswith("RELATIVE:"))
-        ))
-    )
+    return record.get("_record_namespace") == "relative"
 
 
 def _matching_relative_record(record):
@@ -130,26 +159,6 @@ def _matching_relative_record(record):
         and record.get("build") == CANDIDATE_BUILD
         and record.get("relative_observation_fingerprint") == RELATIVE_OBSERVATION_FINGERPRINT
     )
-
-
-def _audit_record_namespace(record, errors):
-    """Keep RELATIVE IDs out of formal-record classification."""
-    relative_id = record.get("relative_observation_id")
-    kind = record.get("observation_kind")
-    resonance_id = record.get("resonance_id")
-    relative_resonance = isinstance(resonance_id, str) and resonance_id.startswith("RELATIVE:")
-    relative_marker = relative_id is not None or kind == "RELATIVE_RESONANCE"
-    if relative_id is not None and (
-            not isinstance(relative_id, str) or not relative_id.startswith("RELATIVE:")):
-        errors.append("invalid relative observation namespace: %r" % relative_id)
-    if relative_resonance and not relative_marker:
-        errors.append("relative namespace record missing relative markers: %s" % resonance_id)
-    if kind == "RELATIVE_RESONANCE" and not isinstance(relative_id, str):
-        errors.append("relative namespace record missing relative observation id")
-    if relative_marker and relative_resonance and relative_id != resonance_id:
-        errors.append("relative namespace identity conflict: %s" % resonance_id)
-    if relative_marker and kind not in (None, "RELATIVE_RESONANCE"):
-        errors.append("relative namespace kind conflict: %r" % kind)
 
 
 def _text(record, field, label, errors):
@@ -299,8 +308,9 @@ def _validate_relative_outcome_shape(record, errors):
     outcome = record.get("outcome")
     if not isinstance(outcome, dict):
         errors.append("invalid relative outcome payload")
-    elif outcome.get("status") == "RECORDED":
+    else:
         _is_training_date(outcome.get("closing_date"), "relative outcome closing", errors)
+    if isinstance(outcome, dict) and outcome.get("status") == "RECORDED":
         closing_price = _finite_number(outcome.get("closing_price"))
         if closing_price is None or closing_price <= 0:
             errors.append("invalid relative outcome closing_price")
@@ -384,9 +394,8 @@ def _validate_baseline(records, errors):
     registrations = {}
     outcomes = {}
     for record in records:
-        if not (record.get("event") == "resonance_decision"
-                and record.get("accepted") is True
-                and record.get("reason") == "COMPLETE_RESONANCE"):
+        if (record.get("_record_namespace") != "formal"
+                or record.get("event") != "resonance_decision"):
             continue
         resonance_id = _text(record, "resonance_id", "formal resonance id", errors)
         _text(record, "code", "formal code", errors)
@@ -405,7 +414,7 @@ def _validate_baseline(records, errors):
             else:
                 registrations[resonance_id] = record
     for record in records:
-        if record.get("event") != "observation_outcome" or _is_relative_record(record):
+        if record.get("_record_namespace") != "formal" or record.get("event") != "observation_outcome":
             continue
         resonance_id = _text(record, "resonance_id", "formal outcome resonance id", errors)
         horizon = record.get("horizon")
@@ -418,8 +427,9 @@ def _validate_baseline(records, errors):
         outcome = record.get("outcome")
         if not isinstance(outcome, dict):
             errors.append("invalid formal outcome payload")
-        elif outcome.get("status") == "RECORDED":
+        else:
             _is_training_date(outcome.get("closing_date"), "formal outcome closing", errors)
+        if isinstance(outcome, dict) and outcome.get("status") == "RECORDED":
             if _finite_number(outcome.get("return")) is None:
                 errors.append("invalid formal outcome return")
         if resonance_id not in registrations:
@@ -589,6 +599,26 @@ def _has_cross_file_filled_timestamp(records, role, errors):
     return ambiguous
 
 
+def _overlap_key(record, label, errors):
+    code = record.get("code")
+    direction = record.get("direction")
+    if not isinstance(code, str) or not code.strip():
+        errors.append("invalid %s code" % label)
+        return None
+    if direction not in DIRECTIONS:
+        errors.append("invalid %s direction" % label)
+        return None
+    try:
+        signal_date = _calendar_date(record.get("signal_date"))
+    except ValueError:
+        errors.append("invalid %s signal date" % label)
+        return None
+    if signal_date is None or not TRAIN_START <= signal_date <= TRAIN_END:
+        errors.append("invalid %s signal date" % label)
+        return None
+    return code, direction, signal_date.isoformat()
+
+
 def analyze_records(candidate_records, baseline_records):
     """Validate immutable log contracts and return a deterministic report."""
     candidate_records = _normalized_timeline(candidate_records)
@@ -597,7 +627,7 @@ def analyze_records(candidate_records, baseline_records):
     for record in candidate_records + baseline_records:
         if record.get("_parse_error"):
             errors.append("parse error: %s" % record["_parse_error"])
-        _audit_record_namespace(record, errors)
+        record["_record_namespace"] = _classify_record_namespace(record, errors)
     candidate_order_ambiguous = _has_cross_file_filled_timestamp(
         candidate_records, "candidate", errors,
     )
@@ -609,7 +639,11 @@ def analyze_records(candidate_records, baseline_records):
     for record in candidate_records:
         if record.get("event") == "relative_resonance_observation":
             _validate_relative_registration(record, errors)
-        elif _is_relative_record(record):
+        elif (record.get("event") == "observation_outcome" and (
+                record.get("relative_observation_id") is not None
+                or record.get("observation_kind") == "RELATIVE_RESONANCE"
+                or (isinstance(record.get("resonance_id"), str)
+                    and record.get("resonance_id").startswith("RELATIVE:")))):
             _validate_relative_outcome_shape(record, errors)
     formal_registrations, formal_outcomes, formal_missing_outcome_count = _validate_baseline(
         baseline_records, errors,
@@ -695,11 +729,17 @@ def analyze_records(candidate_records, baseline_records):
                     if not math.isfinite(combined):
                         errors.append("non-finite aggregate: positive contribution")
                     positive_by_etf[code] = combined
-    formal_keys = {(record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
-                   for record in candidate_records if record.get("event") == "resonance_decision"
-                   and record.get("accepted") is True and record.get("reason") == "COMPLETE_RESONANCE"}
-    relative_keys = {(record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
-                     for record in candidates}
+    formal_keys = set()
+    for record in candidate_records:
+        if record.get("_record_namespace") == "formal":
+            key = _overlap_key(record, "formal overlap", errors)
+            if key is not None:
+                formal_keys.add(key)
+    relative_keys = set()
+    for record in candidates:
+        key = _overlap_key(record, "relative overlap", errors)
+        if key is not None:
+            relative_keys.add(key)
     formal_overlap_count = len(formal_keys & relative_keys)
     try:
         total_positive = math.fsum(positive_by_etf.values())
@@ -820,7 +860,10 @@ def main(argv=None):
         os.replace(temporary_path, output_path)
     except OSError as exc:
         if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         print("output error: %s" % exc, file=sys.stderr)
         return 2
     return 0

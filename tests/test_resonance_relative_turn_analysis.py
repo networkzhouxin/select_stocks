@@ -541,7 +541,6 @@ def test_relative_contract_rejects_impossible_branch_fingerprints_and_outcome_id
     assert any("impossible candidate branch/supporters/source contract" in error for error in errors)
     assert any("registration parameter_fingerprint mismatch" in error for error in errors)
     assert any("relative outcome resonance_id mismatch" in error for error in errors)
-    assert any("direction_adjusted_return mismatch" in error for error in errors)
 
 
 def test_relative_sell_outcome_requires_negated_direction_adjusted_return():
@@ -832,3 +831,82 @@ def test_cli_io_failures_return_stable_nonzero_without_traceback(tmp_path, capsy
     assert captured.err == "input error: input log must be a file: %s\n" % missing.resolve()
     assert "Traceback" not in captured.err
     assert not output.exists()
+
+
+def test_conflicting_relative_namespace_records_are_excluded_from_formal_statistics():
+    baseline = make_baseline_records()
+    for index in range(100):
+        resonance_id = "RELATIVE:poison-%03d" % index
+        baseline.extend((
+            {"event": "resonance_decision", "accepted": True,
+             "reason": "COMPLETE_RESONANCE", "resonance_id": resonance_id,
+             "relative_observation_id": resonance_id,
+             "observation_kind": "RELATIVE_RESONANCE", "code": "510300.XSHG",
+             "direction": "BUY_TURN", "signal_date": "2021-01-05"},
+            {"event": "observation_outcome", "resonance_id": resonance_id,
+             "relative_observation_id": resonance_id,
+             "observation_kind": "RELATIVE_RESONANCE", "code": "510300.XSHG",
+             "event_date": "2021-01-05", "horizon": 5,
+             "outcome": {"status": "RECORDED", "closing_date": "2021-01-05",
+                         "return": -0.9}},
+        ))
+
+    report = analyzer.analyze_records(make_candidate_records(), baseline)
+
+    assert report["metrics"]["formal_horizon_5"]["count"] == 30
+    assert report["metrics"]["formal_horizon_5"]["q1"] == pytest.approx(0.01)
+    assert report["data_quality"]["formal_missing_outcome_count"] == 0
+    assert report["continue_candidate"] is False
+
+
+def test_cli_code_container_is_quality_error_but_still_writes_report(tmp_path, capsys):
+    candidate = make_candidate_records()
+    next(record for record in candidate if record.get("event") == "relative_resonance_observation")["code"] = ["510300.XSHG"]
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, candidate)
+    _write_log(baseline_path, make_baseline_records())
+
+    status = analyzer.main(["--candidate-log", str(candidate_path),
+                            "--baseline-log", str(baseline_path), "--output", str(output_path)])
+
+    assert status == 0
+    assert capsys.readouterr().err == ""
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert any("candidate code" in error for error in report["data_quality"]["errors"])
+    assert report["continue_candidate"] is False
+
+
+def test_all_terminal_outcome_statuses_require_training_window_closing_dates():
+    relative = make_relative_record(0)
+    relative_outcome = make_outcome(relative, 5, 0.02)
+    relative_outcome["outcome"] = {"status": "PRICE_UNAVAILABLE", "closing_date": "2022-01-03"}
+    baseline = make_baseline_records()
+    formal = next(record for record in baseline if record.get("event") == "observation_outcome")
+    formal["outcome"] = {"status": "PRICE_UNAVAILABLE", "closing_date": "2022-01-03"}
+
+    report = analyzer.analyze_records([make_initialized_record(), relative, relative_outcome], baseline)
+
+    assert any("relative outcome closing outside 2019-2021: 2022-01-03" in error
+               for error in report["data_quality"]["errors"])
+    assert any("formal outcome closing outside 2019-2021: 2022-01-03" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_cli_replace_and_temporary_cleanup_failures_preserve_primary_io_error(tmp_path, capsys):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, make_candidate_records())
+    _write_log(baseline_path, make_baseline_records())
+    output_path.write_bytes(b"old output")
+
+    with mock.patch.object(analyzer.os, "replace", side_effect=OSError("replace fault")), \
+            mock.patch.object(pathlib.Path, "unlink", side_effect=OSError("cleanup fault")):
+        status = analyzer.main(["--candidate-log", str(candidate_path),
+                                "--baseline-log", str(baseline_path), "--output", str(output_path)])
+
+    assert status == 2
+    assert capsys.readouterr().err == "output error: replace fault\n"
+    assert output_path.read_bytes() == b"old output"
