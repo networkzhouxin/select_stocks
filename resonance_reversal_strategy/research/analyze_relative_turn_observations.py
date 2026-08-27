@@ -45,8 +45,10 @@ def parse_joinquant_log_line(line, ordinal):
         return None
     try:
         payload = json.loads(text[payload_start:], parse_constant=_reject_json_constant)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError:
         return None
+    except ValueError as exc:
+        payload = {"_parse_error": str(exc)}
     if not isinstance(payload, dict):
         return None
     match = LOG_TIMESTAMP_RE.match(text)
@@ -80,6 +82,8 @@ def load_log_records(paths):
 def _calendar_date(value):
     if value in (None, ""):
         return None
+    if isinstance(value, datetime):
+        raise ValueError("date must not contain a time")
     if isinstance(value, date):
         return value
     if not isinstance(value, str):
@@ -123,7 +127,7 @@ def _matching_relative_record(record):
 
 def _text(record, field, label, errors):
     value = record.get(field)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
         errors.append("missing or invalid %s: %r" % (label, value))
         return None
     return value
@@ -132,7 +136,10 @@ def _text(record, field, label, errors):
 def _finite_number(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    numeric = float(value)
+    try:
+        numeric = float(value)
+    except OverflowError:
+        return None
     return numeric if math.isfinite(numeric) else None
 
 
@@ -166,6 +173,9 @@ def _validate_support_contract(record, prefix, signal_date, errors):
         "HARD_BOLL_SOFT_OSC": (
             ({"BOLL", "RSI"}, {"BOLL": "HARD", "RSI": "RELATIVE"}),
             ({"BOLL", "KDJ"}, {"BOLL": "HARD", "KDJ": "RELATIVE"}),
+            ({"BOLL", "KDJ", "RSI"}, {
+                "BOLL": "HARD", "KDJ": "RELATIVE", "RSI": "RELATIVE",
+            }),
         ),
         "SOFT_ALL_THREE": (
             ({"BOLL", "KDJ", "RSI"}, {
@@ -263,6 +273,9 @@ def _validate_relative_outcome_shape(record, errors):
         errors.append("invalid relative outcome payload")
     elif outcome.get("status") == "RECORDED":
         _is_training_date(outcome.get("closing_date"), "relative outcome closing", errors)
+        closing_price = _finite_number(outcome.get("closing_price"))
+        if closing_price is None or closing_price <= 0:
+            errors.append("invalid relative outcome closing_price")
         if _finite_number(outcome.get("return")) is None:
             errors.append("invalid relative outcome return")
         if _finite_number(outcome.get("direction_adjusted_return")) is None:
@@ -292,8 +305,16 @@ def _validate_relative_identity(registration, outcome, errors):
     if isinstance(payload, dict) and payload.get("status") == "RECORDED":
         raw = _finite_number(payload.get("return"))
         adjusted = _finite_number(payload.get("direction_adjusted_return"))
-        expected = raw if registration.get("direction") == "BUY_TURN" else (-raw if raw is not None else None)
-        if raw is not None and adjusted is not None and not math.isclose(
+        close = _finite_number(payload.get("closing_price"))
+        event_close = _finite_number(registration.get("event_close"))
+        expected_raw = (close / event_close - 1.0 if close is not None and event_close is not None
+                        and close > 0 and event_close > 0 else None)
+        if raw is not None and expected_raw is not None and not math.isclose(
+                raw, expected_raw, rel_tol=0.0, abs_tol=1e-12):
+            errors.append("relative outcome return mismatch: %s" % observation_id)
+        expected = (expected_raw if registration.get("direction") == "BUY_TURN"
+                    else (-expected_raw if expected_raw is not None else None))
+        if adjusted is not None and expected is not None and not math.isclose(
                 adjusted, expected, rel_tol=0.0, abs_tol=1e-12):
             errors.append("relative outcome direction_adjusted_return mismatch: %s" % observation_id)
 
@@ -310,11 +331,11 @@ def _validate_filled_orders(records, role, errors):
         if not valid_timestamp or not (TRAIN_START <= datetime.fromisoformat(timestamp).date() <= TRAIN_END):
             errors.append("invalid filled order log timestamp in %s" % role)
         if (record.get("side") not in ("BUY", "SELL")
-                or not isinstance(record.get("code"), str) or not record.get("code")):
+                or not isinstance(record.get("code"), str) or not record.get("code").strip()):
             errors.append("invalid filled order identity in %s" % role)
         for field in ("before_amount", "after_amount"):
-            value = _finite_number(record.get(field))
-            if value is None or value < 0 or value != int(value):
+            value = record.get(field)
+            if type(value) is not int or value < 0:
                 errors.append("invalid filled order %s in %s" % (field, role))
 
 
@@ -388,11 +409,19 @@ def _validate_baseline(records, errors):
             errors.append("duplicate formal outcome: %s/%s" % key)
         else:
             outcomes[key] = record
+    formal_missing_outcome_count = 0
     for resonance_id in registrations:
-        if (resonance_id, 5) not in outcomes:
+        five_day = outcomes.get((resonance_id, 5))
+        payload = five_day.get("outcome") if five_day is not None else None
+        comparable = (isinstance(payload, dict) and payload.get("status") == "RECORDED"
+                      and _finite_number(payload.get("return")) is not None)
+        if five_day is None:
             errors.append("missing formal horizon 5: %s" % resonance_id)
+        if not comparable:
+            formal_missing_outcome_count += 1
+            errors.append("formal comparison incomplete: %s" % resonance_id)
     _validate_filled_orders(records, "baseline", errors)
-    return registrations, outcomes
+    return registrations, outcomes, formal_missing_outcome_count
 
 
 def _filter_candidate_records(records):
@@ -452,12 +481,31 @@ def extract_filled_order_path(records):
                  and record.get("outcome") == "FILLED")
 
 
+def _validated_final_asset(records, role, errors):
+    frozen_summaries = [record for record in records if record.get("event") == "portfolio_summary"
+                        and record.get("closing_date") == TRAIN_END.isoformat()]
+    if not frozen_summaries:
+        return None
+    canonical = None
+    for record in frozen_summaries:
+        value = _finite_number(record.get("total_value"))
+        if value is None:
+            errors.append("invalid %s frozen portfolio summary total_value" % role)
+            continue
+        public = {key: item for key, item in record.items() if not key.startswith("_")}
+        if canonical is None:
+            canonical = (public, value)
+        elif public != canonical[0]:
+            errors.append("conflicting %s frozen portfolio summary" % role)
+    return canonical[1] if canonical is not None and not any(
+        error.startswith("conflicting %s frozen portfolio summary" % role)
+        or error.startswith("invalid %s frozen portfolio summary" % role)
+        for error in errors) else None
+
+
 def extract_final_asset(records):
-    summaries = [record for record in records if record.get("event") == "portfolio_summary"
-                 and record.get("closing_date") == TRAIN_END.isoformat()
-                 and _finite_number(record.get("total_value")) is not None]
-    return None if not summaries else _finite_number(
-        sorted(summaries, key=_sort_key)[-1]["total_value"])
+    """Backward-compatible inspection helper; audited calls use the function above."""
+    return _validated_final_asset(records, "inspection", [])
 
 
 def _sort_key(record):
@@ -466,7 +514,7 @@ def _sort_key(record):
             str(record.get("relative_observation_id") or record.get("resonance_id") or ""),
             str(record.get("horizon") or ""),
             json.dumps({key: value for key, value in record.items() if not key.startswith("_")},
-                       sort_keys=True, ensure_ascii=False))
+                       sort_keys=True, ensure_ascii=False, default=repr))
 
 
 def _grouped_summaries(values_by_group, errors=None):
@@ -497,6 +545,9 @@ def analyze_records(candidate_records, baseline_records):
     candidate_records = _normalized_timeline(candidate_records)
     baseline_records = _normalized_timeline(baseline_records)
     errors = []
+    for record in candidate_records + baseline_records:
+        if record.get("_parse_error"):
+            errors.append("parse error: %s" % record["_parse_error"])
     _validate_candidate_initializations(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
@@ -504,7 +555,9 @@ def analyze_records(candidate_records, baseline_records):
             _validate_relative_registration(record, errors)
         elif _is_relative_record(record):
             _validate_relative_outcome_shape(record, errors)
-    formal_registrations, formal_outcomes = _validate_baseline(baseline_records, errors)
+    formal_registrations, formal_outcomes, formal_missing_outcome_count = _validate_baseline(
+        baseline_records, errors,
+    )
     selected, ignored_record_counts = _filter_candidate_records(candidate_records)
     registrations = {}
     candidates = []
@@ -544,7 +597,7 @@ def analyze_records(candidate_records, baseline_records):
     by_branch = {branch: {horizon: [] for horizon in HORIZONS} for branch in BRANCHES}
     by_direction = {direction: {horizon: [] for horizon in HORIZONS} for direction in DIRECTIONS}
     five_day_2021 = []
-    positive_by_etf = Counter()
+    positive_by_etf = {}
     missing_outcome_count = 0
     for candidate in candidates:
         observation_id = candidate["relative_observation_id"]
@@ -578,7 +631,14 @@ def analyze_records(candidate_records, baseline_records):
                 if signal_date is not None and signal_date.year == 2021:
                     five_day_2021.append(value)
                 if value > 0 and isinstance(code, str):
-                    positive_by_etf[code] += value
+                    previous = positive_by_etf.get(code, 0.0)
+                    try:
+                        combined = math.fsum((previous, value))
+                    except OverflowError:
+                        combined = math.inf
+                    if not math.isfinite(combined):
+                        errors.append("non-finite aggregate: positive contribution")
+                    positive_by_etf[code] = combined
     formal_keys = {(record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
                    for record in candidate_records if record.get("event") == "resonance_decision"
                    and record.get("accepted") is True and record.get("reason") == "COMPLETE_RESONANCE"}
@@ -590,12 +650,17 @@ def analyze_records(candidate_records, baseline_records):
     except OverflowError:
         total_positive = math.inf
         errors.append("non-finite aggregate: positive contribution")
-    max_positive_contribution = (max(positive_by_etf.values()) / total_positive
-                                 if total_positive > 0 else None)
+    if not math.isfinite(total_positive) or any(
+            not math.isfinite(value) for value in positive_by_etf.values()):
+        errors.append("non-finite aggregate: positive contribution")
+        max_positive_contribution = None
+    else:
+        max_positive_contribution = (max(positive_by_etf.values()) / total_positive
+                                     if total_positive > 0 else None)
     candidate_path = extract_filled_order_path(candidate_records)
     baseline_path = extract_filled_order_path(baseline_records)
-    candidate_asset = extract_final_asset(candidate_records)
-    baseline_asset = extract_final_asset(baseline_records)
+    candidate_asset = _validated_final_asset(candidate_records, "candidate", errors)
+    baseline_asset = _validated_final_asset(baseline_records, "baseline", errors)
     horizon_5 = summarize_returns(returns_by_horizon[5], errors, "horizon_5")
     year_2021 = summarize_returns(five_day_2021, errors, "year_2021_horizon_5")
     formal_horizon_5 = summarize_returns(
@@ -632,6 +697,7 @@ def analyze_records(candidate_records, baseline_records):
         "data_quality": {"errors": errors, "relative_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
                          "formal_overlap_count": formal_overlap_count,
                          "missing_outcome_count": missing_outcome_count,
+                         "formal_missing_outcome_count": formal_missing_outcome_count,
                          "ignored_record_counts": ignored_record_counts},
         "metrics": {"candidate_count": len(candidates), "year_counts": year_counts,
                     "direction_counts": direction_counts, "etf_counts": dict(sorted(etf_counts.items())),

@@ -2,6 +2,9 @@ import importlib.util
 import json
 import os
 import pathlib
+import sys
+import types
+from datetime import datetime
 from unittest import mock
 
 import pytest
@@ -15,6 +18,12 @@ ANALYZER_PATH = (
 spec = importlib.util.spec_from_file_location("relative_analyzer", ANALYZER_PATH)
 analyzer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(analyzer)
+
+STRATEGY_PATH = ROOT / "resonance_reversal_strategy" / "smart_trade_joinquant_resonance_reversal_etf.py"
+sys.modules.setdefault("jqdata", types.ModuleType("jqdata"))
+strategy_spec = importlib.util.spec_from_file_location("relative_builder_strategy", STRATEGY_PATH)
+strategy = importlib.util.module_from_spec(strategy_spec)
+strategy_spec.loader.exec_module(strategy)
 
 
 BUILD = "20260827.4"
@@ -82,6 +91,7 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
 
 
 def make_outcome(record, horizon, value):
+    adjusted = value if record["direction"] == "BUY_TURN" else -value
     return {
         "event": "observation_outcome",
         "resonance_id": record["relative_observation_id"],
@@ -98,7 +108,8 @@ def make_outcome(record, horizon, value):
         ),
         "outcome": {
             "status": "RECORDED", "closing_date": record["signal_date"],
-            "return": value, "direction_adjusted_return": value,
+            "closing_price": record["event_close"] * (1.0 + value),
+            "return": value, "direction_adjusted_return": adjusted,
         },
     }
 
@@ -265,9 +276,9 @@ def test_analysis_keeps_branches_directions_and_horizons_separate():
         "BUY_TURN": 1, "SELL_TURN": 1,
     }
     assert report["metrics"]["by_branch"]["SOFT_ALL_THREE"]["horizon_5"]["median"] == pytest.approx(0.03)
-    assert report["metrics"]["by_branch"]["HARD_BOLL_SOFT_OSC"]["horizon_5"]["median"] == pytest.approx(-0.04)
-    assert report["metrics"]["horizon_1"]["median"] == pytest.approx(0.0)
-    assert report["metrics"]["horizon_3"]["median"] == pytest.approx(0.0)
+    assert report["metrics"]["by_branch"]["HARD_BOLL_SOFT_OSC"]["horizon_5"]["median"] == pytest.approx(0.04)
+    assert report["metrics"]["horizon_1"]["median"] == pytest.approx(-0.02)
+    assert report["metrics"]["horizon_3"]["median"] == pytest.approx(0.01)
 
 
 def test_duplicate_registration_and_outcome_are_reported_once():
@@ -450,7 +461,7 @@ def test_baseline_requires_frozen_initialization_and_linked_formal_records():
 def test_parser_rejects_nonfinite_json_constants_and_records_reject_bad_fields():
     assert analyzer.parse_joinquant_log_line(
         '2021-01-05 - {"event":"x","value":NaN}', 1,
-    ) is None
+    )["_parse_error"] == "non-finite JSON constant: NaN"
     broken = make_relative_record(0)
     broken["direction"] = "NEUTRAL"
     broken["event_close"] = float("inf")
@@ -513,7 +524,7 @@ def test_relative_contract_rejects_impossible_branch_fingerprints_and_outcome_id
     registration = make_relative_record(0, branch="HARD_BOLL_SOFT_OSC")
     registration["supporters"] = ["BOLL", "KDJ", "RSI"]
     registration["hard_or_relative_source_by_indicator"] = {
-        "BOLL": "HARD", "KDJ": "RELATIVE", "RSI": "RELATIVE",
+        "BOLL": "HARD", "KDJ": "HARD", "RSI": "RELATIVE",
     }
     registration["supporter_event_dates"] = {
         indicator: registration["signal_date"] for indicator in registration["supporters"]
@@ -630,3 +641,127 @@ def test_cli_normalizes_multi_file_order_and_uses_frozen_closing_summary(tmp_pat
     second = json.loads(second_output.read_text(encoding="utf-8"))
     assert first == second
     assert first["metrics"]["final_asset"] == pytest.approx(23856.40)
+
+
+def _builder_three_supporter_registration():
+    signal_date = "2021-01-08"
+    hard = strategy.empty_event_book()
+    hard["active"]["BOLL"] = strategy.make_turn_event(
+        "BOLL", strategy.TurnDirection.BUY_TURN, signal_date, signal_date, {"fixture": "hard"},
+    )
+    relative = strategy.empty_event_book()
+    for indicator in ("RSI", "KDJ"):
+        relative["active"][indicator] = strategy.make_relative_turn_event(
+            indicator, strategy.TurnDirection.BUY_TURN, signal_date, signal_date,
+            {"fixture": indicator},
+        )
+    observation = strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, signal_date, 10.0,
+    )
+    assert observation is not None
+    registration = make_relative_record(0)
+    registration.update({
+        "relative_observation_id": observation["relative_observation_id"],
+        "observation_kind": observation["observation_kind"],
+        "branch": observation["branch"], "code": observation["code"],
+        "direction": observation["direction"].value,
+        "signal_date": observation["signal_date"].isoformat(),
+        "expires_date": observation["expires_date"].isoformat(),
+        "supporters": list(observation["supporters"]),
+        "supporter_event_dates": {
+            key: value.isoformat() for key, value in observation["supporter_event_dates"].items()
+        },
+        "hard_or_relative_source_by_indicator": observation["hard_or_relative_source_by_indicator"],
+        "event_close": observation["event_close"],
+    })
+    return registration
+
+
+def test_real_builder_hard_boll_branch_with_both_relative_oscillators_is_accepted():
+    registration = _builder_three_supporter_registration()
+    outcome = make_outcome(registration, 5, 0.02)
+
+    report = analyzer.analyze_records([make_initialized_record(), registration, outcome], [])
+
+    assert registration["supporters"] == ["BOLL", "KDJ", "RSI"]
+    assert not any("impossible candidate branch" in error
+                   for error in report["data_quality"]["errors"])
+
+
+def test_outcome_return_must_be_recomputed_from_closing_price_and_event_close():
+    registration = make_relative_record(0)
+    outcome = make_outcome(registration, 5, 0.02)
+    outcome["outcome"]["closing_price"] = 30.0
+
+    report = analyzer.analyze_records([make_initialized_record(), registration, outcome], [])
+
+    assert any("relative outcome return mismatch" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_baseline_unavailable_horizon_five_is_comparison_incomplete():
+    baseline = make_baseline_records()
+    outcome = next(record for record in baseline if record.get("resonance_id") == "FORMAL:00"
+                   and record.get("event") == "observation_outcome")
+    outcome["outcome"] = {"status": "PRICE_UNAVAILABLE", "closing_date": "2021-01-05"}
+
+    report = analyzer.analyze_records(make_candidate_records(), baseline)
+
+    assert any("formal comparison incomplete: FORMAL:00" in error
+               for error in report["data_quality"]["errors"])
+    assert report["data_quality"]["formal_missing_outcome_count"] == 1
+
+
+def test_frozen_summary_and_filled_quantity_contracts_reject_conflicts_and_unsafe_types():
+    candidate = make_candidate_records()
+    candidate.extend((
+        {"event": "portfolio_summary", "closing_date": "2021-12-31", "total_value": 1.0},
+        {"event": "portfolio_summary", "closing_date": "2021-12-31", "total_value": "23856.40"},
+        {"event": "portfolio_summary", "closing_date": "2021-12-31", "total_value": True},
+        {"event": "portfolio_summary", "closing_date": "2021-12-31", "total_value": float("inf")},
+    ))
+    order = next(record for record in candidate if record.get("event") == "order_transition")
+    order["code"] = "   "
+    order["before_amount"] = 100.0
+    order["after_amount"] = 10 ** 400
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    errors = report["data_quality"]["errors"]
+    assert any("conflicting candidate frozen portfolio summary" in error for error in errors)
+    assert any("invalid candidate frozen portfolio summary total_value" in error for error in errors)
+    assert any("invalid filled order identity" in error for error in errors)
+    assert any("invalid filled order before_amount" in error for error in errors)
+    assert report["metrics"]["final_asset"] is None
+
+
+def test_nonfinite_parse_datetime_sort_and_positive_contribution_overflow_are_quality_errors():
+    parsed = analyzer.parse_joinquant_log_line(
+        '2021-01-05 09:35:00 - {"event":"x","value":NaN}', 1,
+    )
+    assert parsed["_parse_error"] == "non-finite JSON constant: NaN"
+    assert analyzer.parse_joinquant_log_line(
+        '2021-01-05 09:35:00 - {"event":"x","value":Infinity}', 2,
+    )["_parse_error"] == "non-finite JSON constant: Infinity"
+    assert analyzer.parse_joinquant_log_line(
+        '2021-01-05 09:35:00 - {"event":"x","value":-Infinity}', 3,
+    )["_parse_error"] == "non-finite JSON constant: -Infinity"
+
+    candidate = make_candidate_records()
+    candidate[1]["signal_date"] = datetime(2021, 1, 5, 9, 35)
+    for record in candidate:
+        if record.get("event") == "observation_outcome" and record.get("horizon") == 5:
+            record["outcome"].update({
+                "closing_price": 1e308,
+                "return": 1e308,
+                "direction_adjusted_return": 1e308,
+            })
+
+    report = analyzer.analyze_records(candidate + [parsed], make_baseline_records())
+
+    assert any("parse error" in error for error in report["data_quality"]["errors"])
+    assert any("non-finite aggregate: positive contribution" in error
+               for error in report["data_quality"]["errors"])
+    assert report["metrics"]["max_positive_contribution_by_etf"] is None
+    assert json.dumps(report, allow_nan=False)
