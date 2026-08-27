@@ -566,7 +566,9 @@ def test_collect_latest_events_uses_trading_sessions_for_event_expiry():
     assert book["active"]["RSI"]["expires_date"] == date(2021, 1, 11)
 
 
-def event_book_for_directions(boll, rsi, kdj, event_date):
+def event_book_for_directions(boll, rsi, kdj, event_date, expires_date=None):
+    if expires_date is None:
+        expires_date = "2021-01-06"
     active = {}
     for indicator, direction_name in (("BOLL", boll), ("RSI", rsi), ("KDJ", kdj)):
         if direction_name == "NEUTRAL":
@@ -575,12 +577,15 @@ def event_book_for_directions(boll, rsi, kdj, event_date):
             indicator,
             strategy.TurnDirection[direction_name],
             event_date,
-            "2021-01-06",
+            expires_date,
         )
     return {"active": active, "invalidated": []}
 
 
-def relative_event_book_for_directions(boll, rsi, kdj, event_date):
+def relative_event_book_for_directions(
+        boll, rsi, kdj, event_date, expires_date=None):
+    if expires_date is None:
+        expires_date = event_date
     active = {}
     for indicator, direction_name in (
             ("BOLL", boll), ("RSI", rsi), ("KDJ", kdj)):
@@ -588,7 +593,7 @@ def relative_event_book_for_directions(boll, rsi, kdj, event_date):
         if enum_direction is strategy.TurnDirection.NEUTRAL:
             continue
         active[indicator] = strategy.make_relative_turn_event(
-            indicator, enum_direction, event_date, event_date,
+            indicator, enum_direction, event_date, expires_date,
             {"fixture": indicator},
             reference_extreme=(8.8 if indicator == "BOLL" else None),
         )
@@ -598,6 +603,7 @@ def relative_event_book_for_directions(boll, rsi, kdj, event_date):
 def test_relative_branch_a_requires_hard_boll_and_relative_oscillator():
     hard = event_book_for_directions(
         "BUY_TURN", "NEUTRAL", "NEUTRAL", "2021-01-08",
+        expires_date="2021-01-08",
     )
     relative = relative_event_book_for_directions(
         "NEUTRAL", "BUY_TURN", "NEUTRAL", "2021-01-08",
@@ -659,6 +665,7 @@ def test_relative_candidate_rejects_opposite_or_incomplete_support(
 def test_existing_complete_hard_resonance_suppresses_relative_candidate():
     hard = event_book_for_directions(
         "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-08",
+        expires_date="2021-01-08",
     )
     relative = relative_event_book_for_directions(
         "BUY_TURN", "BUY_TURN", "BUY_TURN", "2021-01-08",
@@ -667,6 +674,59 @@ def test_existing_complete_hard_resonance_suppresses_relative_candidate():
         "510300.XSHG", strategy.TurnDirection.BUY_TURN,
         hard, relative, date(2021, 1, 8), 10.0,
     ) is None
+
+
+def test_expired_support_event_does_not_generate_relative_candidate():
+    hard = event_book_for_directions(
+        "BUY_TURN", "NEUTRAL", "NEUTRAL", "2021-01-06",
+        expires_date="2021-01-07",
+    )
+    relative = relative_event_book_for_directions(
+        "NEUTRAL", "BUY_TURN", "NEUTRAL", "2021-01-08",
+    )
+
+    assert strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    ) is None
+
+
+def test_expired_opposite_event_does_not_veto_relative_candidate():
+    hard = event_book_for_directions(
+        "SELL_TURN", "NEUTRAL", "NEUTRAL", "2021-01-06",
+        expires_date="2021-01-07",
+    )
+    relative = relative_event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "BUY_TURN", "2021-01-08",
+    )
+
+    observation = strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    )
+
+    assert observation["branch"] == "SOFT_ALL_THREE"
+
+
+def test_relative_candidate_accepts_t_minus_two_support_and_signal_expiry_boundary():
+    hard = event_book_for_directions(
+        "BUY_TURN", "NEUTRAL", "NEUTRAL", "2021-01-06",
+        expires_date="2021-01-08",
+    )
+    relative = relative_event_book_for_directions(
+        "NEUTRAL", "BUY_TURN", "NEUTRAL", "2021-01-08",
+        expires_date="2021-01-08",
+    )
+
+    observation = strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, date(2021, 1, 8), 10.0,
+    )
+
+    assert observation["supporter_event_dates"] == {
+        "BOLL": date(2021, 1, 6), "RSI": date(2021, 1, 8),
+    }
+    assert observation["expires_date"] == date(2021, 1, 8)
 
 
 def test_relative_fingerprint_is_deterministic_and_formal_fingerprints_are_frozen():

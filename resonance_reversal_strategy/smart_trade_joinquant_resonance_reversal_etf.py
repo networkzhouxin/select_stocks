@@ -1660,6 +1660,27 @@ def _event_mode(event):
     return event.get("event_mode", "HARD")
 
 
+def _event_is_valid_at(event, signal_date):
+    event_date = _calendar_date(event.get("event_date"))
+    expires_date = _calendar_date(event.get("expires_date"))
+    return (
+        event_date is not None
+        and expires_date is not None
+        and event_date <= signal_date <= expires_date
+    )
+
+
+def _effective_event_book(event_book, signal_date):
+    return {
+        "active": {
+            indicator: event
+            for indicator, event in (event_book.get("active") or {}).items()
+            if event is not None and _event_is_valid_at(event, signal_date)
+        },
+        "invalidated": [],
+    }
+
+
 def _has_active_opposite(hard_book, relative_book, direction):
     return _builtins.any(
         event is not None and event["direction"] is OPPOSITE[direction]
@@ -1686,6 +1707,8 @@ def build_relative_observation_id(code, direction, branch, support_events):
 def build_relative_resonance_observation(
         code, direction, hard_book, relative_book, signal_date, event_close):
     signal_date = _calendar_date(signal_date)
+    hard_book = _effective_event_book(hard_book, signal_date)
+    relative_book = _effective_event_book(relative_book, signal_date)
     if build_resonance_decision(
             code, direction, hard_book, signal_date) is not None:
         return None
