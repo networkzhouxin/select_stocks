@@ -368,7 +368,7 @@ def _validate_candidate_initializations(records, errors):
     initialized = [record for record in records if record.get("event") == "strategy_initialized"]
     if not initialized:
         errors.append("missing candidate strategy_initialized record")
-        return
+        return False
     expected = {
         "build": CANDIDATE_BUILD,
         "parameter_fingerprint": PARAMETER_FINGERPRINT,
@@ -376,11 +376,88 @@ def _validate_candidate_initializations(records, errors):
         "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
         "relative_observation_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
     }
+    valid = True
     for record in initialized:
         for field, expected_value in expected.items():
             if record.get(field) != expected_value:
                 errors.append("candidate initialization %s mismatch: %r" % (
                     field, record.get(field),
+                ))
+                valid = False
+    return valid
+
+
+def _validated_session_calendar(records, role, initialization_valid, errors):
+    """Use unconditional after-close portfolio summaries as session evidence."""
+    if not initialization_valid:
+        errors.append("%s session calendar unavailable: invalid initialization" % role)
+        return ()
+    evidence = {}
+    unusable_dates = set()
+    for record in records:
+        if record.get("event") != "portfolio_summary":
+            continue
+        closing_date = _is_training_date(
+            record.get("closing_date"), "%s session summary closing" % role, errors,
+        )
+        timestamp = _strict_log_timestamp(record, "%s session summary" % role, errors)
+        usable = closing_date is not None and timestamp is not None
+        if timestamp is not None and closing_date is not None:
+            if timestamp.date() != closing_date:
+                errors.append("%s session summary log date mismatch" % role)
+                usable = False
+            if timestamp.time() < AFTER_CLOSE_LOG_TIME:
+                errors.append("%s session summary log timestamp before 15:30" % role)
+                usable = False
+        if closing_date is None:
+            continue
+        public = {key: value for key, value in record.items() if not key.startswith("_")}
+        previous = evidence.get(closing_date)
+        if previous is not None and previous != public:
+            errors.append("conflicting %s session calendar evidence: %s" % (role, closing_date))
+            unusable_dates.add(closing_date)
+        elif usable:
+            evidence[closing_date] = public
+        else:
+            unusable_dates.add(closing_date)
+    for closing_date in unusable_dates:
+        evidence.pop(closing_date, None)
+    if not evidence:
+        errors.append("missing %s portfolio_summary session evidence" % role)
+    return tuple(sorted(evidence))
+
+
+def _expected_outcome_session(event_date, horizon, calendar):
+    if event_date is None or event_date not in calendar:
+        return None
+    index = calendar.index(event_date) + horizon
+    return calendar[index] if index < len(calendar) else None
+
+
+def _validate_outcome_sessions(registrations, outcomes, calendar, role, horizons, errors):
+    for resonance_id, registration in registrations.items():
+        try:
+            event_date = _calendar_date(registration.get("signal_date"))
+        except ValueError:
+            continue
+        for horizon in horizons:
+            expected = _expected_outcome_session(event_date, horizon, calendar)
+            if expected is None:
+                errors.append("%s session calendar missing horizon %s coverage: %s" % (
+                    role, horizon, resonance_id,
+                ))
+                continue
+            record = outcomes.get((resonance_id, horizon))
+            payload = record.get("outcome") if record is not None else None
+            if type(payload) is not dict:
+                continue
+            try:
+                closing_date = _calendar_date(payload.get("closing_date"))
+            except ValueError:
+                continue
+            if closing_date != expected:
+                errors.append("%s outcome closing session mismatch: %s/%s" % (
+                    role, resonance_id, horizon,
                 ))
 
 
@@ -639,7 +716,7 @@ def _valid_baseline_registration(record):
             and timestamp.time() >= TRADING_LOG_TIME)
 
 
-def _valid_baseline_horizon_five(registration, outcome_record):
+def _valid_baseline_horizon_five(registration, outcome_record, session_calendar=()):
     if outcome_record is None or outcome_record.get("code") != registration.get("code"):
         return False
     if ("direction" in outcome_record
@@ -660,6 +737,7 @@ def _valid_baseline_horizon_five(registration, outcome_record):
     outcome_timestamp = _parse_strict_log_timestamp(outcome_record)
     return (signal_date is not None and event_date == signal_date
             and closing_date is not None and TRAIN_START <= closing_date <= TRAIN_END
+            and closing_date == _expected_outcome_session(signal_date, 5, session_calendar)
             and closing_date > signal_date and registration_timestamp is not None
             and outcome_timestamp is not None and outcome_timestamp.date() == closing_date
             and outcome_timestamp.time() >= AFTER_CLOSE_LOG_TIME
@@ -682,6 +760,9 @@ def _validate_baseline(records, errors):
             if record.get(field) != expected_value:
                 errors.append("baseline initialization %s mismatch: %r" % (field, record.get(field)))
                 initialization_valid = False
+    session_calendar = _validated_session_calendar(
+        records, "baseline", initialization_valid, errors,
+    )
     registrations = {}
     registration_replicas = {}
     outcomes = {}
@@ -784,6 +865,9 @@ def _validate_baseline(records, errors):
         if not comparable:
             formal_missing_outcome_count += 1
             errors.append("formal comparison incomplete: %s" % resonance_id)
+    _validate_outcome_sessions(
+        registrations, outcomes, session_calendar, "formal", (5,), errors,
+    )
     canonical_registrations = {}
     if initialization_valid:
         for resonance_id, registration in registrations.items():
@@ -791,7 +875,9 @@ def _validate_baseline(records, errors):
             if (resonance_id not in invalid_registration_ids
                     and resonance_id not in invalid_horizon_five_ids
                     and _valid_baseline_registration(registration)
-                    and _valid_baseline_horizon_five(registration, five_day)):
+                    and _valid_baseline_horizon_five(
+                        registration, five_day, session_calendar,
+                    )):
                 canonical_registrations[resonance_id] = registration
     _validate_filled_orders(records, "baseline", errors)
     return registrations, outcomes, formal_missing_outcome_count, canonical_registrations
@@ -1051,7 +1137,10 @@ def analyze_records(candidate_records, baseline_records):
     baseline_order_ambiguous = _has_cross_file_filled_timestamp(
         baseline_records, "baseline", errors,
     )
-    _validate_candidate_initializations(candidate_records, errors)
+    candidate_initialization_valid = _validate_candidate_initializations(candidate_records, errors)
+    candidate_session_calendar = _validated_session_calendar(
+        candidate_records, "candidate", candidate_initialization_valid, errors,
+    )
     candidate_session_evidence = _candidate_session_evidence(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
@@ -1097,6 +1186,9 @@ def analyze_records(candidate_records, baseline_records):
             errors.append("duplicate relative outcome: %s/%s" % key)
             continue
         outcomes[key] = record
+    _validate_outcome_sessions(
+        registrations, outcomes, candidate_session_calendar, "relative", HORIZONS, errors,
+    )
     _validate_relative_recorded_closing_order(registrations, outcomes, errors)
     year_counts = {"2019": 0, "2020": 0, "2021": 0}
     direction_counts = {direction: 0 for direction in DIRECTIONS}

@@ -33,13 +33,16 @@ FINGERPRINT = "f47d32b87be6d926"
 SESSION_DATES = {
     2019: ("2019-01-02", "2019-01-03", "2019-01-04", "2019-01-07", "2019-01-08",
            "2019-01-09", "2019-01-10", "2019-01-11", "2019-01-14", "2019-01-15",
-           "2019-01-16", "2019-01-17", "2019-01-18"),
+           "2019-01-16", "2019-01-17", "2019-01-18", "2019-01-21", "2019-01-22",
+           "2019-01-23", "2019-01-24"),
     2020: ("2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07", "2020-01-08",
            "2020-01-09", "2020-01-10", "2020-01-13", "2020-01-14", "2020-01-15",
-           "2020-01-16", "2020-01-17", "2020-01-20"),
+           "2020-01-16", "2020-01-17", "2020-01-20", "2020-01-21", "2020-01-22",
+           "2020-01-23", "2020-02-03"),
     2021: ("2020-12-31", "2021-01-04", "2021-01-05", "2021-01-06", "2021-01-07",
            "2021-01-08", "2021-01-11", "2021-01-12", "2021-01-13", "2021-01-14",
-           "2021-01-15", "2021-01-18", "2021-01-19"),
+           "2021-01-15", "2021-01-18", "2021-01-19", "2021-01-20", "2021-01-21",
+           "2021-01-22", "2021-01-25"),
 }
 
 
@@ -125,8 +128,15 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
 
 def make_outcome(record, horizon, value):
     adjusted = value if record["direction"] == "BUY_TURN" else -value
-    registration_date = date.fromisoformat(record["_log_timestamp"][:10])
-    closing_date = (registration_date + timedelta(days=horizon)).isoformat()
+    session_dates = next((dates for dates in SESSION_DATES.values()
+                          if record["signal_date"] in dates), None)
+    if session_dates is None:
+        registration_date = date.fromisoformat(record["_log_timestamp"][:10])
+        closing_date = (registration_date + timedelta(days=horizon)).isoformat()
+    else:
+        closing_date = session_dates[
+            session_dates.index(record["signal_date"]) + horizon
+        ]
     return {
         "event": "observation_outcome",
         "resonance_id": record["relative_observation_id"],
@@ -171,12 +181,22 @@ def make_candidate_records():
         records.extend(make_outcome(record, horizon, value) for horizon, value in (
             (1, 0.005), (3, 0.01), (5, 0.02),
         ))
+    records.extend(make_session_summaries())
     records.extend(make_order_path())
     records.append({
         "event": "portfolio_summary", "closing_date": "2021-12-31",
         "total_value": 23856.40, "_log_timestamp": "2021-12-31T15:30:00",
     })
     return records
+
+
+def make_session_summaries():
+    return [{
+        "event": "portfolio_summary", "closing_date": session_date,
+        "total_value": 20000.0, "_log_timestamp": session_date + "T15:30:00",
+    } for session_date in sorted({
+        session_date for dates in SESSION_DATES.values() for session_date in dates
+    })]
 
 
 def _replace_relative_identity(registration, outcomes):
@@ -198,6 +218,7 @@ def make_baseline_records():
         "pool_fingerprint": "9123995edeb1ed84",
         "event_logic_fingerprint": "1c0b8a22f48c97c3",
     }]
+    records.extend(make_session_summaries())
     records.extend(make_order_path())
     records.append({
         "event": "portfolio_summary", "closing_date": "2021-12-31",
@@ -217,10 +238,10 @@ def make_baseline_records():
             "code": "510300.XSHG", "event_date": "2021-01-05",
             "horizon": 5,
             "outcome": {
-                "status": "RECORDED", "closing_date": "2021-01-06",
+                "status": "RECORDED", "closing_date": "2021-01-12",
                 "return": 0.01,
             },
-            "_log_timestamp": "2021-01-06T15:30:00",
+            "_log_timestamp": "2021-01-12T15:30:00",
         })
     return records
 
@@ -329,6 +350,8 @@ def test_empty_input_is_reported_as_incomplete_without_writing_state():
 
     assert report["metrics"]["candidate_count"] == 0
     assert report["data_quality"]["errors"] == [
+        "baseline session calendar unavailable: invalid initialization",
+        "candidate session calendar unavailable: invalid initialization",
         "missing baseline strategy_initialized record",
         "missing candidate strategy_initialized record",
     ]
@@ -766,9 +789,9 @@ def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
         if record.get("event") == "order_transition":
             record["_log_timestamp"] = record["_log_date"] + "T00:00:00"
     candidate_summary = next(record for record in candidate
-                             if record.get("event") == "portfolio_summary")
+                             if record.get("closing_date") == "2021-12-31")
     baseline_summary = next(record for record in baseline
-                            if record.get("event") == "portfolio_summary")
+                            if record.get("closing_date") == "2021-12-31")
     candidate_summary["_log_timestamp"] = "2019-01-05T15:30:00"
     baseline_summary["_log_timestamp"] = "2021-12-31T14:59:00"
 
@@ -1346,6 +1369,76 @@ def test_relative_recorded_outcomes_require_strict_horizon_closing_order(closing
     assert report["continue_candidate"] is False
     assert any("relative RECORDED closing dates are not strictly ordered" in error
                for error in report["data_quality"]["errors"])
+
+
+def test_outcomes_require_exact_runtime_trading_sessions():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    relative_horizon_three = next(
+        record for record in candidate
+        if record.get("event") == "observation_outcome"
+        and record.get("relative_observation_id") == registration["relative_observation_id"]
+        and record.get("horizon") == 3
+    )
+    relative_horizon_three["outcome"]["closing_date"] = "2019-01-06"
+    relative_horizon_three["_log_timestamp"] = "2019-01-06T15:30:00"
+    formal_horizon_five = next(record for record in baseline
+                               if record.get("event") == "observation_outcome")
+    formal_horizon_five["outcome"]["closing_date"] = "2021-01-06"
+    formal_horizon_five["_log_timestamp"] = "2021-01-06T15:30:00"
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is False
+    assert any("relative outcome closing session mismatch" in error
+               for error in report["data_quality"]["errors"])
+    assert any("formal outcome closing session mismatch" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_session_calendar_rejects_shifted_outcomes_and_missing_evidence():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = sorted((record for record in candidate
+                       if record.get("event") == "observation_outcome"
+                       and record.get("relative_observation_id")
+                       == registration["relative_observation_id"]),
+                      key=lambda record: record["horizon"])
+    for outcome, closing_date in zip(outcomes, ("2019-01-08", "2019-01-10", "2019-01-14")):
+        outcome["outcome"]["closing_date"] = closing_date
+        outcome["_log_timestamp"] = closing_date + "T15:30:00"
+
+    shifted = analyzer.analyze_records(candidate, make_baseline_records())
+    without_calendar = analyzer.analyze_records(
+        [record for record in make_candidate_records()
+         if record.get("event") != "portfolio_summary"],
+        make_baseline_records(),
+    )
+
+    assert any("relative outcome closing session mismatch" in error
+               for error in shifted["data_quality"]["errors"])
+    assert any("missing candidate portfolio_summary session evidence" in error
+               for error in without_calendar["data_quality"]["errors"])
+
+
+def test_session_calendar_accepts_holiday_spanning_runtime_horizon():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation"
+                        and record.get("signal_date") == "2020-01-17")
+    horizon_five = next(record for record in candidate
+                       if record.get("relative_observation_id")
+                       == registration["relative_observation_id"]
+                       and record.get("horizon") == 5)
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert horizon_five["outcome"]["closing_date"] == "2020-02-03"
+    assert not any("outcome closing session mismatch" in error
+                   for error in report["data_quality"]["errors"])
 
 
 def test_formal_horizon_five_must_close_after_its_signal_date():
