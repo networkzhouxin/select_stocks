@@ -1282,3 +1282,117 @@ Status: adopted as a repository-layout milestone; strategy logic, parameters, ET
 - Execution contract: After obtaining a fresh current price, the sell path checks the cached snapshot produced by that quote request. Any state other than fresh `TRADE` fails closed before order submission, leaves `sold_today` and pending-order guards untouched, and preserves the original ATR or signal-sell reason for the existing bounded 10:35 re-evaluation. If the second attempt is still not orderable, the retry reason remains and logs do not falsely claim that the risk condition disappeared.
 - Test-first evidence: Five non-continuous or missing-status cases and one unavailable-price case first proved that the old path either submitted an order or lost the retry reason. A separate 10:35 test first proved the old log incorrectly reported that the risk had cleared. The implementation followed those red tests; the complete PTrade test file then passed (`259 passed`).
 - Business boundary: JoinQuant changed only its deployment build identity. Signals, indicators, crosses, parameters, thresholds, ETF pool, ranking, target sizing, minimum hold, ATR formula, execution times, and the T-1 signal boundary are unchanged. Business fingerprint remains `1506a0e834fe`; state schema remains `6`; no market or validation-period data was read, and the production multi-factor strategy is untouched.
+
+### Reject Fixed One-Entry-ATR Break-Even Floor
+
+- Date: 2026-08-12.
+- Decision: Preserve official `cross-v0.3.2` unchanged. Retain the new profit-giveback module as observation-only research infrastructure and archive the isolated candidate as rejected evidence.
+- Reason: Profit giveback exists in training, but the fixed candidate reduced total and annualized return, worsened maximum drawdown, Sharpe, Sortino, win rate, profit/loss ratio, and both 2020 and 2021 annual returns.
+- Causal boundary: Activation uses only the stored highest close from completed sessions and entry ATR frozen at the buy signal. The T-day current price is used only for execution, so the candidate contains no future function.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read. No validation-period result was inspected. Nearby ATR activations, floor offsets, staged stops, and ETF/year exceptions are closed as post-hoc searches.
+- Business boundary: No JoinQuant, PTrade, or local formal strategy file changed. The production multi-factor strategy is untouched.
+
+### Prepare Frozen ATR-Stress Rule On cross-v0.3.3 Mainline
+
+- Date: 2026-08-16.
+- Decision: Raise the JoinQuant mainline to `cross-v0.3.3` / build `20260816.1` with the frozen portfolio ATR-stress rule (15 trading days, 3 ATR stops, 0.50 buy scale) added on top of the `cross-v0.3.2` rules. The PTrade adapter stays frozen at `cross-v0.3.2` until the JoinQuant training confirmation and all four reserved validation windows pass; the release verifier now correctly rejects this transitional parity state, and its tests encode that expectation.
+- Local pre-check evidence: A read-only 2019-2021 local replay (identical data and execution model, stress keys injected at planner level only) reproduced the recorded baseline exactly (44122.30, +120.61%, 7.47% max drawdown, 92 buys/89 sells) and returned +125.00% total, 6.03% max drawdown, Sharpe 2.262, Sortino 3.581 for the stress version. The trade path was unchanged (92/89); six half-size buys were filled (2020-03-03/03-05/03-06/03-23, 2020-09-15, 2020-09-22), improving the 2020 annual return from +49.74% to +52.68%.
+- Reason: The frozen candidate had already improved training and the 2022-2023 validation window on `cross-v0.3.1`; the local pre-check confirms the rule also helps on the current `cross-v0.3.2` path without changing any entry or exit decision. JoinQuant remains the performance authority, so the adoption is staged: JoinQuant confirmation first, then reserved validation windows, then PTrade sync.
+- Research boundary: No validation-period data was read locally. The local replay consumed only the approved 2018 warm-up and 2019-2021 training roots. The three stress parameters are the frozen candidate values; no parameter search was performed.
+- Business boundary: JoinQuant file changed (version, build, three frozen parameters, stress sizing, stop-history recording, `stress=` buy log field). PTrade file, ETF pool, signal scoring, ranking, sell rules, ATR stop math, and execution times are unchanged. The production multi-factor strategy is untouched.
+
+### Reject Fixed Profit-Tiered ATR Tightening
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized `cross-v0.3.3-profit-tier-candidate` before JoinQuant and validation, and close the `profit_tiered_atr_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: The Step 0 binding observation found 36 binding stop-check events (4/24/8 across 2019/2020/2021) but zero same-day extra triggers, and the Step 1 local A/B confirmed an exact no-op: 0 changed filled orders and every headline metric identical to the baseline (+125.00% return, 6.03% max drawdown, 2.262 Sharpe, 3.581 Sortino, 92/89 orders, 25 ATR stops). The pre-registered "at least 3 filled orders change" gate failed.
+- Causal boundary: The cross-signal stop uses a frozen entry ATR and a 5% floor; the median entry ATR is about 1.4% of price, so the floor dominates. On the 36 binding days the tightened stop only moved from 5.02%-7.74% to 5.00%-6.19% below the peak, and no 09:35 price ever fell into that gap. The multi-factor V2.6 profit-tier mechanism therefore does not transfer to this framework.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No tier threshold, multiplier factor, peak-profit measurement, profit floor, or per-ETF override search is allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.
+
+### Reject Fixed Gold-Specific Stop Tightening
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized `cross-v0.3.3-gold-stop-candidate` before JoinQuant and validation, and close the `gold_specific_stop_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: Step 0 passed (223 binding gold stop-check days, 6 same-day extra triggers), but the Step 1 local A/B failed the gates: total return +125.00%→+120.96%, max drawdown 6.03%→6.08%, Sharpe 2.262→2.210, Sortino 3.581→3.492, annual 2019 -1.50pp and 2021 -1.16pp. Gold ATR stops rose from 2 to 5 and the path diverged on 162 filled-order positions.
+- Causal boundary: Per-trade attribution shows the first extra stop (2019-07-01 at +4.7% profit) clipped a winner that the baseline exited at +9.0% on 2019-08-02; gold's winning reversal trades tolerate 3-4% pullbacks below the peak while the bounce develops, which the 5% band absorbs and the 3% floor does not. The multi-factor V2.8 gold-stop result does not transfer to this framework's reversal-entry path.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No nearby gold floor/multiplier values and no per-ETF stop extension are allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.
+
+### Reject Fixed Profit-Giveback Direct Exit
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized profit-giveback direct exit at the Step 0 observation stage, and close the `profit_giveback_exit_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: The read-only trade-level counterfactual (peak profit ≥5%, giveback 3pp → sell at the 09:35 stop check) fired 79 times across 21 affected closed trades, with a negative total per-share delta (-0.352) and negative 2019/2020 annual deltas. It clipped two major winners (2019-02-11 159928: 2.245 vs 2.666; 2020-04-17 513050: 1.523 vs 1.927) while salvaging only small amounts on other trades.
+- Causal boundary: Large trend winners routinely give back more than 3pp of profit mid-hold before resuming; the same giveback that the user observed in the live 159985 case is also the cost of the +18.8%/+34% winners. A profit-anchored giveback exit kills the payoff source of this framework, consistent with the earlier break-even floor and gold-stop failures.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No activation or giveback threshold search is allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The production multi-factor strategy is untouched.
+
+### Reject Fixed Intraday-High Trailing Anchor
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized `cross-v0.3.3-high-anchor-candidate` after the Step 1 local A/B, and close the `intraday_high_anchor_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: Step 0 passed (1604 binding stop-check days, 38 same-day extra triggers across all nine ETFs), but the local A/B failed the gates: total return +125.00%→+119.40%, max drawdown 6.03%→6.06%, 2019 annual +35.84%→+30.55% (2020/2021 slightly improved). The dominant clip was 2019-02-11 159928: the high anchor stopped it on 2019-02-26 at 2.232 versus the official close anchor's exit at 2.666 on 2019-04-12 (-0.434 per share on an +18.8% winner); seven small saves (+0.001 to +0.090 per share) could not offset it (total per-share delta -0.228).
+- Causal boundary: The peak-day upper wick raises the high anchor into the winner's normal pullback band. The 5% close-anchored band exists precisely to absorb intraday spikes; the swap turns the noise the close anchor was designed to filter back into stop triggers. This validates the original close-anchor design rule with data.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No anchor blends, multiplier re-calibrations, or threshold changes are allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The isolated candidate file is archived under `archive/candidates/`. The production multi-factor strategy is untouched.
+
+### Reject Fixed Profit-Gated Direct-Sell Matrix
+
+- Date: 2026-08-16.
+- Decision: Reject the user-authorized 4×3 profit-gated direct-sell matrix at the Step 0 observation stage, and close the `profit_gated_direct_sell_user_authorized` family as exhausted. Keep official `cross-v0.3.3` unchanged.
+- Reason: All 12 variants failed the gates. The 38/40 score thresholds never fired (sell scores that high arrive only after profit leaves the 2-6% band), and the 32/35 thresholds produced negative total per-share deltas, dominated by the 513050 +34% winner's mid-hold pullback that satisfies the trigger and would be exited early (1.523 versus the official 1.927).
+- Causal boundary: The profit band cannot distinguish a small winner that will keep winning from one that will fail; the framework's large winners pass through the 2-6% profit zone repeatedly with elevated sell scores on pullbacks. This is the same structural cause as the profit-giveback exit, break-even floor, and gold-stop failures.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read; no validation-period result was inspected. No nearby thresholds, bands, or mechanism variants are allowed from this result. The failed-experiment ledger count and the research budget were updated.
+- Business boundary: No formal JoinQuant, PTrade, or local strategy file changed. The production multi-factor strategy is untouched.
+
+### Stabilize PTrade State Identity And Broker-First Entry Recovery
+
+- Date: 2026-08-17.
+- Decision: Release build `20260817.1` with a version-independent PTrade state journal filename and a broker-first delivery recovery rule. The stable file is `cross_signal_live_state_<identity>.journal`; the current compatible schema-7 versioned journal is validated and atomically copied on first use, while the old file remains untouched.
+- Recovery contract: Broker positions are authoritative for current quantity and cost. Delivery history only proves the current holding episode: locate the last actual sell and use the first actual buy afterward; if no sell exists, use the first valid buy. Historical delivery quantities are not replayed or required to equal the current broker amount. A last sell without a later buy remains unverified and fails closed.
+- Test-first evidence: The new contracts first failed because the adapter still embedded version/schema in the filename, had no migration helper, and rejected broker holdings whose historical delivery quantity differed. Nine focused state-path and delivery-recovery tests passed after implementation.
+- Business boundary: No signal, indicator, cross, parameter, score, threshold, ETF pool, ranking, position-sizing rule, sell rule, ATR formula, execution time, or T-1 boundary changed. The JoinQuant build marker changed only to preserve release identity parity. No market or validation-period data was read, and the production multi-factor strategy is untouched.
+
+### Rotate The PTrade Audit Log Only At Its Size Boundary
+
+- Date: 2026-08-18.
+- Decision: Release build `20260818.1` with one version-independent active audit file, `cross_signal_audit.log`. Existing `cross_signal_v032_audit.log` and `cross_signal_v033_audit.log` files remain untouched. Before an append would exceed `20 MiB`, atomically rename the complete active file to `cross_signal_audit_YYYYMMDD_HHMMSS.log` and establish a fresh active file containing the new record. Same-second collisions add milliseconds and, if necessary, a non-overwriting sequence.
+- Failure contract: Prepare and verify the next active file before renaming the old one. A failed rotation returns a mirror-write failure, attempts to restore the old active path, never overwrites an existing timestamped archive, and does not interrupt platform logging or trading.
+- Test-first evidence: The focused tests first failed because the adapter still used `cross_signal_v033_audit.log`, compacted old lines in place, and appended to the legacy v033 file. The implementation then passed the active-name, timestamp rotation, collision, rollback, UTF-8, and legacy-file preservation cases.
+- Business boundary: No signal, indicator, cross, parameter, score, threshold, ETF pool, ranking, position sizing, sell rule, ATR formula, execution time, T-1 boundary, or multi-factor strategy changed. No market, training, validation, or live performance data was used.
+
+### Correct PTrade Pre-Sell Cash Capture And IOPV Probe Time
+
+- Date: 2026-08-20.
+- Decision: Release build `20260820.1`. Before `order_target()` can synchronously update the broker cash snapshot, each submitted sell records the actual pre-submit cash. Deferred replacement buys use the earliest recorded pre-submit cash plus confirmed sell proceeds, preventing the same proceeds from being counted twice. The isolated no-order IOPV probe uses the PTrade server wall clock because live `context.current_dt` remained at 09:10 during the 09:34-09:36 callbacks.
+- Runtime evidence: On 2026-08-20 the 513100 sell callback reported current cash `17497.12`, confirmed proceeds `888.80`, and an impossible synthetic available cash `18385.92` against total assets near `17497`. The IOPV probe simultaneously emitted negative quote ages because its callback context stayed at 09:10 while snapshot timestamps were current. No replacement buy qualified that day, so the cash defect did not submit an oversized order.
+- Test-first evidence: The cash regression first reproduced a synchronous broker update and observed `17497.12` frozen instead of the true pre-submit `16608.32`; the probe regression first observed 09:10 instead of the fixed 09:35 wall clock. Both tests passed only after the minimal corrections, followed by the related PTrade and IOPV suites.
+- Business boundary: The strategy remains `cross-v0.3.3` with fingerprint `77e44d93d255`. No signal, indicator, parameter, threshold, ETF pool, ranking, position sizing, sell rule, ATR formula, execution schedule, or T-1 boundary changed. No training or reserved-period market data was read, and the production multi-factor strategy is untouched.
+
+### Reject Full-Capacity Opportunity-Cost Replacement
+
+- Date: 2026-08-22.
+- Decision: Reject the frozen opportunity-replacement candidate before JoinQuant and close the user-authorized family as exhausted. Keep formal `cross-v0.3.3` unchanged.
+- Reason: Nineteen completed replacements reduced local training return from +125.00% to +89.87%, reduced win rate from 56.18% to 55.05%, worsened drawdown from 6.03% to 6.18%, and lowered Sharpe, Sortino, profit/loss ratio, and every annual return.
+- Causal boundary: The rule already required all three holdings to finish five sessions, preserved the official score-60 buy filter, and replaced only sell-score-at-least-30 holdings blocked by price/ADX protection. Its failure therefore rejects the opportunity-cost inference itself: a fresh reversal entry does not prove that a protected existing trend is the weaker asset.
+- Research boundary: Only approved 2018 warm-up and 2019-2021 training data were read. No validation, recent-market, live-outcome, or full-period result was inspected, and no threshold or ETF subgroup was searched after the failure.
+- Business boundary: No formal JoinQuant, formal PTrade, or production multi-factor file changed. The research-only selector, local planner, tests, and failed-result report remain as reproducible evidence; no upload candidate was generated.
+
+### Add Non-Binding PTrade IOPV Buy And Sell Shadows
+
+- Date: 2026-08-22.
+- Decision: Release build `20260822.1` with prospective PTrade-only IOPV shadow evidence. A fixed 5% label observes whether a 09:35 qualified QDII would have been deferred and rechecked at 10:35, and whether a sell-score-at-least-30 QDII blocked by price confirmation or ADX would have been accelerated. The real strategy ignores every shadow result.
+- Execution-price contract: Buy observations use the same sell-five limit already selected for the real order. The 10:35 recheck uses the then-current sell-five quote. Blocked-sell observations use bid-one as the conservative immediate execution reference. Missing quote depth or positive IOPV is recorded as unavailable without a latest-price substitution.
+- Runtime contract: The existing 10:35 callback performs the recheck before halt/retry logic can return early. No new scheduled task is registered. The shadow queue is double-underscore same-day runtime state, is not persisted, is cleared after one recheck, and cannot submit, cancel, resize, defer, or accelerate a real order.
+- Test-first evidence: Seven behavior tests first failed on latest-price precedence, absent 09:35 state, absent 10:35 recheck/wrapper hook, and absent blocked-sell observations. Three additional failure-open tests then failed because an observation exception could still interrupt the buy path, blocked-sell evaluation, or 10:35 recovery. One timestamp test finally reproduced the known 09:10 stale callback context in the formal IOPV log. All eleven passed after the minimal isolated implementation. The directly affected PTrade, JoinQuant identity, forward-log archive, and release-verifier suites passed together (`377 passed`).
+- Business boundary: The strategy remains `cross-v0.3.3` with fingerprint `77e44d93d255` and state schema `7`. JoinQuant changed only its deployment build identity. No signal, indicator, formal threshold, ETF pool, ranking, position sizing, sell rule, ATR formula, schedule, or T-1 boundary changed. No market, training, validation, or live performance data was read, and the production multi-factor strategy is untouched.
+
+### Activate An 8% PTrade IOPV Sell Override
+
+- Date: 2026-08-22.
+- Decision: Release build `20260822.2` with one explicit PTrade-live execution overlay for `513050.SS`, `513100.SS`, `513500.SS`, and `513880.SS`. After the existing five-trading-day minimum hold and T-1 sell score of at least 30 have passed, a bid-one/IOPV premium of at least 8% bypasses only price confirmation and ADX protection and submits the existing full-position sell. The user selected 8% directly; it was not chosen from a validation-period or nearby-threshold search.
+- Safety contract: The override is live-only and requires a tradable snapshot, positive bid-one with positive depth, positive finite IOPV, non-negative quote age no greater than 10 seconds, and premium computed as `bid1 / IOPV - 1`. Missing, stale, halted, malformed, or exception-producing inputs fail open to the original blocked-sell outcome. Original eligible sells and ATR stops remain independent of IOPV. The buy-side 5% shadow remains observation-only.
+- Test-first evidence: The first behavior test failed because both price-confirmation and ADX blockers still prevented an 8% premium sell. Boundary and safety tests then failed below 8%, in non-live mode, with a halted snapshot, and with an 11-second snapshot until the strict gates were implemented. An exception-injection test failed until override errors were isolated from the original signal-sell evaluation.
+- Evidence boundary: No market, training, validation, or live outcome data was read for this release. JoinQuant lacks the required point-in-time IOPV, while PTrade daily backtests do not reproduce live callback timing, so this release has code-path verification but no claim of improved return or accuracy.
+- Business boundary: Indicators, T-1 scoring, sell score 30, minimum hold 5 trading days, ATR stops, buy logic, pool, position sizing, schedule, and state schema remain unchanged. The PTrade live sell path now intentionally differs from JoinQuant only at the documented IOPV execution overlay; the JoinQuant build marker changed solely to preserve release identity parity. The production multi-factor strategy is untouched.

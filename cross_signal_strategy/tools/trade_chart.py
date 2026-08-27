@@ -297,7 +297,7 @@ select{{height:36px;min-width:230px;border:1px solid #b9c1cb;background:#fff;pad
 .note{{margin-top:10px;color:var(--muted);font-size:13px}} .legend{{font-weight:600;color:var(--ink)}}
 @media(max-width:700px){{header,main{{padding-left:12px;padding-right:12px}} #chart{{height:720px;min-height:720px}} select{{width:100%}}}}
 </style></head><body>
-<header><h1>{escape(period_label)} 日 K 交易复盘</h1><div class="sub">cross-v0.3.2（聚宽成交日志 + 本地日线）</div></header>
+<header><h1>{escape(period_label)} 日 K 交易复盘</h1><div class="sub">cross-v0.3.3（聚宽成交日志 + 本地日线）</div></header>
 <main><div class="toolbar"><label for="etf-select">ETF</label><select id="etf-select">{options}</select><span id="stats" class="stats"></span></div>
 <div id="chart"></div>
 <div class="note"><span class="legend">数据口径：</span>买卖标记采用<strong>聚宽成交</strong>日志中的实际成交价；K 线采用<strong>本地日线</strong>原始行情。两套数据仅叠加展示，不修改、不反推、不强行对齐。页面仅用于复盘观察，不用于验证期调参。</div></main>

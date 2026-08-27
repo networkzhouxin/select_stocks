@@ -7,7 +7,7 @@ import sys
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Tuple
+from typing import Mapping, Tuple
 
 import pandas as pd
 
@@ -27,6 +27,7 @@ class LocalSignalAdapter:
     warmup_root: Path | str | None = None
     adjustment_factors: object | None = None
     daily_corrections: object | None = None
+    snapshot_corrections: Mapping[tuple[str, str], Mapping[str, object]] | None = None
     _daily_cache: dict = field(default_factory=dict, init=False, repr=False)
     _score_cache: dict = field(default_factory=dict, init=False, repr=False)
 
@@ -98,27 +99,54 @@ class LocalSignalAdapter:
             result = dict(cached_result) if cached_result is not None else None
             return (result, cached_reason) if return_reason else result
 
-        p = self.params or strategy.get_default_params()
-        min_len = self._local_min_len(p)
-        required = ["rsi6", "rsi12", "rsi24", "dif", "dea", "k", "d", "j", "ma20", "atr", "adx"]
-
         frame, signal_date = self.load_signal_frame(code, current_date)
         if signal_date is None:
             reason = "no_previous_trade_date"
             self._score_cache[cache_key] = (None, reason)
             return (None, reason) if return_reason else None
 
+        result, reason = self.score_frame(code, current_date, frame, signal_date)
+        self._score_cache[cache_key] = (
+            dict(result) if result is not None else None,
+            reason,
+        )
+        copied = dict(result) if result is not None else None
+        return (copied, reason) if return_reason else copied
+
+    def score_frame(
+        self,
+        code: str,
+        current_date: str,
+        frame: pd.DataFrame,
+        signal_date: str,
+        metadata: dict | None = None,
+    ):
+        """Score an already-causal daily frame through the official core path."""
+        p = self.params or strategy.get_default_params()
+        min_len = self._local_min_len(p)
+        required = [
+            "rsi6",
+            "rsi12",
+            "rsi24",
+            "dif",
+            "dea",
+            "k",
+            "d",
+            "j",
+            "ma20",
+            "atr",
+            "adx",
+        ]
         reason = strategy.score_skip_reason(frame, None, required, min_len)
         if reason is not None:
-            self._score_cache[cache_key] = (None, reason)
-            return (None, reason) if return_reason else None
+            return None, reason
 
         snapshot = strategy.build_signal_snapshot(frame, p)
         self._suppress_float_artifact_flags(snapshot, frame)
+        self._apply_snapshot_corrections(snapshot, code, signal_date)
         reason = strategy.score_skip_reason(frame, snapshot, required, min_len)
         if reason is not None:
-            self._score_cache[cache_key] = (None, reason)
-            return (None, reason) if return_reason else None
+            return None, reason
 
         result = {}
         result.update(snapshot)
@@ -126,10 +154,10 @@ class LocalSignalAdapter:
         result.update(strategy.score_sell_snapshot(snapshot))
         result["code"] = str(code).split(".")[0]
         result["current_date"] = pd.Timestamp(current_date).strftime("%Y-%m-%d")
-        result["signal_date"] = signal_date
+        result["signal_date"] = str(signal_date)
         result["max_data_date"] = str(frame["date"].max())
-        self._score_cache[cache_key] = (dict(result), None)
-        return (result, None) if return_reason else result
+        result.update(dict(metadata or {}))
+        return result, None
 
     def _local_min_len(self, params: dict) -> int:
         return max(
@@ -150,3 +178,20 @@ class LocalSignalAdapter:
         delta = ma10.iloc[-2] - ma10.iloc[-1]
         if 0 < delta < 1e-12:
             snapshot["close_below_falling_ma10"] = False
+
+    def _apply_snapshot_corrections(
+        self,
+        snapshot: dict,
+        code: str,
+        signal_date: str,
+    ) -> None:
+        if not self.snapshot_corrections:
+            return
+        key = (str(code).split(".")[0], str(signal_date))
+        correction = self.snapshot_corrections.get(key)
+        if correction is None:
+            return
+        snapshot.update(dict(correction.get("fields", {})))
+        snapshot["local_snapshot_correction_provenance"] = str(
+            correction.get("provenance", "")
+        )

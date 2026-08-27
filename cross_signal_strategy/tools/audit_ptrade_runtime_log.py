@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""审计 cross-v0.3.2 的 PTrade 运行日志。
+"""审计 cross-v0.3.3 的 PTrade 运行日志。
 
 证据边界：本工具只检查日志中已经出现的运行事实，不调用 PTrade API，
 不读取行情数据，也不推断没有记录在日志里的成交、停牌或检查点写入结果。
@@ -146,10 +146,10 @@ def _check_date_scope(events, selected_date):
 
 
 def _check_initialization(events):
-    matched = [event for event in events if "[cross-v0.3.2] 初始化完成:" in event.message]
+    matched = [event for event in events if "[cross-v0.3.3] 初始化完成:" in event.message]
     if not matched:
         return _result(
-            "initialization", "策略初始化", STATUS_INSUFFICIENT, "未找到cross-v0.3.2初始化完成日志"
+            "initialization", "策略初始化", STATUS_INSUFFICIENT, "未找到cross-v0.3.3初始化完成日志"
         )
     return _result("initialization", "策略初始化", STATUS_PASS, "初始化日志=%d条" % len(matched))
 
@@ -216,7 +216,10 @@ def _check_main_0935(events):
     matched = [
         event
         for event in events
-        if event.message.startswith("[cross-v0.3.2] 执行日期=")
+        if event.message.startswith((
+            "[cross-v0.3.3] 执行日期=",
+            "[交易日开始] 执行日期=",
+        ))
     ]
     if not matched:
         return _result("main_0935", "09:35主流程", STATUS_INSUFFICIENT, "未找到执行日期日志")
@@ -265,7 +268,7 @@ def _check_after_close(events):
     matched = [
         event
         for event in events
-        if event.message.startswith("[cross-v0.3.2 收盘]")
+        if event.message.startswith("[cross-v0.3.3 收盘]")
     ]
     if not matched:
         return _result("after_close", "收盘流程", STATUS_INSUFFICIENT, "未找到收盘汇总")
@@ -448,7 +451,7 @@ def render_text_report(report):
 
 
 def build_argument_parser():
-    parser = argparse.ArgumentParser(description="审计cross-v0.3.2的PTrade运行日志")
+    parser = argparse.ArgumentParser(description="审计cross-v0.3.3的PTrade运行日志")
     parser.add_argument("log_file", help="PTrade导出的日志文本文件")
     parser.add_argument("--date", dest="target_date", help="只审计YYYY-MM-DD指定日期")
     parser.add_argument("--json", action="store_true", help="输出JSON而不是中文文本报告")

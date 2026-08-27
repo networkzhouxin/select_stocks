@@ -11,6 +11,7 @@ import pandas as pd
 from cross_signal_strategy.local.local_adjustment import (
     default_training_adjustment_factors,
     default_training_daily_corrections,
+    default_training_snapshot_corrections,
 )
 from cross_signal_strategy.local.local_data_loader import APPROVED_WARMUP_ROOT
 from cross_signal_strategy.local.local_backtester import LocalBacktestEngine
@@ -52,6 +53,7 @@ def build_training_signal_adapter(loader, warmup_root=APPROVED_WARMUP_ROOT) -> L
         warmup_root=warmup_root,
         adjustment_factors=default_training_adjustment_factors(),
         daily_corrections=default_training_daily_corrections(),
+        snapshot_corrections=default_training_snapshot_corrections(),
     )
 
 

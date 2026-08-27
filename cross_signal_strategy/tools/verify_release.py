@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""只读检查 cross-v0.3.2 正式发布文件，不调用行情或交易 API。"""
+"""只读检查 cross-v0.3.3 正式发布文件，不调用行情或交易 API。"""
 
 import argparse
 import ast
@@ -33,6 +33,7 @@ PURE_BUSINESS_FUNCTIONS = {
     "calc_macd",
     "calc_rsi",
     "calc_stop_price",
+    "calc_stress_adjusted_buy_target_value",
     "can_sell_by_signal",
     "crossed_above_by_diff_recent",
     "crossed_above_recent",
@@ -51,6 +52,7 @@ PURE_BUSINESS_FUNCTIONS = {
     "is_protected_by_strong_adx_uptrend",
     "is_strong_adx_uptrend",
     "latest_cross_direction_by_diff_recent",
+    "portfolio_atr_stress_buy_scale",
     "rsi_group_direction",
     "score_buy_snapshot",
     "score_sell_snapshot",
@@ -59,6 +61,7 @@ PURE_BUSINESS_FUNCTIONS = {
     "sort_candidates",
     "summarize_cross_signal_candidates",
     "summarize_loose_reversal_candidates",
+    "trading_days_between",
 }
 
 EXECUTION_CONTRACT_TESTS = {
@@ -71,6 +74,10 @@ EXECUTION_CONTRACT_TESTS = {
         "test_buy_execution_waits_for_submitted_sells_to_finish",
         "test_full_sell_callback_immediately_resumes_buy_with_stale_portfolio",
         "test_live_sell_blocks_noncontinuous_status_and_keeps_bounded_retry",
+        "test_eight_percent_premium_executes_blocked_qdii_sell",
+        "test_below_eight_percent_keeps_original_blocked_sell",
+        "test_iopv_sell_override_rejects_unsafe_snapshot",
+        "test_iopv_sell_override_exception_cannot_interrupt_sell_evaluation",
     },
 }
 

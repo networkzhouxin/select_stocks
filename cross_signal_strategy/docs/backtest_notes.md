@@ -2620,6 +2620,37 @@ Decision:
 - Five capacity trades are too few for a concentration increase, the yearly sample is inadequate, 2021 is negative, and ETF concentration exceeds the pre-registered limit.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
 
+## 2026-08-12 Profit Giveback And Fixed One-ATR Break-Even Candidate
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` baseline versus one isolated local candidate
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Observation-only diagnostic:
+- 89 closed baseline trades were measured from actual local fills.
+- 67 trades reached at least one entry ATR of closing-price profit; 19 later
+  finished at or below zero, for a 28.36% conditional round-trip rate.
+- Annual conditional rates were 10.53%, 33.33%, and 37.50% for 2019, 2020,
+  and 2021. Forward path values were labels only and never entered orders.
+
+Fixed candidate:
+- Activation: stored highest close reaches `entry cost + 1.0 * entry ATR`.
+- Floor after activation: entry cost, applied from a later decision only.
+- Baseline: +120.61% total, +30.27% annualized, 7.47% drawdown, 2.172
+  Sharpe, 3.415 Sortino, 56.18% win rate, 4.440 profit/loss ratio.
+- Candidate: +114.28% total, +29.01% annualized, 7.57% drawdown, 2.096
+  Sharpe, 3.292 Sortino, 48.94% win rate, 4.148 profit/loss ratio.
+- Candidate annual returns: +36.55%/+45.91%/+7.55%, versus baseline
+  +35.84%/+49.74%/+8.46% in 2019/2020/2021.
+- The path changed on 47 filled-order days across all three years (2/27/18).
+
+Decision:
+- Reject the candidate before JoinQuant and validation.
+- The giveback problem is real, but a mechanical break-even floor lowers both
+  return and trade quality by forcing too many early exits.
+- Keep the official ATR trailing stop and no-profit-floor policy unchanged.
+
 ## 2026-07-18 Ordinary-Buy Minute Execution Overlay Gate
 
 Period: 2019-01-01 to 2021-12-31
@@ -3058,3 +3089,313 @@ Decision:
 - Large positive gaps are rare and mostly belong to profitable strong-trend continuation trades in this training path. Blocking them would contradict the observed evidence and the strategy's need to preserve strong trends.
 - Do not tune a smaller gap threshold or add a mild-trend interaction after seeing these results. That would be post-hoc selection.
 - Keep official `cross-v0.3.2` unchanged. Do not run JoinQuant or reserved validation for this failed observation gate.
+
+## 2026-08-16 ATR-Stress Local Pre-Check On cross-v0.3.2 Path
+
+Period: 2019-01-01 to 2021-12-31
+Version: official `cross-v0.3.2` baseline versus baseline + frozen ATR-stress rule (15/3/0.50)
+Engine: local replay (`cross_signal_strategy/research/atr_stress_adoption_precheck.py`); JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only; no validation-period data read
+
+Purpose:
+- Before any JoinQuant run, confirm on the current mainline that the already-validated frozen ATR-stress candidate still improves training return and drawdown, and that the rule actually triggers.
+- Two replays share identical data, adapter, execution model, and order path logic; the candidate only injects the three frozen stress keys at planner level. No formal strategy file was changed for the replay.
+
+Results:
+- Baseline: end value 44122.30, total return +120.61%, annualized (244-day compounding) +30.27%, max drawdown 7.47%, Sharpe 2.172, Sortino 3.415, annual 2019/2020/2021 +35.84%/+49.74%/+8.46%, 92 buys/89 sells, 25 filled ATR stops, 17 unfilled plans.
+- Candidate: end value 45000.50, total return +125.00%, annualized +31.13%, max drawdown 6.03%, Sharpe 2.262, Sortino 3.581, annual +35.84%/+52.68%/+8.49%, 92 buys/89 sells, 25 filled ATR stops, 17 unfilled plans.
+- Baseline alignment: the local replay exactly reproduced the recorded corrected baseline (44122.30, +120.61%, 7.47%, 92/89), so the comparison is trustworthy.
+- Stress audit: 28 stress-active trading days; six half-size filled buys: 2020-03-03 159985, 2020-03-05 159928, 2020-03-06 513050, 2020-03-23 159985, 2020-09-15 513880, 2020-09-22 512100. The September 2020 pair is new on the v0.3.2 path (the v0.3.1-era JoinQuant candidate showed only the four March 2020 buys).
+
+Interpretation:
+- The rule improves total return (+4.39pp), max drawdown (-1.44pp), Sharpe, and Sortino without changing any entry or exit decision: buy/sell counts are identical, so the improvement is pure sizing.
+- The 2020 annual gain (+2.94pp) is consistent with stress-triggered half-size buys being protective during the March crash cluster and the September 2020 pullback.
+- This is local training evidence only; JoinQuant training confirmation and the four reserved validation windows remain mandatory before adoption and PTrade sync.
+
+Can this result be used to change rules? candidate staging only
+Reason: The frozen rule was already validated on `cross-v0.3.1`; this pre-check extends confidence to the current `cross-v0.3.2` path. JoinQuant remains the authority and must confirm before the mainline adoption is completed.
+
+## 2026-08-16 JoinQuant v0.3.3 ATR-Stress Staging Runs
+
+Version: `cross-v0.3.3` / build `20260816.1`
+Code file: `cross_signal_strategy/smart_trade_joinquant_cross_signal_etf.py`
+Platform: JoinQuant (authority)
+Protocol role: staged adoption runs; validation results are recorded only, never used for tuning
+
+### Run 1: Training Confirmation 2019-2021
+
+Baseline `cross-v0.3.2` record: +125.82% return, +32.18% annualized, 6.70% max drawdown, 53W/42L.
+v0.3.3 result: +129.25% return, +32.86% annualized, +39.70% excess (benchmark +64.10%), alpha 0.239, beta 0.340, max drawdown 6.28%, Sharpe 2.275, Sortino 3.245, win rate 0.558, profit/loss ratio 5.297, 53W/42L, max drawdown interval 2020/09/03-2020/09/09.
+Judgment: passed. Return +3.43pp, max drawdown -0.42pp, identical 53/42 path. The drawdown interval moved from the March 2020 crash cluster to the September 2020 pullback, matching the local pre-check's additional September stress triggers. Sharpe/Sortino are not compared against the old 3.109/0.799 record because the platform reporting caliber appears to have changed between runs; all cross-window v0.3.3 comparisons use the same current caliber.
+
+### Run 2: First Reserved Validation 2022-2023
+
+Baseline `cross-v0.3.2` record: +17.36% return, +8.62% annualized, 11.63% max drawdown, Sharpe 0.432, Sortino 0.622, win rate 0.385, profit/loss ratio 1.560, 25W/40L.
+v0.3.3 result: +17.90% return, +8.88% annualized, +69.76% excess (benchmark -30.55%), alpha 0.086, beta 0.176, max drawdown 11.17%, Sharpe 0.459, Sortino 0.658, win rate 0.385, profit/loss ratio 1.584, 25W/40L, max drawdown interval 2022/02/24-2022/11/22.
+Judgment: passed and improved on every metric: return +0.54pp, max drawdown -0.46pp, Sharpe and Sortino higher, identical 25/40 path. The improvement is pure sizing (stress half-size buys during the 2022 stop clusters), which is exactly the risk-insurance role the rule is meant to play in weak markets.
+
+### Run 3: Second Reserved Validation 2024-01-01 to 2026-07-08
+
+Baseline `cross-v0.3.2` record: +58.17% return, +20.78% annualized, 9.98% max drawdown, win rate 0.513, profit/loss ratio 2.877, 39W/37L.
+v0.3.3 result: +58.17% return, +20.78% annualized, +14.12% excess (benchmark +38.60%), alpha 0.136, beta 0.311, max drawdown 9.98%, Sharpe 1.307, Sortino 1.842, win rate 0.513, profit/loss ratio 2.877, 39W/37L, max drawdown interval 2025/11/03-2026/07/08.
+Judgment: passed as harmless/inactive. Every headline number is identical to the baseline record, so the stress rule did not trigger in this window (same as the v0.3.1-era validation, where it logged 0 half-size buys). It did not suppress upside in a rising market. Note: the current-caliber Sharpe 1.307 cannot be compared against the old record's 1.842 because that older record also listed Sortino 0.374, which is internally impossible (Sortino cannot be below Sharpe); the two values were evidently reported in a different or swapped caliber. The 1.307/1.842 pair in this run is internally consistent.
+
+### Run 4: Stress Reserved Validation 2015-01-01 to 2018-12-31
+
+Baseline `cross-v0.3.2` record: +23.21% return, +5.50% annualized, 7.38% max drawdown, win rate 0.444, profit/loss ratio 1.674, 52W/65L.
+v0.3.3 result: +23.21% return, +5.50% annualized, +44.61% excess (benchmark -14.80%), alpha 0.022, beta 0.087, max drawdown 7.38%, Sharpe 0.186, Sortino 0.247, win rate 0.444, profit/loss ratio 1.674, 52W/65L, max drawdown interval 2015/06/12-2016/01/05.
+Judgment: passed as harmless/inactive. Return, drawdown, win rate, profit/loss ratio, and the 52/65 path are identical to the baseline record, so the stress rule did not trigger in this window (same as the v0.3.1-era validation). The drawdown interval documented here belongs to the v0.3.2 path; the older 2016-07-29~2016-11-09 interval came from the v0.3.1 path and is not comparable. Sharpe/Sortino magnitudes differ from the old record (0.247/0.389) because of the platform reporting-caliber change noted in Run 1; both pairs are internally consistent, and the identical daily path is the decisive comparison.
+
+### Run 5: Early Out-Of-Sample Supplement 2010-01-01 to 2014-12-31
+
+Baseline `cross-v0.3.2` record: +1.20% return, +0.25% annualized, 5.23% max drawdown, win rate 0.366, profit/loss ratio 1.172, 15W/26L.
+v0.3.3 result: +1.20% return, +0.25% annualized, +2.40% excess (benchmark -1.17%), alpha -0.035, beta 0.057, max drawdown 5.23%, Sharpe -0.763, Sortino -0.672, win rate 0.366, profit/loss ratio 1.172, 15W/26L, max drawdown interval 2012/03/13-2012/08/17.
+Judgment: passed as harmless/inactive. Identical return, drawdown, win rate, profit/loss ratio, and 15/26 path; the stress rule did not trigger in this sparse early window. The old record's Sharpe -0.672 / Sortino -0.763 pair appears as Sharpe -0.763 / Sortino -0.672 in the current platform reporting, i.e. the current caliber swaps the two labels relative to the old records while preserving the identical daily path.
+
+### Frozen Cross-Window Summary For cross-v0.3.3 (ATR-Stress Adoption)
+
+| Period | Role | v0.3.2 Return | v0.3.3 Return | v0.3.2 Max DD | v0.3.3 Max DD | Stress Trigger | Judgment |
+|---|---|---:|---:|---:|---:|---|---|
+| 2019-2021 | training | +125.82% | +129.25% | 6.70% | 6.28% | 6 half-size buys (2020-03, 2020-09) | improved return and drawdown, identical 53/42 path |
+| 2022-2023 | first validation | +17.36% | +17.90% | 11.63% | 11.17% | triggered (2022 stop clusters) | improved on every metric, identical 25/40 path |
+| 2024-2026 | recent validation | +58.17% | +58.17% | 9.98% | 9.98% | none | identical path, harmless |
+| 2015-2018 | stress validation | +23.21% | +23.21% | 7.38% | 7.38% | none | identical path, harmless |
+| 2010-2014 | early supplement | +1.20% | +1.20% | 5.23% | 5.23% | none | identical path, harmless |
+
+Adoption conclusion: the staged evidence supports adopting the frozen ATR-stress rule as `cross-v0.3.3`. In the two windows where the rule triggered (training and the out-of-sample 2022-2023 weak market), both return and max drawdown improved; in the three inactive windows the path was byte-identical to `cross-v0.3.2`. No window deteriorated. The improvement remains modest and concentrated in a small number of half-size buys, so the rule is positioned as drawdown insurance, not an alpha source. Remaining gates before PTrade sync: JoinQuant log/transaction audit (version line, `stress=` lines, ERROR=0, no removed-symbol trades) and then the PTrade parity sync.
+
+### 2026-08-16 ATR-Stress Half-Size Buy Trade Attribution
+
+Period: 2019-01-01 to 2021-12-31, training replay only
+Tool: `cross_signal_strategy/research/atr_stress_trade_attribution.py` (read-only, approved training data only)
+
+Purpose: answer whether the six frozen half-size buys "avoided further losses" or "missed a rally" by comparing each realized trade at actual half size against the counterfactual full size with identical entry/exit prices.
+
+Results:
+- 2020-03-03 159985: hold return -2.27%, half PnL -101.2, full counterfactual -204.6, half better +103.4.
+- 2020-03-05 159928: hold return -1.48%, half -32.2, full -64.4, half better +32.2.
+- 2020-03-06 513050: hold return -5.69%, half -257.3, full -514.6, half better +257.3.
+- 2020-03-23 159985: hold return -2.78%, half -123.2, full -246.4, half better +123.2.
+- 2020-09-15 513880: hold return -1.58%, half -93.5, full -188.7, half better +95.2.
+- 2020-09-22 512100: hold return -1.05%, half -62.0, full -125.0, half better +63.0.
+- One additional planned stress buy (2020-03-18 159985) did not fill at 09:35 and was excluded.
+
+Interpretation:
+- All six realized stress buys were losing trades; halving avoided losses in every case (6:0, no missed rally). Total direct delta +674.3 versus the full-replay difference of +878.2 (the remainder comes from the unfilled plan, compounding, and lot rounding).
+- This is consistent with the mechanism: reversal entries taken inside a stop-loss cluster are systematically at elevated risk of further drawdown.
+- The counterfactual risk remains: a future stress-period buy could turn into a V-bottom and the half size would miss half the rally. The cost is bounded (half of one slot for at most the 15-day stress window) and the rule expires automatically when stops stop clustering.
+
+## 2026-08-16 Profit-Tiered ATR Tightening Experiment
+
+Version: `cross-v0.3.3-profit-tier-candidate`
+Protocol role: user-authorized fixed variant; training-only; Step 0 observation then Step 1 local A/B
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Frozen variant:
+- Trailing ATR multiplier ×0.8 when current profit > 5%, ×0.6 when current profit > 15% (multi-factor V2.6 mechanism), applied inside `calc_stop_price` via a new `profit_pct` argument; profit measured as current price over entry cost minus one. Stop floor 5% and cap 15% unchanged.
+
+Step 0 binding observation:
+- 36 binding stop-check events (profit > 5% AND unfloored stop above the 5% floor): 4/24/8 in 2019/2020/2021, ETFs 159915/159928/513100/518880; 1 high-tier event.
+- Baseline stop distance on binding days 5.02%-7.74%, tightened 5.00%-6.19%.
+- Extra-trigger events (tightened stop fires while baseline does not, same day): 0.
+
+Step 1 local A/B:
+- Candidate changed 0 filled orders. Total return +125.00%, max drawdown 6.03%, Sharpe 2.262, Sortino 3.581, annual +35.84%/+52.68%/+8.49%, 92 buys/89 sells, 25 ATR stops — all identical to the `cross-v0.3.3` baseline.
+- Pre-registered gate "at least 3 filled orders change" failed.
+
+Interpretation:
+- The multi-factor V2.6 profit-tier mechanism is an exact no-op in this framework: the frozen entry ATR (median about 1.4% of price) plus the 5% stop floor means most stops are floor-dominated, and on the few binding days no 09:35 price ever fell into the gap between the tightened and baseline stops.
+- The giveback weakness (28.4% round-trip rate) is real but is not reachable by multiplier tiering under the current stop construction; addressing it would require changing the floor/stop construction itself, which is a different mechanism and was not part of this locked variant.
+
+Decision:
+- Reject the candidate before JoinQuant and validation. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no tier threshold, multiplier factor, peak-profit measurement, profit floor, or per-ETF override search is allowed. The separate pre-registered gold-specific stop direction remains governed by its own future budget entry.
+
+## 2026-08-16 Gold-Specific Stop Experiment
+
+Version: `cross-v0.3.3-gold-stop-candidate`
+Protocol role: user-authorized fixed variant; training-only; Step 0 observation then Step 1 local A/B
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Frozen variant:
+- 518880 uses stop_floor 0.03 and trailing_atr_mult 2.0 (multi-factor V2.8 values); all other ETFs keep 5%/2.5×; stop cap 0.15 unchanged. `calc_stop_price` gains a `code` argument.
+
+Step 0 binding observation:
+- 223 binding gold stop-check days (73/92/58 in 2019/2020/2021); 6 same-day extra-trigger events (2019-07-01/02, 2019-09-09, 2021-08-09/10, 2021-11-24). Gates (10 binding, 3 extra triggers) passed.
+
+Step 1 local A/B:
+- Total return +125.00%→+120.96%, max drawdown 6.03%→6.08%, Sharpe 2.262→2.210, Sortino 3.581→3.492; annual 2019 +35.84%→+34.34%, 2020 +52.68%→+53.25%, 2021 +8.49%→+7.33%. Buys 92→94, sells 89→91, gold ATR stops 2→5, 162 changed filled-order positions.
+- Per-trade gold attribution: baseline 2019-07 trade exited +9.0% on 2019-08-02 (signal sell); candidate stopped it 2019-07-01 at +4.7% (clipped winner) and the cascade changed the whole path. The 2021-08-09 stop exited two days before the baseline ATR stop for +0.3pp of avoided loss; 2021-11-24 only swapped the sell reason at the same price.
+
+Interpretation:
+- Gold's winning reversal trades in this framework tolerate pullbacks of 3-4% below the peak while the bounce develops; the 3% floor exits those pullbacks and clips winners. The multi-factor V2.8 gold-stop result does not transfer because that framework enters gold through a different rotation path with different exit semantics.
+
+Decision:
+- Reject the candidate before JoinQuant and validation. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no nearby gold floor/multiplier values and no per-ETF stop extension are allowed.
+
+## 2026-08-16 Profit-Giveback Direct Exit Observation
+
+Version: `cross-v0.3.3-giveback-observation` (read-only counterfactual, no candidate file)
+Protocol role: user-authorized fixed variant; training-only Step 0 observation
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Frozen variant:
+- At the daily 09:35 stop check: peak closing-price profit ≥ 5% AND current 09:35 profit ≤ peak profit − 3pp → immediate full exit (same-day buys exempt). Everything else unchanged.
+
+Observation result:
+- 79 firing events across 21 affected closed trades.
+- Per-share delta versus official exits: total -0.352; 2019 -0.380; 2020 -0.101; 2021 +0.129.
+- Dominant clips: 2019-02-11 159928 (rule exit 2.245 vs official 2.666, -0.421/share) and 2020-04-17 513050 (1.523 vs 1.927, -0.404/share). Savings on other trades were small (+0.004 to +0.157/share).
+
+Interpretation:
+- The framework's payoff is concentrated in a few large trend winners that routinely give back more than 3pp of profit mid-hold before resuming. A profit-giveback exit therefore clips the payoff source while salvaging only small amounts elsewhere. This completes the evidence that profit-protection overlays do not transfer to this framework: break-even floor (-6.3pp), gold stop (clipped winners), and now giveback exit (negative counterfactual) all failed for the same structural reason.
+
+Decision:
+- Reject at Step 0 before any candidate. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no activation/giveback threshold or mechanism search is allowed. The official ATR stop remains the only profit protection.
+
+## 2026-08-16 Intraday-High Trailing Anchor Experiment
+
+Version: `cross-v0.3.3-high-anchor-candidate`
+Protocol role: user-authorized fixed variant; training-only; Step 0 observation then Step 1 local A/B
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Frozen variant:
+- The trailing-high anchor is updated with each session's intraday HIGH instead of its close; stop formula, 2.5× multiplier, 5% floor, 15% cap, and frozen entry ATR are unchanged.
+
+Step 0 binding observation:
+- 1604 binding stop-check days (499/580/525 in 2019/2020/2021) and 38 same-day extra-trigger events across all nine ETFs. Gates (10 binding, 3 extra triggers) passed.
+
+Step 1 local A/B:
+- Total return +125.00%→+119.40%, max drawdown 6.03%→6.06%, Sharpe 2.262→2.299, Sortino 3.581→3.674; annual 2019 +35.84%→+30.55%, 2020 +52.68%→+53.82%, 2021 +8.49%→+9.26%. Buys 92→94, sells 89→91, ATR stops 25→29, 175 changed filled-order positions.
+- Per-trade attribution across the nine changed exits: seven small saves (+0.001 to +0.090 per share) and two clips, dominated by 2019-02-11 159928 (candidate exit 2019-02-26 at 2.232 versus official 2019-04-12 at 2.666, -0.434 per share on an +18.8% winner); total per-share delta -0.228.
+
+Interpretation:
+- The peak-day upper wick raises the high anchor into the winner's normal pullback band, turning the noise the close anchor was designed to filter back into stop triggers. This validates the original close-anchor design rule with data.
+
+Decision:
+- Reject the candidate before JoinQuant and validation. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no anchor blends, multiplier re-calibrations, or threshold changes are allowed.
+
+## 2026-08-16 Profit-Gated Direct-Sell Matrix Observation
+
+Version: `cross-v0.3.3-profit-gated-matrix-observation` (read-only counterfactual, no candidate file)
+Protocol role: user-authorized fixed 4×3 matrix; training-only Step 0 observation
+Engine: local replay; JoinQuant remains the performance authority
+Data boundary: approved 2018 warm-up plus approved 2019-2021 training data only
+
+Frozen matrix:
+- Direct-sell channels: sell-score thresholds 32/35/38/40 crossed with profit bands 2-4%/3-5%/4-6%, bypassing the price-structure confirmation while keeping the 5-day minimum hold and the ADX strong-uptrend exemption.
+
+Observation result:
+- 38/40 thresholds: 0 firing events (sell scores that high arrive only after profit leaves the band).
+- 32/35 thresholds: 19 and 18 firing events; every variant's total per-share delta was negative (A1 -0.051, B1 -0.077, A2/B2 -0.423, A3/B3 -0.313). The dominant clip is the 513050 +34% winner: its mid-hold pullback satisfies high-score-plus-small-profit and would exit at about 1.523 versus the official 1.927.
+- All 12 variants failed the gates; the pre-registered selection rule found no passing variant.
+
+Interpretation:
+- The profit band cannot distinguish a small winner that will keep winning from one that will fail; large winners pass through the 2-6% profit zone repeatedly with elevated sell scores on pullbacks. This completes the sell-side evidence: threshold changes, protections, giveback exits, and profit-gated bypasses all fail for the same structural reason.
+
+Decision:
+- Reject at Step 0 before any candidate. Keep official `cross-v0.3.3` unchanged. The family is exhausted; no nearby thresholds, bands, or mechanism variants are allowed.
+
+## 2026-08-21 Fixed 14:45 Dual-Timepoint Candidate
+
+Version: `cross-v0.3.3-dual-timepoint-1445-candidate`
+Protocol role: user-authorized single fixed variant; training-only local A/B
+Engine: local causal 09:35/14:45 replay; JoinQuant remains the performance authority
+Data boundary: approved read-only 2018 warm-up plus 2019-2021 training data only; no validation, pressure, recent, full-period, or 2026 price data
+
+Frozen hypothesis and implementation:
+- Preserve the official 09:35 path and add one full 14:45 buy/sell decision from minute labels strictly before 14:45, with 14:44 as the final signal minute.
+- Recompute the unchanged RSI/KDJ/MACD/ADX/BOLL/MA/ATR scoring path on a provisional T-day bar; use raw partial volume; execute at the 14:45 minute open; share all broker, position, hold, ATR, close-anchor, sold-today, ranking, sizing, and risk state.
+- Keep all indicators, parameters, thresholds, ETF pool, fees, and official 09:35 behavior unchanged. Candidate variants: exactly one.
+
+Engineering audit before the completed run:
+- The first CLI attempt produced no report because 512100 on 2019-01-02 had 224 pre-14:45 minute rows with missing `prev_close`; the strict daily/minute boundary check stopped the process.
+- A failing regression test was added. The frame validator remains strict, while the dual adapter now records an invalid code-date as missing coverage and continues other ETFs. This does not invent a previous close or weaken causality.
+- A complete read-only score scan then found usable 14:45 coverage of 1765/2134/2132 and missing counts of 431/53/55 for 2019/2020/2021. The aborted implementation run was not a candidate result or a second variant.
+
+Nominal A/B result:
+- Total return: baseline +125.0025%, candidate +84.9970%.
+- Maximum drawdown: 6.0316% -> 7.4919%.
+- Closed-trade win rate: 56.18% -> 47.66%.
+- Profit/loss ratio: historical baseline 4.440, candidate 2.8131.
+- Annual win rates: 56.00%/58.62%/54.29% -> 53.57%/48.65%/42.86%.
+- Buys/sells: 92/89 -> 109/107.
+- Positive-to-negative round trips: 31 -> 40; only 512100 had a per-code reduction.
+- Maximum consecutive losing trades: 5 -> 5.
+
+Double-friction result:
+- Total return: +112.7772% -> +73.1887%.
+- Maximum drawdown: 6.2540% -> 8.2763%.
+
+Frozen gate outcome:
+- Failed return retention, nominal drawdown, candidate profit/loss ratio, overall win rate, annual win-rate consistency, total round-trip reduction, cross-ETF round-trip breadth, stressed return retention, and stressed drawdown.
+- Passed only the buy/sell count ceiling, non-worsening maximum loss streak, and nonzero annual score coverage requirements.
+
+Interpretation and decision:
+- A second full intraday signal pass increases reaction frequency but lowers accuracy. Partial-day indicator changes are too noisy to distinguish durable reversals from normal intraday movement, so the mechanism adds recycling, increases positive-to-negative outcomes, and worsens both nominal and stressed drawdown.
+- Decision: `STOP`. Reject before JoinQuant and PTrade, keep formal `cross-v0.3.3` unchanged, exhaust the family, and do not search nearby times, per-ETF times, afternoon-only sides, indicator subsets, thresholds, or hold/cooldown interactions.
+
+## 2026-08-22 Fresh-Unextended Fast-Entry Candidate Preparation
+
+Version: `cross-v0.3.3-fresh-unextended-entry-candidate`
+Protocol role: user-authorized single fixed variant; local engineering screen followed by one official JoinQuant training run
+Data boundary: approved read-only 2018 warm-up plus 2019-2021 training data only; no validation data inspected
+
+Frozen hypothesis and rule:
+- Some 50-59 score observations may be delayed primary entries rather than generally weak entries when reversal contribution is already at least 35, every contributing bullish cross is only age 0/1, and the T-1 close has extended no more than 1 ATR14 from the earliest contributing cross close.
+- The official score>=60 primary queue remains first and unchanged. The candidate can fill only a slot left by that queue.
+- All existing RSI overheat, price-position, blocked-combination, sell-score, ATR cooldown, sizing, sell, and risk rules remain unchanged.
+- Exactly one variant is allowed: score 50-59, reversal>=35, maximum cross age 1, maximum extension 1 ATR. No neighboring or per-ETF search is permitted.
+
+TDD and causal checks:
+- Candidate rule, main-queue priority, no-displacement, and future-row rejection tests were written and observed failing before implementation.
+- The local adapter records `max_data_date` and rejects any row later than `signal_date`.
+- The standalone JoinQuant candidate derives cross close only from the daily frame already ending at `prev_date`; T-day data does not enter the signal.
+
+Local engineering screen (not performance authority):
+- Baseline return +125.00%, drawdown 6.03%, win rate 56.18%, profit/loss ratio 4.878.
+- Candidate return +98.11%, drawdown 6.03%, win rate 49.48%, profit/loss ratio 3.197.
+- Double-friction baseline/candidate return +108.15%/+81.01%; drawdown 6.39%/7.78%.
+- The fresh channel filled 19 buys and appeared in 2019, 2020, and 2021, so it is neither sparse nor a no-op.
+
+Interpretation and next step:
+- The local result is a clear adverse warning, especially for win rate and doubled-friction drawdown, but local minute execution is known not to reproduce changed JoinQuant order paths authoritatively.
+- Do not reject, approve, or retune from the local values. Run the standalone JoinQuant candidate once over 2019-01-01 to 2021-12-31 with CNY 20,000 and daily frequency, then apply the predeclared official gates.
+- Official nominal gates versus the official `cross-v0.3.3` baseline: win rate +3 percentage points or more; at least 3 fewer positive-to-negative round trips; no worse maximum drawdown; at least 95% total-return retention; profit/loss ratio at least 3.0; and positive return in every training year. Run the unchanged rule under doubled friction only if all nominal gates pass.
+- Formal JoinQuant/PTrade `cross-v0.3.3` remains unchanged.
+
+Official JoinQuant outcome (2026-08-22):
+- The frozen build and fingerprint were confirmed as
+  `20260822.1-candidate` / `25783cc30ba4`.
+- Candidate total return was +111.14% versus the official baseline +129.25%; maximum drawdown was 6.29% versus 6.28%.
+- Candidate win rate was 49.0% versus 55.8%, profit/loss ratio was 3.904 versus 5.297, and positive-to-negative round trips increased from 31 to 39.
+- The added channel closed 4 winners and 15 losers; two large winners supplied about 88.5% of its gross profit.
+- Decision: `REJECT`. The family is exhausted, the standalone JoinQuant file is archived, and formal `cross-v0.3.3` remains unchanged. No doubled-friction or validation run is permitted because the nominal gates failed.
+
+## 2026-08-22 Late-MACD / BOLL-Upper Step 0 Observation
+
+- Source: 98 official filled buys from formal `cross-v0.3.3` build `20260820.1`, fingerprint `77e44d93d255`.
+- Frozen shape: T-1 MACD bullish-cross age 0; active RSI and KDJ bullish crosses each age 1/2; close at or above BOLL upper.
+- Frozen gate: at least 3 matches across at least 2 training years before one new-buy veto candidate may exist.
+- Observed matches: 2, both in 2019 — `513100` on 2019-03-15 and `159928` on 2019-12-31.
+- Decision: `STOP`. The 3-event/2-year gate failed; no candidate was created, no threshold was relaxed, and formal `cross-v0.3.3` remains unchanged.
+
+User-directed candidate override:
+- After disclosure that the two matched trades were 1 win/1 loss and that directly vetoing both would have reduced realized PnL by about CNY 355.20, the user explicitly requested the exact JoinQuant rule for a portfolio-path backtest.
+- Standalone candidate: `smart_trade_joinquant_cross_signal_etf_late_macd_boll_filter_candidate.py`.
+- Version/build/fingerprint: `cross-v0.3.3-late-macd-boll-filter-candidate` / `20260822.2-candidate` / `a46fff884685`.
+- This does not modify or promote formal `cross-v0.3.3`; no rule relaxation or neighboring variant is authorized.
+
+
+
+
+
+
+
+
+
+
+

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""国金证券 PTrade 上穿下穿 ETF 策略 v0.3.2 正式版。
+"""国金证券 PTrade 上穿下穿 ETF 策略 v0.3.3 正式版。
 
-业务规则冻结并对齐聚宽 v0.3.2 主线；两版只允许在平台接口、实盘委托、
+业务规则冻结并对齐聚宽 v0.3.3 主线；两版只允许在平台接口、实盘委托、
 重启恢复和停复牌处理上存在差异。PTrade 回测只用于验证代码可运行，
 策略收益仍以聚宽回测为准。
 """
@@ -19,23 +19,28 @@ from pathlib import Path
 # 参数和 ETF 池由代码固定，防止 PTrade 在重启恢复 g 时覆盖正式版业务配置。
 # 单一有界状态台账保存最近两条风险与当日连续性状态；行情快照、在途委托等临时状态使用双下划线变量。
 
-STRATEGY_VERSION = "cross-v0.3.2"
-DEPLOYMENT_BUILD_ID = "20260730.1"
-LIVE_STATE_SCHEMA_VERSION = 6
+STRATEGY_VERSION = "cross-v0.3.3"
+DEPLOYMENT_BUILD_ID = "20260822.2"
+LIVE_STATE_SCHEMA_VERSION = 7
 LIVE_STATE_PICKLE_PROTOCOL = 4
 LIVE_STATE_RETAIN_RECORDS = 2
 LIVE_SNAPSHOT_MAX_AGE_SECONDS = 300.0
 AUDIT_LOG_DIR = "cross_signal_logs"
-AUDIT_LOG_FILENAME = "cross_signal_v032_audit.log"
+AUDIT_LOG_FILENAME = "cross_signal_audit.log"
 AUDIT_LOG_MAX_BYTES = 20 * 1024 * 1024
-AUDIT_LOG_COMPACT_TARGET_BYTES = 16 * 1024 * 1024
 IOPV_OBSERVE_CODES = frozenset((
     "513100.SS",
     "513500.SS",
     "513880.SS",
     "513050.SS",
 ))
-LIVE_STATE_FILENAME = "cross_signal_v032_live_state_v6_%s.journal"
+IOPV_SHADOW_PREMIUM_RATE = 0.05
+IOPV_SELL_OVERRIDE_PREMIUM_RATE = 0.08
+IOPV_SELL_MAX_SNAPSHOT_AGE_SECONDS = 10.0
+LIVE_STATE_FILENAME = "cross_signal_live_state_%s.journal"
+LEGACY_LIVE_STATE_FILENAMES = (
+    "cross_signal_v033_live_state_v7_%s.journal",
+)
 DELIVER_RECOVERY_START_DATE = "20100101"
 LIVE_STATE_FIELDS = (
     "highest_since_buy",
@@ -50,6 +55,7 @@ LIVE_STATE_FIELDS = (
     "execution_date",
     "deferred_scores",
     "deferred_signal_date",
+    "atr_stop_history",
 )
 
 
@@ -85,14 +91,45 @@ def _render_log_message(message, args):
         return " ".join([str(message)] + [str(value) for value in args])
 
 
-def _append_audit_log_text(
-        path, text, max_bytes=AUDIT_LOG_MAX_BYTES,
-        compact_target_bytes=AUDIT_LOG_COMPACT_TARGET_BYTES):
-    """追加审计日志；超限时仅保留最新的完整 UTF-8 日志行。"""
+def _audit_rotation_path(path, now=None):
+    """返回不会覆盖既有归档的时间戳日志路径。"""
+    path = Path(path)
+    now = _audit_now() if now is None else now
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    candidate = path.with_name(
+        "%s_%s%s" % (path.stem, timestamp, path.suffix))
+    if not candidate.exists():
+        return candidate
+
+    millisecond = now.strftime("%f")[:3]
+    candidate = path.with_name(
+        "%s_%s_%s%s" % (
+            path.stem, timestamp, millisecond, path.suffix))
+    if not candidate.exists():
+        return candidate
+
+    for sequence in range(1, 1000):
+        candidate = path.with_name(
+            "%s_%s_%s_%03d%s" % (
+                path.stem,
+                timestamp,
+                millisecond,
+                sequence,
+                path.suffix,
+            ))
+        if not candidate.exists():
+            return candidate
+    return None
+
+
+def _append_audit_log_text(path, text, max_bytes=AUDIT_LOG_MAX_BYTES):
+    """追加审计日志；超限前归档原文件并创建新的活动日志。"""
     path = Path(path)
     incoming = str(text).encode("utf-8")
     if not incoming or len(incoming) > max_bytes:
         return False
+    temporary = Path(str(path) + ".rotate")
+    archive_path = None
     try:
         with open(str(path), "ab+") as audit_file:
             audit_file.seek(0, 2)
@@ -100,31 +137,26 @@ def _append_audit_log_text(
             if current_size + len(incoming) <= max_bytes:
                 audit_file.write(incoming)
                 return True
-            audit_file.seek(0)
-            existing = audit_file.read()
 
-        keep_budget = max(0, compact_target_bytes - len(incoming))
-        start = max(0, len(existing) - keep_budget)
-        if start > 0:
-            newline = existing.find(b"\n", start)
-            retained = existing[newline + 1:] if newline >= 0 else b""
-        else:
-            retained = existing
-        payload = retained + incoming
-        if len(payload) > max_bytes:
+        archive_path = _audit_rotation_path(path)
+        if archive_path is None or temporary.exists():
             return False
-        payload.decode("utf-8")
 
-        temporary = Path(str(path) + ".compact")
-        with open(str(temporary), "wb") as audit_file:
-            audit_file.write(payload)
-        if temporary.read_bytes() != payload:
-            raise IOError("审计日志临时文件校验失败")
+        with open(str(temporary), "xb") as audit_file:
+            audit_file.write(incoming)
+        if temporary.read_bytes() != incoming:
+            raise IOError("审计日志轮转临时文件校验失败")
+
+        path.replace(archive_path)
         temporary.replace(path)
         return True
     except Exception:
         try:
-            temporary = Path(str(path) + ".compact")
+            if archive_path is not None and archive_path.exists() and not path.exists():
+                archive_path.replace(path)
+        except Exception:
+            pass
+        try:
             if temporary.exists():
                 temporary.unlink()
         except Exception:
@@ -243,6 +275,9 @@ def get_default_params():
         "stop_cap": 0.15,
         "overheat_rsi": 85,
         "a_share_zero_volume_buy_scale": 0.50,
+        "portfolio_atr_stress_lookback_days": 15,
+        "portfolio_atr_stress_min_stops": 3,
+        "portfolio_atr_stress_buy_scale": 0.50,
     }
 
 
@@ -322,6 +357,23 @@ def _cached_live_state_path(path=None):
     if path is not None:
         return str(path)
     return getattr(g, "__state_path", None)
+
+
+def _legacy_live_state_paths(state_path):
+    """返回与稳定台账身份一致、且结构可直接迁移的旧路径。"""
+    path = Path(str(state_path))
+    name = path.name
+    prefix = "cross_signal_live_state_"
+    suffix = ".journal"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return []
+    identity_hash = name[len(prefix):-len(suffix)]
+    if not identity_hash:
+        return []
+    return [
+        str(path.parent / (filename % identity_hash))
+        for filename in LEGACY_LIVE_STATE_FILENAMES
+    ]
 
 
 def _live_state_checksum(
@@ -623,6 +675,70 @@ def _read_live_state_journal(state_path):
     return records
 
 
+def _migrate_legacy_live_state_journal(context, state_path):
+    """把当前兼容的旧版台账原子复制到稳定路径，旧文件继续保留。"""
+    if state_path is None:
+        return False
+    target_path = Path(str(state_path))
+    if target_path.exists():
+        return False
+
+    for legacy_text in _legacy_live_state_paths(target_path):
+        legacy_path = Path(legacy_text)
+        if not legacy_path.exists():
+            continue
+        records, _, tail_damaged = _scan_live_state_journal(legacy_path)
+        if tail_damaged or not records:
+            log.warning(
+                "[状态台账迁移] 旧台账无完整兼容记录，已跳过: %s" %
+                legacy_path.name)
+            continue
+
+        retained = sorted(records, key=lambda item: item[0])[
+            -LIVE_STATE_RETAIN_RECORDS:
+        ]
+        temp_path = Path(str(target_path) + ".migrate")
+        try:
+            with temp_path.open("wb") as handle:
+                for generation, state, broker_positions in retained:
+                    pickle.dump(
+                        _encode_live_state_envelope(
+                            state,
+                            generation=generation,
+                            broker_positions=broker_positions,
+                        ),
+                        handle,
+                        protocol=LIVE_STATE_PICKLE_PROTOCOL,
+                    )
+
+            migrated, _, migrated_tail_damaged = (
+                _scan_live_state_journal(temp_path))
+            if migrated_tail_damaged or [item[0] for item in migrated] != [
+                item[0] for item in retained
+            ]:
+                raise ValueError("migrated journal verification failed")
+
+            temp_path.replace(target_path)
+            generation, state, broker_positions = retained[-1]
+            _cache_journal_tail(
+                target_path,
+                generation,
+                state,
+                broker_positions,
+                _journal_file_size(target_path),
+                len(retained),
+            )
+            log.info(
+                "[状态台账迁移] 已迁移至稳定文件=%s；旧文件=%s继续保留" % (
+                    target_path.name, legacy_path.name))
+            return True
+        except Exception as exc:
+            log.warning("[状态台账迁移] 失败，旧台账仍保留: %s" % (
+                _format_state_error_for_log(exc)))
+            return False
+    return False
+
+
 def _live_state_payload_digest(state, broker_positions):
     envelope = _encode_live_state_envelope(
         state, generation=1, broker_positions=broker_positions)
@@ -820,6 +936,8 @@ def _validated_live_state(state):
             raise ValueError("invalid set field: %s" % field)
     if not isinstance(state["deferred_scores"], list):
         raise ValueError("invalid deferred scores")
+    if not isinstance(state["atr_stop_history"], list):
+        raise ValueError("invalid atr stop history")
 
     validated = dict(state)
     validated["pending_close_confirmations"] = (
@@ -831,6 +949,13 @@ def _validated_live_state(state):
         if value is not None and normalized is None:
             raise ValueError("invalid date field: %s" % field)
         validated[field] = normalized
+    normalized_history = []
+    for value in state["atr_stop_history"]:
+        normalized = _as_date(value)
+        if normalized is None:
+            raise ValueError("invalid atr stop history date: %s" % value)
+        normalized_history.append(normalized)
+    validated["atr_stop_history"] = normalized_history
     return validated
 
 
@@ -923,6 +1048,7 @@ def _restore_live_state_continuity(state):
         "execution_date",
         "deferred_scores",
         "deferred_signal_date",
+        "atr_stop_history",
     ):
         setattr(g, field, state[field])
 
@@ -1079,6 +1205,44 @@ def calc_buy_target_value(total_value, score, params=None):
     p = params or get_default_params()
     base_target = float(total_value) * float(p["base_ratio"]) / int(p["max_hold"])
     return base_target * buy_position_scale(score, p)
+
+
+def trading_days_between(start_date, end_date, trade_days):
+    days = [str(day) for day in trade_days]
+    try:
+        return days.index(str(end_date)) - days.index(str(start_date))
+    except ValueError:
+        return None
+
+
+def portfolio_atr_stress_buy_scale(params, current_date, atr_stop_history, trade_days):
+    lookback_days = int(params.get("portfolio_atr_stress_lookback_days", 0) or 0)
+    min_stops = int(params.get("portfolio_atr_stress_min_stops", 0) or 0)
+    if lookback_days <= 0 or min_stops <= 0:
+        return 1.0
+    recent = 0
+    for stop_date in atr_stop_history:
+        elapsed = trading_days_between(stop_date, current_date, trade_days)
+        if elapsed is not None and 0 <= elapsed <= lookback_days:
+            recent += 1
+    if recent < min_stops:
+        return 1.0
+    return float(params.get("portfolio_atr_stress_buy_scale", 1.0))
+
+
+def calc_stress_adjusted_buy_target_value(
+        total_value,
+        score,
+        params=None,
+        current_date=None,
+        atr_stop_history=None,
+        trade_days=None):
+    p = params or get_default_params()
+    target = calc_buy_target_value(total_value, score, p)
+    if current_date is None or atr_stop_history is None or trade_days is None:
+        return target
+    return target * portfolio_atr_stress_buy_scale(
+        p, current_date, atr_stop_history, trade_days)
 
 
 def format_indicator_params(params):
@@ -1374,6 +1538,7 @@ def initialize(context):
     g.execution_date = None
     g.deferred_scores = []
     g.deferred_signal_date = None
+    g.atr_stop_history = []
     # 当日失败买单只影响执行，不参与信号、排名或持久风险状态。
     g.failed_buy_codes = set()
     g.buy_backfill_pending = False
@@ -1393,6 +1558,8 @@ def initialize(context):
     g.__deferred_sold_codes = set()
     # 首次实际买入评估后冻结原定名单，后续核对不得晋升后排候选。
     g.__selected_buy_codes_today = None
+    # 只用于当天 09:35->10:35 的反事实观察，不持久化、不影响委托。
+    g.__iopv_shadow_deferred_buys = {}
     g.__order_state_unknown = False
     g.__data = None
     g.__is_live = is_live
@@ -1446,6 +1613,7 @@ def handle_data(context, data):
 def before_trading_start(context, data):
     g.__data = data
     g.__last_snapshot = {}
+    g.__iopv_shadow_deferred_buys = {}
     startup_recovery = bool(
         g.__is_live and not getattr(g, "__startup_recovery_done", False))
     persisted_g_state = None
@@ -1456,6 +1624,8 @@ def before_trading_start(context, data):
         if _cached_live_state_path() is None:
             g.__state_path = _live_state_path()
         if startup_recovery:
+            _migrate_legacy_live_state_journal(
+                context, _cached_live_state_path())
             persisted_g_candidate = _load_persisted_g_state(context)
             journal_state = _load_live_state(context)
             if persisted_g_candidate is not None:
@@ -1562,6 +1732,10 @@ def _recent_fill_reconcile_wrapper(context):
 
 
 def _halt_recover_wrapper(context):
+    try:
+        recheck_iopv_shadow_deferred_buys(context)
+    except Exception as exc:
+        log.warning("[IOPV影子复查] 观察异常，正式10:35流程继续: %s" % exc)
     halt_recover(context)
     _persist_live_state(context)
 
@@ -1981,6 +2155,67 @@ def _log_buy_candidate_rejection_diagnostics(
             "[买入筛选明细] 来源=%s 代码=%s 买入评分=%.0f "
             "卖出评分=%.0f 原因=%s" % (
                 source, code, buy_score, sell_score, reasons))
+
+
+def _log_resumed_score_diagnostics(
+        scores, review_codes, signal_date, held_codes, params, source,
+        sold_codes=None, failed_codes=None):
+    """记录10:35重评分证据，不参与候选筛选或交易决策。"""
+    by_code = {
+        normalize_code(item.get("code")): item
+        for item in scores
+        if normalize_code(item.get("code"))
+    }
+    held = set(normalize_code(code) for code in held_codes)
+    signal_date_text = _date_key(signal_date)
+    for code in sorted(set(normalize_code(code) for code in review_codes)):
+        score = by_code.get(code)
+        if score is None:
+            continue
+        rejection_items = _buy_candidate_rejection_items(
+            score,
+            held,
+            params,
+            sold_codes=sold_codes,
+            failed_codes=failed_codes,
+        )
+        if rejection_items:
+            filter_result = "拒绝:%s" % ",".join(
+                detail for _label, detail in rejection_items)
+        else:
+            filter_result = "通过"
+        log.info(
+            "[复牌评分] 来源=%s 信号日期=%s 代码=%s "
+            "买入评分=%.0f 反转评分=%.0f 位置评分=%.0f "
+            "趋势评分=%.0f 量能评分=%.0f 卖出评分=%.0f "
+            "买入筛选=%s" % (
+                source,
+                signal_date_text,
+                code,
+                _numeric_score(score.get("buy_score")),
+                _numeric_score(score.get("reversal_score")),
+                _numeric_score(score.get("location_score")),
+                _numeric_score(score.get("trend_score")),
+                _numeric_score(score.get("volume_score")),
+                _numeric_score(score.get("sell_score")),
+                filter_result,
+            )
+        )
+        log.info(
+            "[复牌交叉] 来源=%s 信号日期=%s 代码=%s %s" % (
+                source,
+                signal_date_text,
+                code,
+                _format_active_crosses_for_log(score),
+            )
+        )
+        _log_debug_detail(
+            "[指标明细][复牌评分][%s] 信号日期=%s %s %s",
+            code,
+            signal_date_text,
+            _format_cross_flags_for_log(score),
+            _format_indicator_values_for_log(score),
+        )
 
 
 def is_blocked_entry_combo(score):
@@ -2851,6 +3086,13 @@ def _snapshot_session_date(raw_timestamp):
         return None
 
 
+def _iopv_observed_at(context):
+    """PTrade 实盘回调时间可能陈旧；IOPV 审计使用服务器墙钟。"""
+    if getattr(g, "__is_live", False):
+        return datetime.now()
+    return get_context_datetime(context)
+
+
 def build_iopv_observation(
     code,
     snapshot,
@@ -2861,9 +3103,13 @@ def build_iopv_observation(
     if code not in IOPV_OBSERVE_CODES:
         return None
     snapshot = snapshot if isinstance(snapshot, dict) else {}
+    executable_price = _positive_float_or_none(execution_price)
     snapshot_price = _positive_float_or_none(snapshot.get("last_px"))
-    fallback_price = _positive_float_or_none(execution_price)
-    market_price = snapshot_price if snapshot_price is not None else fallback_price
+    market_price = (
+        executable_price
+        if executable_price is not None
+        else snapshot_price
+    )
     iopv = _positive_float_or_none(snapshot.get("iopv"))
     premium = (
         market_price / iopv - 1.0
@@ -2884,18 +3130,19 @@ def build_iopv_observation(
 
 def log_iopv_buy_observation(context, code, execution_price):
     if not getattr(g, "__is_live", False):
-        return
+        return None
     try:
         normalized = normalize_code(code)
         snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
+        observed_at = _iopv_observed_at(context)
         observation = build_iopv_observation(
             normalized,
             snapshot,
             execution_price,
-            observed_at=get_context_datetime(context),
+            observed_at=observed_at,
         )
         if observation is None:
-            return
+            return None
         premium_pct = (
             observation["premium"] * 100.0
             if observation["premium"] is not None
@@ -2905,7 +3152,7 @@ def log_iopv_buy_observation(context, code, execution_price):
             "[IOPV观察] 事件=买入 时间=%s 代码=%s 有效=%s 市价=%s "
             "IOPV=%s 溢价率百分比=%s 行情时间戳=%s 行情延迟秒数=%s"
             % (
-                get_context_datetime(context),
+                observed_at,
                 observation["code"],
                 observation["valid"],
                 observation["market_price"],
@@ -2915,11 +3162,218 @@ def log_iopv_buy_observation(context, code, execution_price):
                 observation["snapshot_age_seconds"],
             )
         )
+        return observation
     except Exception as exc:
         try:
             log.warning("[IOPV观察] 代码=%s 数据不可用: %s" % (code, exc))
         except Exception:
             pass
+        return None
+
+
+def _iopv_shadow_action(observation, high_action, normal_action):
+    if not isinstance(observation, dict) or not observation.get("valid"):
+        return "数据不可用"
+    premium = observation.get("premium")
+    if premium is None:
+        return "数据不可用"
+    return (
+        high_action
+        if premium >= IOPV_SHADOW_PREMIUM_RATE
+        else normal_action
+    )
+
+
+def _iopv_premium_percent(observation):
+    if not isinstance(observation, dict):
+        return None
+    premium = observation.get("premium")
+    return premium * 100.0 if premium is not None else None
+
+
+def log_iopv_buy_shadow(
+    context,
+    code,
+    execution_price,
+    observation,
+    diagnostic_source,
+):
+    """记录反事实买入分类；真实买单继续走原有路径。"""
+    if not getattr(g, "__is_live", False):
+        return
+    normalized = normalize_code(code)
+    if normalized not in IOPV_OBSERVE_CODES:
+        return
+    observed_at = _iopv_observed_at(context)
+    action = _iopv_shadow_action(observation, "拟延迟", "正常买入")
+    if action == "拟延迟" and diagnostic_source == "09:35主流程":
+        records = getattr(g, "__iopv_shadow_deferred_buys", None)
+        if not isinstance(records, dict):
+            records = {}
+            g.__iopv_shadow_deferred_buys = records
+        records[normalized] = {
+            "code": normalized,
+            "initial_premium": observation.get("premium"),
+            "initial_execution_price": execution_price,
+            "observed_at": observed_at,
+        }
+    log.info(
+        "[IOPV影子买入] 时间=%s 代码=%s 来源=%s 执行价=%s "
+        "IOPV=%s 溢价率百分比=%s 阈值百分比=%.1f 动作=%s "
+        "真实委托不变=True"
+        % (
+            observed_at,
+            normalized,
+            diagnostic_source,
+            execution_price,
+            observation.get("iopv") if isinstance(observation, dict) else None,
+            _iopv_premium_percent(observation),
+            IOPV_SHADOW_PREMIUM_RATE * 100.0,
+            action,
+        )
+    )
+
+
+def recheck_iopv_shadow_deferred_buys(context):
+    """在现有 10:35 回调中复查 09:35 高溢价影子，不执行交易。"""
+    records = getattr(g, "__iopv_shadow_deferred_buys", {})
+    if not isinstance(records, dict) or not records:
+        return
+    # 先清空，确保单次观察和异常幂等；影子记录绝不参与后续下单。
+    g.__iopv_shadow_deferred_buys = {}
+    for code in sorted(records):
+        record = records.get(code, {})
+        observation = None
+        execution_price = None
+        observed_at = _iopv_observed_at(context)
+        try:
+            current = get_current_price(code)
+            if current is not None and current > 0:
+                execution_price = get_buy_limit_price(code, current)
+            if execution_price is not None:
+                snapshot = getattr(g, "__last_snapshot", {}).get(code, {})
+                observation = build_iopv_observation(
+                    code,
+                    snapshot,
+                    execution_price,
+                    observed_at=observed_at,
+                )
+        except Exception as exc:
+            log.warning("[IOPV影子复查] 代码=%s 数据读取失败: %s" % (code, exc))
+        action = _iopv_shadow_action(
+            observation, "拟继续放弃", "拟恢复买入")
+        log.info(
+            "[IOPV影子复查] 时间=%s 代码=%s 初始执行价=%s "
+            "初始溢价率百分比=%s 当前执行价=%s IOPV=%s "
+            "当前溢价率百分比=%s 阈值百分比=%.1f 动作=%s "
+            "真实委托不变=True"
+            % (
+                observed_at,
+                code,
+                record.get("initial_execution_price"),
+                (
+                    record.get("initial_premium") * 100.0
+                    if record.get("initial_premium") is not None
+                    else None
+                ),
+                execution_price,
+                observation.get("iopv") if isinstance(observation, dict) else None,
+                _iopv_premium_percent(observation),
+                IOPV_SHADOW_PREMIUM_RATE * 100.0,
+                action,
+            )
+        )
+
+
+def get_iopv_sell_execution_price(code):
+    """读取买一价作为立即卖出的保守成交侧估计；缺失时不回退。"""
+    code = normalize_code(code)
+    snapshot = getattr(g, "__last_snapshot", {}).get(code, {})
+    bid_group = snapshot.get("bid_grp") if isinstance(snapshot, dict) else None
+    if not isinstance(bid_group, dict):
+        return None
+    level_one = bid_group.get(1)
+    if level_one is None:
+        level_one = bid_group.get("1")
+    try:
+        bid_one = _positive_float_or_none(level_one[0])
+        bid_one_volume = _positive_float_or_none(level_one[1])
+    except (IndexError, KeyError, TypeError):
+        return None
+    if bid_one is None or bid_one_volume is None:
+        return None
+    return round(bid_one, 3)
+
+
+def try_iopv_blocked_sell_override(context, code, score, blockers):
+    """Sell a weakened QDII when a fresh executable premium reaches 8%."""
+    if not getattr(g, "__is_live", False):
+        return False
+    normalized = normalize_code(code)
+    if normalized not in IOPV_OBSERVE_CODES:
+        return False
+
+    observed_at = _iopv_observed_at(context)
+    try:
+        current = get_current_price(normalized)
+        if current is None or current <= 0:
+            return False
+        snapshot = getattr(g, "__last_snapshot", {}).get(normalized, {})
+        if _fresh_snapshot_trade_status(snapshot, observed_at) != "tradable":
+            return False
+        execution_price = get_iopv_sell_execution_price(normalized)
+        if execution_price is None:
+            return False
+        observation = build_iopv_observation(
+            normalized,
+            snapshot,
+            execution_price,
+            observed_at=observed_at,
+        )
+    except Exception as exc:
+        log.warning("[IOPV卖出加速] 代码=%s 数据读取失败: %s" % (
+            normalized, exc))
+        return False
+
+    if not observation or not observation.get("valid"):
+        return False
+    snapshot_age = observation.get("snapshot_age_seconds")
+    if (
+        snapshot_age is None
+        or snapshot_age < 0
+        or snapshot_age > IOPV_SELL_MAX_SNAPSHOT_AGE_SECONDS
+    ):
+        return False
+    premium = observation.get("premium")
+    if premium is None:
+        return False
+
+    premium_pct = premium * 100.0
+    triggered = premium >= IOPV_SELL_OVERRIDE_PREMIUM_RATE
+    log.info(
+        "[IOPV卖出加速] 时间=%s 代码=%s 卖出评分=%.0f "
+        "原规则阻断=%s 执行价=%s IOPV=%s 溢价率百分比=%.2f "
+        "阈值百分比=%.1f 动作=%s"
+        % (
+            observed_at,
+            normalized,
+            score.get("sell_score", 0),
+            "+".join(blockers) if blockers else "未知",
+            execution_price,
+            observation.get("iopv"),
+            premium_pct,
+            IOPV_SELL_OVERRIDE_PREMIUM_RATE * 100.0,
+            "直接卖出" if triggered else "不触发",
+        )
+    )
+    if not triggered:
+        return False
+    return execute_sell(
+        normalized,
+        context,
+        "sell_score %.0f iopv_override premium=%.2f%%" % (
+            score.get("sell_score", 0), premium_pct),
+    )
 
 
 def get_after_close_observed_price(code, context):
@@ -3188,6 +3642,31 @@ def _confirm_previous_session_highs(context, session_date):
                         code, exc))
                 continue
             if pending["session_date"] > session_date:
+                current_dt = _order_lifecycle_now(context)
+                position = _get_position(context, code)
+                same_session_after_close = (
+                    current_dt is not None and
+                    current_dt.date() == pending["session_date"] and
+                    (current_dt.hour, current_dt.minute) >= (15, 0)
+                )
+                risk_baseline_complete = (
+                    position is not None and
+                    _is_positive_finite(_pos_cost(position)) and
+                    _is_positive_finite(g.entry_atr.get(code))
+                )
+                if same_session_after_close and risk_baseline_complete:
+                    g.unverified_positions.discard(code)
+                    _repair_verified_position_source(code, source_map)
+                    log.info(
+                        "[盘前收盘确认] %s待确认日期=%s属于当日盘后观察，"
+                        "T-1=%s尚未覆盖；保留已验证风险基线，"
+                        "延至下一交易日盘前确认" % (
+                            code,
+                            pending["session_date"].isoformat(),
+                            session_date.isoformat(),
+                        )
+                    )
+                    continue
                 failures.append(code)
                 g.unverified_positions.add(code)
                 log.error(
@@ -3509,6 +3988,10 @@ def execute_sell(code, context, reason):
         code, _format_reason_for_log(reason), amount, limit_price))
     submitted_at = _order_lifecycle_now(context)
     try:
+        cash_before_submit = max(0.0, _available_cash(context))
+    except Exception:
+        cash_before_submit = None
+    try:
         order_id = order_target(code, 0, limit_price=limit_price)
     except Exception as exc:
         log.error("[卖出] %s委托提交失败: %s" % (code, exc))
@@ -3522,6 +4005,8 @@ def execute_sell(code, context, reason):
         "reason": reason,
         "order_id": str(order_id),
         "submitted_at": submitted_at,
+        "cash_before_submit": cash_before_submit,
+        "trigger_date": _as_date(get_context_datetime(context)),
     }
     if getattr(g, "__is_live", False):
         # 券商已经接单，防重守卫必须先于任何诊断输出建立。
@@ -3530,6 +4015,10 @@ def execute_sell(code, context, reason):
         g.__pending_sells[code] = pending
     else:
         _clear_position_state(code)
+        if str(reason).startswith("atr_stop"):
+            stop_date = _as_date(get_context_datetime(context))
+            if stop_date is not None:
+                g.atr_stop_history.append(stop_date)
     try:
         log.info("[卖出委托] %s 委托编号=%s" % (code, order_id))
     except Exception:
@@ -3604,6 +4093,19 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
         return False
     if should_force_sell(score, False, p):
         return execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
+    if score["sell_score"] >= p["sell_threshold"]:
+        blockers = []
+        if not has_signal_sell_confirmation(score):
+            blockers.append("价格确认不足")
+        if is_protected_by_strong_adx_uptrend(score, p):
+            blockers.append("ADX保护")
+        try:
+            if try_iopv_blocked_sell_override(
+                    context, code, score, blockers):
+                return True
+        except Exception as exc:
+            log.warning("[IOPV卖出加速] %s评估异常，原卖出逻辑继续: %s" % (
+                code, exc))
     if score["sell_score"] >= p["risk_tighten_threshold"]:
         log.info("[卖出风险观察] %s卖出评分=%.0f，仅记录、不收紧止损" % (
             code, score["sell_score"]))
@@ -3613,10 +4115,20 @@ def _evaluate_signal_sell(context, code, score, today, signal_hold_days):
 def _begin_deferred_buy_wait(context):
     """冻结卖出前现金，供成交回报到达但账户快照尚未同步时使用。"""
     if not getattr(g, "__deferred_buy_after_sell", False):
-        try:
-            base_cash = max(0.0, _available_cash(context))
-        except Exception:
-            base_cash = 0.0
+        recorded_cash = []
+        for pending in getattr(g, "__pending_sells", {}).values():
+            if not isinstance(pending, dict):
+                continue
+            value = _safe_float(pending.get("cash_before_submit"), np.nan)
+            if np.isfinite(value) and value >= 0:
+                recorded_cash.append(value)
+        if recorded_cash:
+            base_cash = min(recorded_cash)
+        else:
+            try:
+                base_cash = max(0.0, _available_cash(context))
+            except Exception:
+                base_cash = 0.0
         g.__deferred_buy_base_cash = base_cash
         g.__deferred_sell_proceeds = 0.0
         g.__deferred_sold_codes = set()
@@ -3632,6 +4144,42 @@ def _clear_deferred_buy_runtime():
     g.__deferred_buy_base_cash = None
     g.__deferred_sell_proceeds = 0.0
     g.__deferred_sold_codes = set()
+
+
+def _ordered_dates_from_result(result):
+    if isinstance(result, (list, tuple, np.ndarray, pd.Index, pd.Series)):
+        values = list(result)
+    elif isinstance(result, dict):
+        values = []
+        for item in result.values():
+            if isinstance(item, (list, tuple, np.ndarray, pd.Index, pd.Series)):
+                values.extend(list(item))
+            else:
+                values.append(item)
+    else:
+        return None
+    dates = []
+    for item in values:
+        date_value = _as_date(item)
+        if date_value is None:
+            return None
+        dates.append(date_value)
+    return sorted(set(dates))
+
+
+def _get_stress_trade_days(today, params):
+    """返回截至当日的有序交易日列表；接口不可用时返回 None（回退满仓）。"""
+    today = _as_date(today)
+    if today is None:
+        return None
+    count = max(
+        2, int(params.get("portfolio_atr_stress_lookback_days", 0) or 0) + 1)
+    try:
+        result = get_trade_days(end_date=_api_date_text(today), count=count)
+        return _ordered_dates_from_result(result)
+    except Exception as exc:
+        log.warning("[压力窗口] 交易日查询失败，按满仓处理: %s" % exc)
+        return None
 
 
 def execute_buy_candidates(
@@ -3745,19 +4293,47 @@ def execute_buy_candidates(
                 "不使用最新价或涨停价替代" % code)
             _mark_failed_buy_code(code, "卖五报价不可用")
             continue
-        target_value = min(calc_buy_target_value(_total_value(context), score, g.params), available)
+        stress_trade_days = _get_stress_trade_days(today, g.params)
+        stress_scale = portfolio_atr_stress_buy_scale(
+            g.params,
+            today,
+            getattr(g, "atr_stop_history", []),
+            stress_trade_days if stress_trade_days is not None else [],
+        )
+        target_value = min(
+            calc_stress_adjusted_buy_target_value(
+                _total_value(context), score, g.params,
+                current_date=today,
+                atr_stop_history=getattr(g, "atr_stop_history", []),
+                trade_days=stress_trade_days,
+            ),
+            available,
+        )
         shares = int(target_value / limit_price / 100) * 100
         if shares < 100:
             log.info("[买入跳过] %s可用资金不足 当前可用=%.0f" % (code, available))
             continue
-        log_iopv_buy_observation(context, code, price)
+        try:
+            iopv_observation = log_iopv_buy_observation(
+                context, code, limit_price)
+            log_iopv_buy_shadow(
+                context,
+                code,
+                limit_price,
+                iopv_observation,
+                diagnostic_source,
+            )
+        except Exception as exc:
+            log.warning(
+                "[IOPV影子买入] %s观察异常，正式买单继续: %s" % (
+                    code, exc))
         log.info(
             "[买入] %s 买入评分=%.0f 反转评分=%.0f 位置评分=%.0f "
-            "趋势评分=%.0f 量能评分=%.0f 目标金额=%.0f 股数=%d "
+            "趋势评分=%.0f 量能评分=%.0f stress=%.2f 目标金额=%.0f 股数=%d "
             "最新价=%.3f 卖五限价=%.3f" % (
                 code, score["buy_score"], score["reversal_score"],
                 score["location_score"], score["trend_score"],
-                score["volume_score"], target_value, shares,
+                score["volume_score"], stress_scale, target_value, shares,
                 price, limit_price))
         submitted_at = _order_lifecycle_now(context)
         try:
@@ -4192,6 +4768,27 @@ def halt_recover(context):
                     code, _format_reason_for_log(reason)))
         scores = sort_candidates(list(by_code.values()))
         g.deferred_scores = scores
+        pending_buy_codes = set(
+            getattr(g, "__pending_orders", {}).keys())
+        sold_codes = set(
+            normalize_code(code)
+            for code, sold in getattr(g, "sold_today", {}).items()
+            if sold
+        )
+        failed_codes = set(
+            normalize_code(code)
+            for code in getattr(g, "failed_buy_codes", set())
+        )
+        _log_resumed_score_diagnostics(
+            scores,
+            score_review_codes,
+            prev_date,
+            held_now | pending_buy_codes,
+            g.params,
+            "10:35复牌/卖单补偿",
+            sold_codes=sold_codes,
+            failed_codes=failed_codes,
+        )
         signal_review_holds = held_now & score_review_codes
         signal_hold_days = _get_signal_hold_days(today, g.params) if signal_review_holds else None
         for code in sorted(signal_review_holds - atr_stopped):
@@ -4708,7 +5305,7 @@ def _limited_diagnostic_values(values, limit=30):
     return "%s,+%d" % (",".join(ordered[:limit]), len(ordered) - limit)
 
 
-def _diagnose_delivery_replay(records, code, broker_amount):
+def _diagnose_delivery_history(records, code, broker_amount):
     """生成不含账户标识和原始交割单的安全诊断摘要。"""
     target = normalize_code(code)
     all_records = list(records or [])
@@ -4798,7 +5395,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
     stage_text = {
         "pool": "标的池",
         "broker-position": "券商持仓",
-        "delivery-replay": "交割单重放",
+        "delivery-episode": "交割单持仓周期",
         "historical-calendar": "历史交易日历",
         "entry-atr": "入场ATR",
         "delivery-entry-price": "交割单入场价",
@@ -4809,7 +5406,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
     reason_text = {
         "outside-frozen-pool": "不在锁定标的池内",
         "invalid-amount-or-cost": "数量或成本无效",
-        "unreconciled": "无法与券商持仓核对一致",
+        "open-buy-unavailable": "无法证明当前持仓周期的买入记录",
         "previous-trade-date-unresolved": "无法确定前一交易日",
         "score-unavailable": "评分不可用",
         "atr-invalid": "ATR无效",
@@ -4828,7 +5425,7 @@ def _log_recovery_failure(code, stage, reason, details=None):
 
 
 def _reconstruct_open_position(records, code, broker_amount):
-    """重放当前持仓区间，并要求重放数量与券商持仓严格一致。"""
+    """用最后一次卖出后的第一笔买入确定当前持仓周期。"""
     target = normalize_code(code)
     expected = _safe_float(broker_amount, np.nan)
     if not _is_positive_finite(expected):
@@ -4848,45 +5445,27 @@ def _reconstruct_open_position(records, code, broker_amount):
     if not matched:
         return None
 
-    amount = 0.0
-    buy_date = None
-    entry_quantity = 0.0
-    entry_value = 0.0
-    entry_source = None
-    tolerance = max(1e-6, expected * 1e-8)
-    for record in sorted(matched, key=_delivery_sort_key):
-        direction = _delivery_direction(record)
-        quantity = _delivery_quantity(record)
-        if direction > 0:
-            if amount <= tolerance:
-                buy_date = _delivery_trade_date(record)
-                entry_quantity = 0.0
-                entry_value = 0.0
-                entry_source = record.get("_recovery_source")
-            price = _safe_float(record.get("business_price"), np.nan)
-            if _is_positive_finite(price):
-                entry_quantity += quantity
-                entry_value += quantity * price
-            amount += quantity
-        else:
-            amount -= quantity
-            if amount < -tolerance:
-                return None
-            if abs(amount) <= tolerance:
-                amount = 0.0
-                buy_date = None
-                entry_quantity = 0.0
-                entry_value = 0.0
-                entry_source = None
+    ordered = sorted(matched, key=_delivery_sort_key)
+    last_sell_index = -1
+    for index, record in enumerate(ordered):
+        if _delivery_direction(record) < 0:
+            last_sell_index = index
 
-    if buy_date is None or abs(amount - expected) > tolerance:
+    entry_record = None
+    for record in ordered[last_sell_index + 1:]:
+        if _delivery_direction(record) > 0:
+            entry_record = record
+            break
+    if entry_record is None:
         return None
-    entry_price = entry_value / entry_quantity if entry_quantity > 0 else None
+
+    entry_price = _safe_float(entry_record.get("business_price"), np.nan)
     return {
-        "buy_date": buy_date,
-        "amount": amount,
-        "entry_price": entry_price,
-        "recovery_source": entry_source,
+        "buy_date": _delivery_trade_date(entry_record),
+        "amount": float(expected),
+        "entry_price": (
+            float(entry_price) if _is_positive_finite(entry_price) else None),
+        "recovery_source": entry_record.get("_recovery_source"),
     }
 
 
@@ -4993,9 +5572,9 @@ def _recover_position_from_broker(code, pos, records, prev_date):
     if open_position is None:
         return _log_recovery_failure(
             code,
-            "delivery-replay",
-            "unreconciled",
-            _diagnose_delivery_replay(records, code, amount),
+            "delivery-episode",
+            "open-buy-unavailable",
+            _diagnose_delivery_history(records, code, amount),
         )
     buy_date = open_position["buy_date"]
     signal_date = _previous_trade_date_before(buy_date)
@@ -5357,6 +5936,12 @@ def _finish_terminal_sell(code, pending):
             sold_codes = set(getattr(g, "__deferred_sold_codes", set()))
             sold_codes.add(normalize_code(code))
             g.__deferred_sold_codes = sold_codes
+        if str(pending.get("reason", "")).startswith("atr_stop"):
+            stop_date = _as_date(pending.get("trigger_date"))
+            if stop_date is None:
+                stop_date = _as_date(datetime.now())
+            if stop_date is not None and stop_date not in g.atr_stop_history:
+                g.atr_stop_history.append(stop_date)
         _clear_position_state(code)
     else:
         g.sold_today.pop(code, None)

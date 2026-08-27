@@ -2,18 +2,25 @@
 
 ## Frozen Scope
 
-- Strategy version: `cross-v0.3.2`.
+- Strategy version: `cross-v0.3.3`.
 - JoinQuant source of truth: `smart_trade_joinquant_cross_signal_etf.py`.
 - PTrade deployment file: `smart_trade_ptrade_cross_signal_etf.py`.
 - JoinQuant remains the authority for performance. The PTrade backtest is a
   runtime smoke test only.
 - This port contains no multi-factor weights, Tuesday/Thursday rotation,
   switch threshold, or multi-factor bear-market rules.
+- The frozen portfolio ATR-stress rule (15 trading days, 3 ATR stops, 0.50 buy
+  scale) is part of the business configuration: `g.atr_stop_history` records
+  the trigger date of every fully filled ATR-stop sell, and new buys are
+  half-sized while three or more stops fall inside the lookback window. The
+  stress state is persisted in the state journal and restored on restart;
+  after a first start on the new journal it cold-starts empty, so deploy
+  during a non-stressed period (no ATR stops in the last 15 trading days).
 
 The formal release identity is printed once during initialization:
 
 ```text
-[发布指纹] 构建=20260730.1 业务配置=1506a0e834fe 状态结构=6
+[发布指纹] 构建=20260822.2 业务配置=77e44d93d255 状态结构=7
 ```
 
 The build identifies the copied deployment artifact. The business fingerprint
@@ -23,19 +30,20 @@ The state schema is PTrade-only and does not participate in trading decisions.
 Any mismatch from this documented identity requires a fresh local release
 check before simulation or live trading continues.
 
-State schema 6 deliberately rejects schema 5 risk state because schema 5 cannot
-represent a completed session whose 15:30 observation was unavailable while
-still preserving the earliest unconfirmed-session cursor. On the first start
-after this upgrade, held-position risk facts are rebuilt from broker delivery
-history and finalized historical daily bars. Subsequent starts use the normal
-bounded schema-6 journal. It persists the earliest unconfirmed session, the
-prior confirmed baseline, and an optional provisional observation until the
-full missing interval is confirmed.
+State schema 7 deliberately rejects schema 6 risk state because schema 6 cannot
+represent the portfolio ATR-stop history used by the stress rule. On the first
+start after this upgrade, held-position risk facts are rebuilt from broker
+delivery history and finalized historical daily bars, and the stress history
+cold-starts empty. Subsequent starts use the normal bounded schema-7 journal.
+It persists the earliest unconfirmed session, the prior confirmed baseline, an
+optional provisional observation, and the stress stop history.
 
 The indicator calculations, cross detection, buy/sell scoring, candidate
-filtering, position sizing, minimum signal hold, and ATR stop formula are
-frozen to the JoinQuant `cross-v0.3.2` mainline. Only platform access and live
-order lifecycle handling differ.
+filtering, position sizing, minimum signal hold, and ATR stop formula remain
+frozen to the JoinQuant `cross-v0.3.3` mainline. Build `20260822.2` has one
+documented PTrade-live execution overlay: a fresh 8% QDII IOPV premium can
+bypass the price-confirmation and ADX blockers after the normal sell-score and
+minimum-hold gates have already passed.
 
 Live buy orders use the fresh snapshot already accepted by the execution-price
 guard and submit the sell-five quote (`offer_grp[5]`) as the limit price. The
@@ -57,7 +65,7 @@ selection.
 After PTrade restores its persisted `g` object, a configuration lock rebuilds
 `g.params` and `g.etf_pool` from the frozen source code and calls
 `set_universe()` again. Old persisted configuration therefore cannot replace
-the formal `cross-v0.3.2` parameters or nine-ETF pool after an upgrade or
+the formal `cross-v0.3.3` parameters or nine-ETF pool after an upgrade or
 server restart.
 
 ## Live Schedule
@@ -186,7 +194,7 @@ matching, fill accumulation, retries, cash, positions, signals, or orders.
 ## Buy Filter Diagnostics
 
 When no ETF survives the frozen buy filter, PTrade keeps the existing
-`[cross-v0.3.2] 没有达到阈值的买入候选` line and adds:
+`[cross-v0.3.3] 没有达到阈值的买入候选` line and adds:
 
 - `[买入筛选汇总]`: the evaluation source, score count, pass count, and totals
   for score below threshold, existing/pending holdings, sell risk, missing
@@ -287,21 +295,24 @@ submission.
   highest-price baseline without waiting for the next delivery statement.
 - `get_deliver()` is called only from documented lifecycle callbacks:
   `before_trading_start` and `after_trading_end`. Records from `20100101`
-  through the proven T-1 date are replayed by signed quantity; the
-  reconstructed open quantity must exactly match the current broker position.
+  through the proven T-1 date are sorted chronologically. The last actual sell
+  closes the prior holding episode, and the first actual buy afterward proves
+  the current entry; without a sell, the first valid buy is used.
+  Delivery quantities are diagnostic only and do not have to equal the current
+  broker position.
   Under the dedicated-account operating contract, an existing in-pool holding
   is adopted even when its original buy came from the previously stopped
   strategy. Entry ATR is recalculated only from data available on the trading
   day before the actual buy date, and the trailing peak is rebuilt from the
-  actual weighted fill price plus pre-adjusted non-zero-volume closing prices
+  entry transaction price plus pre-adjusted non-zero-volume closing prices
   since entry.
 - The adapter never uses the multi-factor fallback guesses such as
   `cost_basis * 2%`, `previous date - 10 days`, or an arbitrary 120-day peak.
-  Quantity mismatch, missing fill price, missing calendar evidence, or
+  Missing current-episode buy evidence, missing fill price, missing calendar evidence, or
   incomplete price history leaves the position unverified.
 - A failed takeover writes a stage-specific `[恢复诊断]` line.
-  `delivery-replay` reports only ETF codes, dates, buy/sell direction,
-  quantities, prices, aggregate replay counts, and field names; account,
+  `delivery-episode` reports only ETF codes, dates, buy/sell direction,
+  quantities, prices, aggregate history counts, and field names; account,
   client, fund, and shareholder-account values are never emitted. Other
   stages distinguish broker facts, historical calendar lookup, entry ATR,
   weighted fill price, close-history reconstruction, and same-day handling.
@@ -323,6 +334,11 @@ submission.
   the frozen ETF pool are then owned by the active cross-signal strategy.
   Out-of-pool holdings remain unverified and block new buys instead of being
   sold or assigned risk state automatically.
+- 交割单恢复不再重放历史数量。策略先找到该 ETF 的最后一次实际卖出，
+  再取此后第一笔实际买入作为当前持仓周期的买入日期和成交价；如果历史中
+  没有卖出，则取第一笔有效买入。当前数量和成本始终采用券商持仓事实，
+  不要求历史交割数量与当前持仓数量相等。最后一次卖出之后没有买入记录时
+  仍然闭锁恢复，不能凭当前持仓倒推出买入日期。
 - A restarted partially filled buy is verified only when its already-filled
   cost basis and every later fill price are positive and finite. Otherwise the
   resulting holding remains unverified; no zero/NaN baseline is synthesized.
@@ -333,6 +349,15 @@ submission.
   pickle payload. After a third complete generation is appended, a temporary
   journal containing the latest two valid generations is fully decoded and
   verified before an atomic same-directory replacement; no direct `os` call is used.
+- Its stable filename is `cross_signal_live_state_<identity>.journal`, where
+  the anonymous identity is derived from account and trade name. Strategy
+  version and state-schema number are deliberately absent from the filename,
+  so a normal code upgrade continues using the same journal. On the first
+  start of this build, a compatible
+  `cross_signal_v033_live_state_v7_<identity>.journal` is atomically copied
+  into the stable path after full record validation; the legacy file is not
+  deleted. Incompatible older schemas are never merged blindly and instead
+  fall back to broker and delivery evidence.
 - Restore validates every complete journal record and selects the highest valid
   generation. A truncated tail never invalidates earlier complete records. On
   the next save, only the incomplete tail bytes are removed before a new record
@@ -388,12 +413,13 @@ submission.
   unverified. Verified holdings retain their normal exit behavior, so recovery
   uncertainty cannot expand exposure or disable unrelated risk reduction.
 
-## Observation-Only IOPV Log
+## IOPV Buy Observation And Live Sell Override
 
 For `513100.SS`, `513500.SS`, `513880.SS`, and `513050.SS`, the adapter writes
 one `[IOPV观察]` line immediately before an actual buy submission. It reuses
 the same cached `get_snapshot()` record that supplied the live buy price and
-does not issue another market-data request.
+does not issue another market-data request. The premium numerator is the
+actual sell-five limit selected for the buy, not the snapshot latest price.
 
 The line records the callback time, code, execution reference price, positive
 IOPV when available, descriptive premium percentage, raw `hsTimeStamp`, and
@@ -401,10 +427,48 @@ snapshot age. `有效=False` means that a positive price/IOPV pair was not
 available. The observation return value is never consumed by candidate
 filtering, ranking, position sizing, or order submission.
 
-IOPV logging is failure-open and must never block or resize an order. Missing,
-zero, stale, malformed, or exception-producing IOPV data only changes the log.
-It does not reopen the rejected premium-filter experiment and must not be used
-to select a threshold from validation or early live results.
+All live IOPV timestamps and snapshot ages use the PTrade server wall clock.
+They do not use `context.current_dt`, because capability probing proved that
+the callback context can remain at 09:10 during later scheduled callbacks.
+
+Buy-side IOPV logging is failure-open and must never block or resize an order.
+Missing, zero, stale, malformed, or exception-producing IOPV data only changes
+the buy-side log. The 5% buy shadow remains observation-only and does not defer
+or cancel an order.
+
+Build `20260822.1` added the following 5% observation-only buy records:
+
+- `[IOPV影子买入]`: at the 09:35 main flow, labels a qualified QDII as
+  `拟延迟` when its sell-five price is at least 5% above IOPV. The real order
+  is still submitted unchanged.
+- `[IOPV影子复查]`: at the start of the already-existing 10:35 callback,
+  rechecks those labels with the current sell-five quote. It records
+  `拟恢复买入`, `拟继续放弃`, or `数据不可用` and never submits an order.
+
+Build `20260822.2` replaces the former blocked-sell shadow with
+`[IOPV卖出加速]`. It is restricted to `513050.SS`, `513100.SS`, `513500.SS`,
+and `513880.SS` in PTrade live mode. The normal minimum holding period and
+sell score of at least 30 must already be satisfied. If price confirmation or
+ADX would otherwise block the signal sell, the adapter uses bid-one as the
+immediately executable reference and calculates `bid1 / IOPV - 1`.
+
+- Premium `>= 8%`: bypass price confirmation and ADX protection, then submit a
+  full-position sell through the existing sell executor.
+- Premium `< 8%`: keep the original blocker and do not sell.
+- Invalid/non-positive IOPV, missing bid-one depth, a halted quote, a negative
+  quote age, a quote older than 10 seconds, non-live mode, or any exception:
+  do not activate the override and continue the original sell path.
+
+This overlay does not change ATR stops, the five-trading-day minimum hold,
+the T-1 sell score, the score-30 boundary, the ETF pool, or buy behavior. A
+sell that already satisfies the original confirmation/ADX logic executes
+before this overlay and does not depend on IOPV. PTrade daily backtests cannot
+validate this live-only rule's return or accuracy.
+
+The 09:35-to-10:35 records are double-underscore runtime state. They are reset
+before each session, excluded from persistent strategy state, and may be lost
+on an intraday server restart. Such loss is missing evidence, not a trading
+signal. No fifth scheduled callback was added.
 
 ## Platform Evidence
 
@@ -427,7 +491,7 @@ official authority for this port.
 `log.debug` 和 `log.critical` 输出的内容完整镜像到研究根目录下的单一文件：
 
 ```text
-cross_signal_logs/cross_signal_v032_audit.log
+cross_signal_logs/cross_signal_audit.log
 ```
 
 平台控制台按用途分层：`INFO` 保留 `[交易日开始]`、五个处理阶段、候选与
@@ -442,13 +506,17 @@ cross_signal_logs/cross_signal_v032_audit.log
 主动调用日志接口产生的记录；
 PTrade 平台自身在策略代码之外生成的服务器配置、调度或网关日志不在该文件中。
 
-单文件硬上限为 `20 MB`。下一条日志会导致超限时，策略在同目录写入并校验
-临时文件，只淘汰最旧的完整日志行，将文件压缩到约 `16 MB` 后再原子替换。
-不会截断 UTF-8 字符或半条日志；替换失败时保留原文件，平台日志和交易流程
-继续运行，并通过底层平台日志只提示一次审计文件写入失败。反过来，平台日志
-接口异常也不会阻止审计文件写入或中断交易流程。该文件与只保存最近两代持仓
-风险状态的状态台账相互独立，不能用审计日志替代状态恢复，也不能用状态台账
-替代完整运行审计。
+活动文件硬上限为 `20 MiB`。下一条日志会导致超限时，策略先把新记录写入并
+校验同目录临时文件，再把完整的当前活动文件原子改名为
+`cross_signal_audit_YYYYMMDD_HHMMSS.log`，最后用临时文件建立新的
+`cross_signal_audit.log`。若同一秒已经存在同名归档，则增加毫秒和必要的
+防覆盖序号；任何既有归档都不会被覆盖。交易日变化、策略重启、服务器重启、
+策略版本或工程构建变化均不触发轮转。旧的 `cross_signal_v032_audit.log` 和
+`cross_signal_v033_audit.log` 保持原名、原内容，不迁移、不删除。轮转失败时
+尽力恢复原活动文件，平台日志和交易流程继续运行，并通过底层平台日志只提示
+一次审计文件写入失败。反过来，平台日志接口异常也不会阻止审计文件写入或
+中断交易流程。该文件与只保存最近两代持仓风险状态的状态台账相互独立，不能
+用审计日志替代状态恢复，也不能用状态台账替代完整运行审计。
 
 ## PTrade 运行日志审计
 
@@ -515,5 +583,5 @@ python cross_signal_strategy/tools/audit_ptrade_runtime_log.py <日志文件> --
    next root-cause decision, not permission to trade.
 7. Confirm broker-side ETF commission and minimum-fee settings separately.
    They are not strategy parameters and were not optimized here.
-8. Keep the JoinQuant `cross-v0.3.2` file unchanged as the business-logic
+8. Keep the JoinQuant `cross-v0.3.3` file unchanged as the business-logic
    reference for future parity reviews.

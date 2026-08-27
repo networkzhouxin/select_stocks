@@ -85,6 +85,24 @@ def test_signal_score_matches_strategy_snapshot_scoring_after_lookback():
     assert score["atr"] > 0
 
 
+def test_score_frame_exactly_matches_score_for_the_same_visible_frame():
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
+
+    adapter = LocalSignalAdapter(CrossSignalTrainingDataLoader(TRAIN_ROOT))
+    expected, expected_reason = adapter.score(
+        "510300", "2019-07-01", return_reason=True
+    )
+    frame, signal_date = adapter.load_signal_frame("510300", "2019-07-01")
+
+    actual, actual_reason = adapter.score_frame(
+        "510300", "2019-07-01", frame, signal_date
+    )
+
+    assert actual_reason == expected_reason
+    assert actual == expected
+
+
 def test_signal_score_allows_new_listing_when_required_indicators_are_valid():
     from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
     from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
@@ -155,6 +173,28 @@ def test_signal_frame_applies_confirmed_daily_bar_correction_without_mutating_ra
     assert raw_close == pytest.approx(1.000)
     assert signal_date == "2020-09-21"
     assert corrected_close == pytest.approx(1.001)
+
+
+def test_signal_frame_corrects_confirmed_513880_close_without_mutating_raw_data():
+    from cross_signal_strategy.local.local_adjustment import default_training_daily_corrections
+    from cross_signal_strategy.local.local_data_loader import CrossSignalTrainingDataLoader
+    from cross_signal_strategy.local.local_signal_adapter import LocalSignalAdapter
+
+    loader = CrossSignalTrainingDataLoader(TRAIN_ROOT)
+    raw = loader.load_daily_frame("513880", "2019-12-12")
+    raw_close = raw.loc[raw["date"] == "2019-12-11", "close"].iloc[0]
+    adapter = LocalSignalAdapter(
+        loader,
+        warmup_root=WARMUP_ROOT,
+        daily_corrections=default_training_daily_corrections(),
+    )
+
+    frame, signal_date = adapter.load_signal_frame("513880", "2019-12-12")
+    corrected_close = frame.loc[frame["date"] == "2019-12-11", "close"].iloc[0]
+
+    assert raw_close == pytest.approx(1.092)
+    assert signal_date == "2019-12-11"
+    assert corrected_close == pytest.approx(1.091)
 
 
 def test_signal_frame_applies_current_day_adjustment_without_future_events():

@@ -99,6 +99,34 @@
       "mechanism": "regime_reversal",
       "evidence": "Bullish novel re-expansion averaged -0.36% with a 51.35% directional win rate in 2021, versus +0.28% and 58.27% for active true crosses.",
       "interpretation": "Same-side renewed divergence weakened across the training years and did not provide a stable substitute for a mathematical cross."
+    },
+    {
+      "record_id": "6e6c7bd2fc80010d",
+      "failed_years": [2020, 2021],
+      "mechanism": "premature_exit",
+      "evidence": "One-entry-ATR break-even reduced annual return from 49.74% to 45.91% in 2020 and from 8.46% to 7.55% in 2021; aggregate win rate fell from 56.18% to 48.94%.",
+      "interpretation": "The cost floor forced premature exits and disrupted later portfolio allocation more than it protected recovered initial risk."
+    },
+    {
+      "record_id": "7207fdf98bcec5eb",
+      "failed_years": [2019, 2020, 2021],
+      "mechanism": "premature_exit",
+      "evidence": "The MACD-free/KDJ-only candidate reduced annual return from 35.84%/49.74%/8.46% to 10.21%/33.63%/-3.67% in 2019/2020/2021 and increased buys from 92 to 170.",
+      "interpretation": "K/D-only ordinary exits reacted too quickly, while removing MACD score support weakened entry coherence; the combined path overtraded and cut trend persistence."
+    },
+    {
+      "record_id": "bb149e10ba486601",
+      "failed_years": [2019, 2020, 2021],
+      "mechanism": "premature_exit",
+      "evidence": "The MACD-fast-exit candidate reduced annual return from 35.84%/49.74%/8.46% to 23.68%/39.88%/5.05% in 2019/2020/2021; total return, drawdown, Sharpe, Sortino, win rate, and profit/loss ratio also worsened.",
+      "interpretation": "A recent-window MACD death cross without structure or ADX confirmation exits recoverable pullbacks and truncates trends in every training regime."
+    },
+    {
+      "record_id": "c1fb15119b1c33aa",
+      "failed_years": [2019, 2020, 2021],
+      "mechanism": "premature_exit",
+      "evidence": "The KDJ-only ordinary-exit candidate reduced annual return from 35.84%/49.74%/8.46% to 10.06%/30.30%/-0.53% in 2019/2020/2021 and increased buys from 92 to 170.",
+      "interpretation": "A recent K/D death cross without sell-score, price-structure, or ADX confirmation exits recoverable pullbacks and truncates trends in every training regime even when official MACD buy scoring is preserved."
     }
   ]
 }

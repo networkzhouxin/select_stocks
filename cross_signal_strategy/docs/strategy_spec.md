@@ -1,6 +1,6 @@
 # Cross-Signal ETF Strategy Spec
 
-Status: v0.3.2 mainline implemented after frozen training and reserved validation checks.
+Status: v0.3.3 mainline implemented after frozen training and reserved validation checks.
 
 ## Hypothesis
 
@@ -174,6 +174,11 @@ A single weak signal may tighten risk, while multi-indicator downside resonance 
 - Stop floor/cap: use broad current-production defaults for the first version unless code reuse proves inappropriate.
 - Profit floor: disabled in v0.1. The first version should test cross-signal sell timing before adding profit-floor protection.
 - Minimum hold: normal signal-based sells require 5 trading days after entry; ATR stops remain unconditional risk control.
+- Portfolio ATR-stress sizing (adopted as `cross-v0.3.3`): when at least 3 ATR
+  stops were fully filled within the last 15 trading days, every new buy target
+  is scaled to 50%. The rule only affects new-buy sizing, expires automatically
+  when stops stop clustering, and was validated on five frozen JoinQuant
+  windows (see `docs/validation_summary.md` and `docs/backtest_notes.md`).
 
 ## Logging Requirements
 

@@ -1,6 +1,6 @@
 # Cross-Signal Multiple-Testing Risk Audit
 
-Date: 2026-07-18
+Date: 2026-08-13
 
 ## Scope
 
@@ -12,9 +12,9 @@ not out-of-sample validation, and it does not authorize any strategy change.
 
 ## Evidence Boundary
 
-- `docs/failed_experiments.md` retains 53 failed or non-adopted experiments.
+- `docs/failed_experiments.md` retains 58 failed or non-adopted experiments.
 - The selected frozen mainline contributes one additional selection.
-- minimum trial count: 54
+- minimum trial count: 59
 - The count is a lower bound. Early or adopted variants may not all have a
   retained candidate return series or a failed-experiment record.
 - Validation-period data was not read, inspected, or used.
@@ -40,14 +40,14 @@ the strategy will remain profitable.
 - Annual returns: 2019 35.84%, 2020 49.74%, 2021 8.46%
 - Single-trial PSR: 0.999876
 - Single-trial PSR p-value: 0.000123988
-- Minimum-54 Bonferroni PSR p-value: 0.00669537
+- Minimum-59 Bonferroni PSR p-value: 0.00731531
 - maximum trials passing the 5% PSR/Bonferroni approximation: 403
 - Newey-West/HAC automatic lag: 6
 - Newey-West/HAC t-statistic: 3.837
 - Single-trial HAC p-value: 0.0000622008
-- Minimum-54 Bonferroni HAC p-value: 0.00335884
+- Minimum-59 Bonferroni HAC p-value: 0.00366985
 
-At the provable lower bound of 54 trials, both approximations remain below the
+At the provable lower bound of 59 trials, both approximations remain below the
 5% family-wise threshold. This is evidence that the frozen training result is
 not merely a marginal winner among the retained experiments. Because the true
 trial count may be higher, the corrected confidence values are optimistic upper

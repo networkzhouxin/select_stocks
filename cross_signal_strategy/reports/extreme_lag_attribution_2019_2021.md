@@ -1,0 +1,228 @@
+# Cross-Signal Extreme-Lag Attribution (2019-2021)
+
+Step 0 status: ELIGIBLE FOR SEPARATE DESIGN
+
+Official path status: `aligned` (193 expected / 193 actual)
+
+All MAE/MFE and post-exit returns below are forward labels only; they are not signal inputs.
+
+## Decision reasons
+
+- The pre-registered consistency and concentration gates passed.
+
+## Entry distributions
+
+- `etf:159915` / `earliest_delay_sessions`: count=10 usable=10 missing=0 median=2.000000 q1=1.000000 q3=2.750000 min=1.000000 max=3.000000
+- `etf:159915` / `age_two_share`: count=10 usable=10 missing=0 median=0.000000 q1=0.000000 q3=0.183333 min=0.000000 max=0.777778
+- `etf:159915` / `extension_atr`: count=10 usable=10 missing=0 median=0.124271 q1=-0.122093 q3=0.484617 min=-1.035616 max=0.906793
+- `etf:159915` / `execution_gap_atr`: count=10 usable=10 missing=0 median=0.027533 q1=-0.215640 q3=0.220691 min=-0.690411 max=0.348837
+- `etf:159915` / `evaluation_mae_5`: count=10 usable=10 missing=0 median=-0.002243 q1=-0.014654 q3=0.007063 min=-0.018805 max=0.030155
+- `etf:159915` / `evaluation_mfe_5`: count=10 usable=10 missing=0 median=0.022212 q1=0.008857 q3=0.048714 min=0.002015 max=0.074709
+- `etf:159928` / `earliest_delay_sessions`: count=18 usable=18 missing=0 median=2.000000 q1=1.000000 q3=2.000000 min=1.000000 max=3.000000
+- `etf:159928` / `age_two_share`: count=18 usable=18 missing=0 median=0.000000 q1=0.000000 q3=0.000000 min=0.000000 max=1.000000
+- `etf:159928` / `extension_atr`: count=18 usable=18 missing=0 median=0.279503 q1=-0.134923 q3=0.948981 min=-0.907801 max=2.465409
+- `etf:159928` / `execution_gap_atr`: count=18 usable=18 missing=0 median=-0.022744 q1=-0.172000 q3=0.228822 min=-0.907801 max=0.895141
+- `etf:159928` / `evaluation_mae_5`: count=18 usable=18 missing=0 median=-0.007270 q1=-0.014759 q3=-0.000710 min=-0.050666 max=0.043281
+- `etf:159928` / `evaluation_mfe_5`: count=18 usable=18 missing=0 median=0.024426 q1=0.006805 q3=0.043274 min=-0.008171 max=0.126254
+- `etf:159985` / `earliest_delay_sessions`: count=10 usable=10 missing=0 median=3.000000 q1=1.000000 q3=3.000000 min=1.000000 max=3.000000
+- `etf:159985` / `age_two_share`: count=10 usable=10 missing=0 median=0.290476 q1=0.000000 q3=0.642063 min=0.000000 max=0.755556
+- `etf:159985` / `extension_atr`: count=10 usable=10 missing=0 median=0.485108 q1=0.030487 q3=0.730732 min=-0.086957 max=2.058824
+- `etf:159985` / `execution_gap_atr`: count=10 usable=10 missing=0 median=0.063483 q1=-0.124178 q3=0.431887 min=-0.401274 max=1.029412
+- `etf:159985` / `evaluation_mae_5`: count=10 usable=10 missing=0 median=-0.009635 q1=-0.016211 q3=0.001113 min=-0.025758 max=0.010300
+- `etf:159985` / `evaluation_mfe_5`: count=10 usable=10 missing=0 median=0.020778 q1=0.013272 q3=0.030101 min=-0.001031 max=0.068536
+- `etf:512100` / `earliest_delay_sessions`: count=10 usable=10 missing=0 median=2.000000 q1=1.000000 q3=3.000000 min=1.000000 max=3.000000
+- `etf:512100` / `age_two_share`: count=10 usable=10 missing=0 median=0.157143 q1=0.000000 q3=0.914286 min=0.000000 max=1.000000
+- `etf:512100` / `extension_atr`: count=10 usable=10 missing=0 median=-0.049721 q1=-0.118650 q3=0.299506 min=-0.546341 max=0.915385
+- `etf:512100` / `execution_gap_atr`: count=10 usable=10 missing=0 median=-0.153972 q1=-0.412093 q3=0.028439 min=-0.546341 max=0.154982
+- `etf:512100` / `evaluation_mae_5`: count=10 usable=10 missing=0 median=-0.001047 q1=-0.016594 q3=0.001236 min=-0.042977 max=0.012155
+- `etf:512100` / `evaluation_mfe_5`: count=10 usable=10 missing=0 median=0.014157 q1=0.009603 q3=0.017655 min=-0.004373 max=0.026460
+- `etf:513050` / `earliest_delay_sessions`: count=6 usable=6 missing=0 median=1.000000 q1=1.000000 q3=2.500000 min=1.000000 max=3.000000
+- `etf:513050` / `age_two_share`: count=6 usable=6 missing=0 median=0.000000 q1=0.000000 q3=0.514286 min=0.000000 max=0.777778
+- `etf:513050` / `extension_atr`: count=6 usable=6 missing=0 median=0.604938 q1=-0.147887 q3=2.298337 min=-0.445623 max=3.218692
+- `etf:513050` / `execution_gap_atr`: count=6 usable=6 missing=0 median=0.497196 q1=-0.147887 q3=1.156006 min=-0.445623 max=1.465565
+- `etf:513050` / `evaluation_mae_5`: count=6 usable=6 missing=0 median=-0.013629 q1=-0.015697 q3=-0.007329 min=-0.061043 max=-0.004938
+- `etf:513050` / `evaluation_mfe_5`: count=6 usable=6 missing=0 median=0.009693 q1=-0.001357 q3=0.019898 min=-0.006859 max=0.030453
+- `etf:513100` / `earliest_delay_sessions`: count=15 usable=15 missing=0 median=2.000000 q1=1.000000 q3=2.500000 min=1.000000 max=3.000000
+- `etf:513100` / `age_two_share`: count=15 usable=15 missing=0 median=0.000000 q1=0.000000 q3=0.171429 min=0.000000 max=0.685714
+- `etf:513100` / `extension_atr`: count=15 usable=15 missing=0 median=0.618182 q1=0.387930 q3=1.255146 min=-0.957419 max=2.889535
+- `etf:513100` / `execution_gap_atr`: count=15 usable=15 missing=0 median=-0.040698 q1=-0.277013 q3=0.183823 min=-0.957419 max=1.669725
+- `etf:513100` / `evaluation_mae_5`: count=15 usable=15 missing=0 median=-0.002213 q1=-0.023111 q3=0.001183 min=-0.024760 max=0.017467
+- `etf:513100` / `evaluation_mfe_5`: count=15 usable=15 missing=0 median=0.011834 q1=0.004637 q3=0.023029 min=-0.001198 max=0.088542
+- `etf:513500` / `earliest_delay_sessions`: count=13 usable=13 missing=0 median=2.000000 q1=1.000000 q3=3.000000 min=1.000000 max=3.000000
+- `etf:513500` / `age_two_share`: count=13 usable=13 missing=0 median=0.000000 q1=0.000000 q3=0.314286 min=0.000000 max=0.777778
+- `etf:513500` / `extension_atr`: count=13 usable=13 missing=0 median=0.101449 q1=-0.122807 q3=0.807018 min=-3.041379 max=3.062500
+- `etf:513500` / `execution_gap_atr`: count=13 usable=13 missing=0 median=0.058091 q1=-0.240000 q3=0.109375 min=-2.703448 max=1.089494
+- `etf:513500` / `evaluation_mae_5`: count=13 usable=13 missing=0 median=-0.004904 q1=-0.007579 q3=-0.001106 min=-0.013699 max=0.010994
+- `etf:513500` / `evaluation_mfe_5`: count=13 usable=13 missing=0 median=0.009403 q1=0.003337 q3=0.016667 min=0.000000 max=0.044455
+- `etf:513880` / `earliest_delay_sessions`: count=5 usable=5 missing=0 median=1.000000 q1=1.000000 q3=2.000000 min=1.000000 max=3.000000
+- `etf:513880` / `age_two_share`: count=5 usable=5 missing=0 median=0.000000 q1=0.000000 q3=0.000000 min=0.000000 max=0.777778
+- `etf:513880` / `extension_atr`: count=5 usable=5 missing=0 median=-0.108949 q1=-0.543689 q3=0.000000 min=-0.823529 max=1.981132
+- `etf:513880` / `execution_gap_atr`: count=5 usable=5 missing=0 median=-0.108949 q1=-0.823529 q3=0.000000 min=-1.087379 max=0.792453
+- `etf:513880` / `evaluation_mae_5`: count=5 usable=5 missing=0 median=-0.007401 q1=-0.008419 q3=-0.003763 min=-0.009355 max=-0.000940
+- `etf:513880` / `evaluation_mfe_5`: count=5 usable=5 missing=0 median=0.008467 q1=0.007401 q3=0.013158 min=-0.000935 max=0.014032
+- `etf:518880` / `earliest_delay_sessions`: count=11 usable=11 missing=0 median=2.000000 q1=1.000000 q3=2.000000 min=1.000000 max=2.000000
+- `etf:518880` / `age_two_share`: count=11 usable=11 missing=0 median=0.000000 q1=0.000000 q3=0.000000 min=0.000000 max=0.000000
+- `etf:518880` / `extension_atr`: count=11 usable=11 missing=0 median=1.191489 q1=0.463108 q3=1.621212 min=-1.160428 max=2.344498
+- `etf:518880` / `execution_gap_atr`: count=11 usable=11 missing=0 median=0.393939 q1=-0.202295 q3=0.735977 min=-0.450920 max=2.344498
+- `etf:518880` / `evaluation_mae_5`: count=11 usable=11 missing=0 median=-0.006392 q1=-0.009267 q3=-0.003060 min=-0.019913 max=0.010756
+- `etf:518880` / `evaluation_mfe_5`: count=11 usable=11 missing=0 median=0.004329 q1=0.002038 q3=0.011672 min=-0.004661 max=0.045790
+- `full` / `earliest_delay_sessions`: count=98 usable=98 missing=0 median=2.000000 q1=1.000000 q3=3.000000 min=1.000000 max=3.000000
+- `full` / `age_two_share`: count=98 usable=98 missing=0 median=0.000000 q1=0.000000 q3=0.314286 min=0.000000 max=1.000000
+- `full` / `extension_atr`: count=98 usable=98 missing=0 median=0.396259 q1=-0.105767 q3=1.093864 min=-3.041379 max=3.218692
+- `full` / `execution_gap_atr`: count=98 usable=98 missing=0 median=0.000000 q1=-0.232128 q3=0.280063 min=-2.703448 max=2.344498
+- `full` / `evaluation_mae_5`: count=98 usable=98 missing=0 median=-0.006348 q1=-0.013774 q3=-0.000709 min=-0.061043 max=0.043281
+- `full` / `evaluation_mfe_5`: count=98 usable=98 missing=0 median=0.013157 q1=0.003923 q3=0.024463 min=-0.008171 max=0.126254
+- `year:2019` / `earliest_delay_sessions`: count=29 usable=29 missing=0 median=1.000000 q1=1.000000 q3=2.000000 min=1.000000 max=3.000000
+- `year:2019` / `age_two_share`: count=29 usable=29 missing=0 median=0.000000 q1=0.000000 q3=0.000000 min=0.000000 max=0.777778
+- `year:2019` / `extension_atr`: count=29 usable=29 missing=0 median=0.440252 q1=0.000000 q3=1.227273 min=-1.035616 max=3.062500
+- `year:2019` / `execution_gap_atr`: count=29 usable=29 missing=0 median=0.075472 q1=-0.122807 q3=0.292174 min=-0.907801 max=2.344498
+- `year:2019` / `evaluation_mae_5`: count=29 usable=29 missing=0 median=-0.004633 q1=-0.016330 q3=0.001348 min=-0.050666 max=0.043281
+- `year:2019` / `evaluation_mfe_5`: count=29 usable=29 missing=0 median=0.009403 q1=0.004329 q3=0.019193 min=-0.008171 max=0.074987
+- `year:2020` / `earliest_delay_sessions`: count=32 usable=32 missing=0 median=2.000000 q1=1.000000 q3=3.000000 min=1.000000 max=3.000000
+- `year:2020` / `age_two_share`: count=32 usable=32 missing=0 median=0.000000 q1=0.000000 q3=0.314286 min=0.000000 max=0.777778
+- `year:2020` / `extension_atr`: count=32 usable=32 missing=0 median=0.396259 q1=-0.161301 q3=0.718718 min=-3.041379 max=3.218692
+- `year:2020` / `execution_gap_atr`: count=32 usable=32 missing=0 median=-0.027322 q1=-0.418041 q3=0.297736 min=-2.703448 max=1.465565
+- `year:2020` / `evaluation_mae_5`: count=32 usable=32 missing=0 median=-0.007527 q1=-0.010675 q3=-0.002217 min=-0.061043 max=0.017467
+- `year:2020` / `evaluation_mfe_5`: count=32 usable=32 missing=0 median=0.016407 q1=0.002410 q3=0.041441 min=-0.006859 max=0.126254
+- `year:2021` / `earliest_delay_sessions`: count=37 usable=37 missing=0 median=2.000000 q1=1.000000 q3=3.000000 min=1.000000 max=3.000000
+- `year:2021` / `age_two_share`: count=37 usable=37 missing=0 median=0.000000 q1=0.000000 q3=0.511111 min=0.000000 max=1.000000
+- `year:2021` / `extension_atr`: count=37 usable=37 missing=0 median=0.213974 q1=-0.096220 q3=1.191489 min=-1.363420 max=2.889535
+- `year:2021` / `execution_gap_atr`: count=37 usable=37 missing=0 median=-0.086598 q1=-0.287520 q3=0.213974 min=-1.330166 max=1.669725
+- `year:2021` / `evaluation_mae_5`: count=37 usable=37 missing=0 median=-0.003522 q1=-0.013699 q3=-0.000778 min=-0.040064 max=0.017352
+- `year:2021` / `evaluation_mfe_5`: count=37 usable=37 missing=0 median=0.013155 q1=0.005864 q3=0.021774 min=-0.006410 max=0.084413
+
+## Exit distributions
+
+- `etf:159915` / `delay_sessions`: count=10 usable=10 missing=0 median=3.000000 q1=1.000000 q3=9.250000 min=0.000000 max=36.000000
+- `etf:159915` / `profit_at_first_high_score`: count=10 usable=10 missing=0 median=0.023113 q1=-0.001819 q3=0.111184 min=-0.016473 max=0.303133
+- `etf:159915` / `peak_close_profit`: count=10 usable=10 missing=0 median=0.079646 q1=0.021050 q3=0.150848 min=0.007322 max=0.382233
+- `etf:159915` / `exit_profit`: count=10 usable=10 missing=0 median=0.035827 q1=-0.015616 q3=0.111382 min=-0.036938 max=0.302363
+- `etf:159915` / `giveback_from_peak`: count=10 usable=10 missing=0 median=0.054365 q1=0.026427 q3=0.068967 min=0.018692 max=0.118554
+- `etf:159915` / `incremental_giveback`: count=10 usable=10 missing=0 median=0.001436 q1=-0.005502 q3=0.023905 min=-0.105134 max=0.071325
+- `etf:159915` / `evaluation_post_exit_return_3`: count=10 usable=10 missing=0 median=0.011815 q1=0.003743 q3=0.041627 min=-0.013281 max=0.081027
+- `etf:159915` / `evaluation_post_exit_return_5`: count=10 usable=10 missing=0 median=0.024113 q1=0.013523 q3=0.031991 min=-0.037126 max=0.064191
+- `etf:159928` / `delay_sessions`: count=17 usable=15 missing=2 median=1.000000 q1=0.000000 q3=3.000000 min=0.000000 max=24.000000
+- `etf:159928` / `profit_at_first_high_score`: count=17 usable=15 missing=2 median=0.014054 q1=0.006630 q3=0.022996 min=-0.011698 max=0.129844
+- `etf:159928` / `peak_close_profit`: count=17 usable=17 missing=0 median=0.045302 q1=0.040040 q3=0.077626 min=0.000000 max=0.426774
+- `etf:159928` / `exit_profit`: count=17 usable=17 missing=0 median=0.001161 q1=-0.009596 q3=0.010979 min=-0.051945 max=0.342728
+- `etf:159928` / `giveback_from_peak`: count=17 usable=17 missing=0 median=0.049636 q1=0.039553 q3=0.063586 min=0.017380 max=0.084689
+- `etf:159928` / `incremental_giveback`: count=17 usable=15 missing=2 median=0.000913 q1=0.000455 q3=0.018515 min=-0.212884 max=0.035455
+- `etf:159928` / `evaluation_post_exit_return_3`: count=17 usable=17 missing=0 median=0.007172 q1=-0.014638 q3=0.025065 min=-0.090210 max=0.070610
+- `etf:159928` / `evaluation_post_exit_return_5`: count=17 usable=17 missing=0 median=0.014547 q1=-0.016425 q3=0.024343 min=-0.089902 max=0.064074
+- `etf:159985` / `delay_sessions`: count=9 usable=8 missing=1 median=5.500000 q1=0.000000 q3=11.000000 min=0.000000 max=21.000000
+- `etf:159985` / `profit_at_first_high_score`: count=9 usable=8 missing=1 median=0.008213 q1=-0.009237 q3=0.027025 min=-0.034091 max=0.065388
+- `etf:159985` / `peak_close_profit`: count=9 usable=9 missing=0 median=0.024366 q1=0.011664 q3=0.071651 min=-0.001031 max=0.207498
+- `etf:159985` / `exit_profit`: count=9 usable=9 missing=0 median=-0.020619 q1=-0.026609 q3=0.017653 min=-0.034848 max=0.125545
+- `etf:159985` / `giveback_from_peak`: count=9 usable=9 missing=0 median=0.049785 q1=0.019588 q3=0.054116 min=0.003810 max=0.081953
+- `etf:159985` / `incremental_giveback`: count=9 usable=8 missing=1 median=0.000768 q1=-0.014286 q3=0.013249 min=-0.060157 max=0.042060
+- `etf:159985` / `evaluation_post_exit_return_3`: count=9 usable=9 missing=0 median=0.002041 q1=-0.013302 q3=0.009474 min=-0.029435 max=0.019095
+- `etf:159985` / `evaluation_post_exit_return_5`: count=9 usable=9 missing=0 median=0.000000 q1=-0.013250 q3=0.010526 min=-0.050078 max=0.059083
+- `etf:512100` / `delay_sessions`: count=10 usable=10 missing=0 median=1.500000 q1=0.000000 q3=8.000000 min=0.000000 max=18.000000
+- `etf:512100` / `profit_at_first_high_score`: count=10 usable=10 missing=0 median=-0.003551 q1=-0.020214 q3=0.005054 min=-0.038784 max=0.073626
+- `etf:512100` / `peak_close_profit`: count=10 usable=10 missing=0 median=0.019586 q1=0.010076 q3=0.062799 min=0.000000 max=0.092308
+- `etf:512100` / `exit_profit`: count=10 usable=10 missing=0 median=-0.003328 q1=-0.021222 q3=0.010686 min=-0.038784 max=0.059341
+- `etf:512100` / `giveback_from_peak`: count=10 usable=10 missing=0 median=0.031211 q1=0.024816 q3=0.036667 min=0.022624 max=0.064677
+- `etf:512100` / `incremental_giveback`: count=10 usable=10 missing=0 median=0.000000 q1=0.000000 q3=0.009593 min=-0.023381 max=0.021563
+- `etf:512100` / `evaluation_post_exit_return_3`: count=10 usable=10 missing=0 median=0.013748 q1=-0.002829 q3=0.037254 min=-0.076607 max=0.067327
+- `etf:512100` / `evaluation_post_exit_return_5`: count=10 usable=10 missing=0 median=0.020153 q1=-0.024706 q3=0.036676 min=-0.143639 max=0.073267
+- `etf:513050` / `delay_sessions`: count=6 usable=5 missing=1 median=4.000000 q1=1.000000 q3=35.000000 min=0.000000 max=53.000000
+- `etf:513050` / `profit_at_first_high_score`: count=6 usable=5 missing=1 median=0.004115 q1=-0.004325 q3=0.022079 min=-0.016824 max=0.025661
+- `etf:513050` / `peak_close_profit`: count=6 usable=6 missing=0 median=0.037305 q1=0.023831 q3=0.160340 min=-0.006859 max=0.370794
+- `etf:513050` / `exit_profit`: count=6 usable=6 missing=0 median=0.001646 q1=-0.022769 q3=0.055644 min=-0.056927 max=0.297443
+- `etf:513050` / `giveback_from_peak`: count=6 usable=6 missing=0 median=0.061710 q1=0.032888 q3=0.074226 min=0.021624 max=0.125972
+- `etf:513050` / `incremental_giveback`: count=6 usable=5 missing=1 median=-0.004325 q1=-0.047434 q3=0.000823 min=-0.314266 max=0.052438
+- `etf:513050` / `evaluation_post_exit_return_3`: count=6 usable=6 missing=0 median=0.018695 q1=-0.035857 q3=0.039078 min=-0.068089 max=0.107971
+- `etf:513050` / `evaluation_post_exit_return_5`: count=6 usable=6 missing=0 median=0.006325 q1=-0.044775 q3=0.040001 min=-0.060705 max=0.097826
+- `etf:513100` / `delay_sessions`: count=15 usable=15 missing=0 median=1.000000 q1=0.000000 q3=4.500000 min=0.000000 max=45.000000
+- `etf:513100` / `profit_at_first_high_score`: count=15 usable=15 missing=0 median=-0.003368 q1=-0.014739 q3=0.015403 min=-0.022646 max=0.131628
+- `etf:513100` / `peak_close_profit`: count=15 usable=15 missing=0 median=0.021768 q1=0.008862 q3=0.130276 min=-0.001198 max=0.349873
+- `etf:513100` / `exit_profit`: count=15 usable=15 missing=0 median=-0.001369 q1=-0.010727 q3=0.072370 min=-0.021965 max=0.251399
+- `etf:513100` / `giveback_from_peak`: count=15 usable=15 missing=0 median=0.028708 q1=0.017476 q3=0.043922 min=0.004304 max=0.098473
+- `etf:513100` / `incremental_giveback`: count=15 usable=15 missing=0 median=0.000532 q1=0.000377 q3=0.001072 min=-0.274046 max=0.008407
+- `etf:513100` / `evaluation_post_exit_return_3`: count=15 usable=15 missing=0 median=0.008519 q1=-0.016951 q3=0.028552 min=-0.088654 max=0.104856
+- `etf:513100` / `evaluation_post_exit_return_5`: count=15 usable=15 missing=0 median=0.002434 q1=-0.008210 q3=0.033577 min=-0.089560 max=0.153113
+- `etf:513500` / `delay_sessions`: count=13 usable=13 missing=0 median=2.000000 q1=2.000000 q3=14.000000 min=0.000000 max=33.000000
+- `etf:513500` / `profit_at_first_high_score`: count=13 usable=13 missing=0 median=0.007743 q1=0.001895 q3=0.023545 min=-0.008188 max=0.070746
+- `etf:513500` / `peak_close_profit`: count=13 usable=13 missing=0 median=0.027073 q1=0.014461 q3=0.044648 min=0.002729 max=0.167693
+- `etf:513500` / `exit_profit`: count=13 usable=13 missing=0 median=0.006322 q1=0.003319 q3=0.034427 min=-0.008734 max=0.088584
+- `etf:513500` / `giveback_from_peak`: count=13 usable=13 missing=0 median=0.016667 q1=0.010221 q3=0.024336 min=0.001173 max=0.079109
+- `etf:513500` / `incremental_giveback`: count=13 usable=13 missing=0 median=0.000546 q1=-0.000742 q3=0.005258 min=-0.086689 max=0.018908
+- `etf:513500` / `evaluation_post_exit_return_3`: count=13 usable=13 missing=0 median=0.005737 q1=-0.018311 q3=0.009145 min=-0.056571 max=0.017427
+- `etf:513500` / `evaluation_post_exit_return_5`: count=13 usable=13 missing=0 median=0.002756 q1=-0.004374 q3=0.015175 min=-0.054395 max=0.030896
+- `etf:513880` / `delay_sessions`: count=5 usable=5 missing=0 median=0.000000 q1=0.000000 q3=22.000000 min=0.000000 max=42.000000
+- `etf:513880` / `profit_at_first_high_score`: count=5 usable=5 missing=0 median=0.005639 q1=-0.002775 q3=0.010348 min=-0.008419 max=0.077643
+- `etf:513880` / `peak_close_profit`: count=5 usable=5 missing=0 median=0.015977 q1=0.013096 q3=0.045155 min=0.007401 max=0.127222
+- `etf:513880` / `exit_profit`: count=5 usable=5 missing=0 median=0.004699 q1=-0.003700 q3=0.032926 min=-0.009355 max=0.114125
+- `etf:513880` / `giveback_from_peak`: count=5 usable=5 missing=0 median=0.012230 q1=0.011278 q3=0.013096 min=0.011101 max=0.022451
+- `etf:513880` / `incremental_giveback`: count=5 usable=5 missing=0 median=0.000925 q1=-0.022578 q3=0.000935 min=-0.036483 max=0.000940
+- `etf:513880` / `evaluation_post_exit_return_3`: count=5 usable=5 missing=0 median=0.007484 q1=0.000911 q3=0.008396 min=-0.007428 max=0.010387
+- `etf:513880` / `evaluation_post_exit_return_5`: count=5 usable=5 missing=0 median=0.003742 q1=-0.001821 q3=0.028329 min=-0.006500 max=0.036944
+- `etf:518880` / `delay_sessions`: count=10 usable=10 missing=0 median=6.000000 q1=0.000000 q3=16.750000 min=0.000000 max=37.000000
+- `etf:518880` / `profit_at_first_high_score`: count=10 usable=10 missing=0 median=0.011120 q1=0.004368 q3=0.016888 min=-0.024678 max=0.057468
+- `etf:518880` / `peak_close_profit`: count=10 usable=10 missing=0 median=0.035526 q1=0.011365 q3=0.089384 min=-0.002146 max=0.095575
+- `etf:518880` / `exit_profit`: count=10 usable=10 missing=0 median=0.016513 q1=0.002220 q3=0.049348 min=-0.025215 max=0.091564
+- `etf:518880` / `giveback_from_peak`: count=10 usable=10 missing=0 median=0.023223 q1=0.010992 q3=0.034239 min=-0.002058 max=0.055328
+- `etf:518880` / `incremental_giveback`: count=10 usable=10 missing=0 median=0.000536 q1=-0.012889 q3=0.000768 min=-0.081276 max=0.009728
+- `etf:518880` / `evaluation_post_exit_return_3`: count=10 usable=10 missing=0 median=0.002760 q1=-0.004293 q3=0.019852 min=-0.010207 max=0.056550
+- `etf:518880` / `evaluation_post_exit_return_5`: count=10 usable=10 missing=0 median=0.003624 q1=-0.008536 q3=0.030240 min=-0.010591 max=0.073563
+- `exit_type:atr_stop` / `delay_sessions`: count=27 usable=23 missing=4 median=4.000000 q1=1.000000 q3=18.000000 min=0.000000 max=53.000000
+- `exit_type:atr_stop` / `profit_at_first_high_score`: count=27 usable=23 missing=4 median=0.022079 q1=0.002626 q3=0.068272 min=-0.022646 max=0.303133
+- `exit_type:atr_stop` / `peak_close_profit`: count=27 usable=27 missing=0 median=0.084413 q1=0.044826 q3=0.183380 min=-0.006859 max=0.426774
+- `exit_type:atr_stop` / `exit_profit`: count=27 usable=27 missing=0 median=0.017653 q1=-0.018117 q3=0.085295 min=-0.056927 max=0.342728
+- `exit_type:atr_stop` / `giveback_from_peak`: count=27 usable=27 missing=0 median=0.067920 q1=0.057582 q3=0.079546 min=0.050069 max=0.125972
+- `exit_type:atr_stop` / `incremental_giveback`: count=27 usable=23 missing=4 median=0.000540 q1=-0.053795 q3=0.019617 min=-0.314266 max=0.071325
+- `exit_type:atr_stop` / `evaluation_post_exit_return_3`: count=27 usable=27 missing=0 median=0.007116 q1=-0.028401 q3=0.028401 min=-0.088654 max=0.107971
+- `exit_type:atr_stop` / `evaluation_post_exit_return_5`: count=27 usable=27 missing=0 median=0.000000 q1=-0.053891 q3=0.027022 min=-0.089902 max=0.097826
+- `exit_type:signal_sell` / `delay_sessions`: count=68 usable=68 missing=0 median=1.000000 q1=0.000000 q3=9.250000 min=0.000000 max=45.000000
+- `exit_type:signal_sell` / `profit_at_first_high_score`: count=68 usable=68 missing=0 median=0.005361 q1=-0.007100 q3=0.018467 min=-0.038784 max=0.131628
+- `exit_type:signal_sell` / `peak_close_profit`: count=68 usable=68 missing=0 median=0.023082 q1=0.008239 q3=0.045192 min=-0.002146 max=0.181847
+- `exit_type:signal_sell` / `exit_profit`: count=68 usable=68 missing=0 median=0.002221 q1=-0.010001 q3=0.033142 min=-0.038784 max=0.129757
+- `exit_type:signal_sell` / `giveback_from_peak`: count=68 usable=68 missing=0 median=0.023137 q1=0.014057 q3=0.033241 min=-0.002058 max=0.052090
+- `exit_type:signal_sell` / `incremental_giveback`: count=68 usable=68 missing=0 median=0.000588 q1=0.000000 q3=0.004490 min=-0.112892 max=0.042060
+- `exit_type:signal_sell` / `evaluation_post_exit_return_3`: count=68 usable=68 missing=0 median=0.007328 q1=-0.007186 q3=0.017647 min=-0.090210 max=0.104856
+- `exit_type:signal_sell` / `evaluation_post_exit_return_5`: count=68 usable=68 missing=0 median=0.009628 q1=-0.007901 q3=0.025761 min=-0.143639 max=0.153113
+- `full` / `delay_sessions`: count=95 usable=91 missing=4 median=2.000000 q1=0.000000 q3=11.000000 min=0.000000 max=53.000000
+- `full` / `profit_at_first_high_score`: count=95 usable=91 missing=4 median=0.008319 q1=-0.005402 q3=0.023517 min=-0.038784 max=0.303133
+- `full` / `peak_close_profit`: count=95 usable=95 missing=0 median=0.034394 q1=0.014139 q3=0.089262 min=-0.006859 max=0.426774
+- `full` / `exit_profit`: count=95 usable=95 missing=0 median=0.003356 q1=-0.011624 q3=0.056714 min=-0.056927 max=0.342728
+- `full` / `giveback_from_peak`: count=95 usable=95 missing=0 median=0.030576 q1=0.020177 q3=0.054057 min=-0.002058 max=0.125972
+- `full` / `incremental_giveback`: count=95 usable=91 missing=4 median=0.000577 q1=-0.002533 q3=0.005391 min=-0.314266 max=0.071325
+- `full` / `evaluation_post_exit_return_3`: count=95 usable=95 missing=0 median=0.007172 q1=-0.009705 q3=0.022262 min=-0.090210 max=0.107971
+- `full` / `evaluation_post_exit_return_5`: count=95 usable=95 missing=0 median=0.008898 q1=-0.010543 q3=0.027022 min=-0.143639 max=0.153113
+- `year:2019` / `delay_sessions`: count=26 usable=26 missing=0 median=2.500000 q1=0.000000 q3=16.750000 min=0.000000 max=42.000000
+- `year:2019` / `profit_at_first_high_score`: count=26 usable=26 missing=0 median=0.005427 q1=-0.007825 q3=0.019330 min=-0.030612 max=0.197229
+- `year:2019` / `peak_close_profit`: count=26 usable=26 missing=0 median=0.029054 q1=0.007360 q3=0.074421 min=-0.001198 max=0.426774
+- `year:2019` / `exit_profit`: count=26 usable=26 missing=0 median=0.004820 q1=-0.011828 q3=0.035783 min=-0.036938 max=0.342728
+- `year:2019` / `giveback_from_peak`: count=26 usable=26 missing=0 median=0.024371 q1=0.014805 q3=0.040591 min=-0.002058 max=0.084689
+- `year:2019` / `incremental_giveback`: count=26 usable=26 missing=0 median=0.000473 q1=-0.018818 q3=0.004164 min=-0.212884 max=0.040296
+- `year:2019` / `evaluation_post_exit_return_3`: count=26 usable=26 missing=0 median=0.004051 q1=-0.007063 q3=0.011166 min=-0.076607 max=0.056550
+- `year:2019` / `evaluation_post_exit_return_5`: count=26 usable=26 missing=0 median=0.009339 q1=-0.009725 q3=0.021111 min=-0.143639 max=0.069117
+- `year:2020` / `delay_sessions`: count=32 usable=29 missing=3 median=4.000000 q1=0.000000 q3=21.000000 min=0.000000 max=53.000000
+- `year:2020` / `profit_at_first_high_score`: count=32 usable=29 missing=3 median=0.013029 q1=-0.002775 q3=0.024922 min=-0.038784 max=0.303133
+- `year:2020` / `peak_close_profit`: count=32 usable=32 missing=0 median=0.043916 q1=0.015773 q3=0.133040 min=-0.006859 max=0.370794
+- `year:2020` / `exit_profit`: count=32 usable=32 missing=0 median=0.010287 q1=-0.018711 q3=0.076967 min=-0.056927 max=0.297443
+- `year:2020` / `giveback_from_peak`: count=32 usable=32 missing=0 median=0.049927 q1=0.022244 q3=0.060333 min=0.003810 max=0.125972
+- `year:2020` / `incremental_giveback`: count=32 usable=29 missing=3 median=0.000532 q1=-0.036483 q3=0.005258 min=-0.314266 max=0.071325
+- `year:2020` / `evaluation_post_exit_return_3`: count=32 usable=32 missing=0 median=0.007940 q1=-0.016608 q3=0.032023 min=-0.090210 max=0.107971
+- `year:2020` / `evaluation_post_exit_return_5`: count=32 usable=32 missing=0 median=0.009712 q1=-0.018259 q3=0.035202 min=-0.089902 max=0.153113
+- `year:2021` / `delay_sessions`: count=37 usable=36 missing=1 median=1.000000 q1=0.000000 q3=4.000000 min=0.000000 max=36.000000
+- `year:2021` / `profit_at_first_high_score`: count=37 usable=36 missing=1 median=0.006060 q1=-0.003999 q3=0.023782 min=-0.034091 max=0.126312
+- `year:2021` / `peak_close_profit`: count=37 usable=37 missing=0 median=0.032976 q1=0.014461 q3=0.072837 min=-0.002146 max=0.207498
+- `year:2021` / `exit_profit`: count=37 usable=37 missing=0 median=0.002219 q1=-0.005957 q3=0.019303 min=-0.034848 max=0.125545
+- `year:2021` / `giveback_from_peak`: count=37 usable=37 missing=0 median=0.030576 q1=0.021589 q3=0.041946 min=0.001173 max=0.081953
+- `year:2021` / `incremental_giveback`: count=37 usable=36 missing=1 median=0.000677 q1=0.000434 q3=0.008737 min=-0.060157 max=0.025406
+- `year:2021` / `evaluation_post_exit_return_3`: count=37 usable=37 missing=0 median=0.009145 q1=-0.007105 q3=0.023411 min=-0.072459 max=0.081027
+- `year:2021` / `evaluation_post_exit_return_5`: count=37 usable=37 missing=0 median=0.007064 q1=-0.009995 q3=0.023121 min=-0.082784 max=0.073267
+
+## Tail observations (examples only)
+
+- Entry example `513050` `2020-10-12`: extension_atr=3.218692, age2_share=0.777778
+- Entry example `513500` `2019-06-11`: extension_atr=3.062500, age2_share=0.777778
+- Entry example `513100` `2021-01-22`: extension_atr=2.889535, age2_share=0.533333
+- Entry example `513100` `2021-07-27`: extension_atr=2.679687, age2_share=0.342857
+- Entry example `513050` `2020-04-17`: extension_atr=2.661157, age2_share=0.685714
+- Exit example `513050` `2020-07-16`: type=atr_stop, delay_sessions=53, giveback=-0.314266
+- Exit example `513100` `2020-02-04`: type=signal_sell, delay_sessions=45, giveback=-0.112892
+- Exit example `513880` `2019-12-30`: type=signal_sell, delay_sessions=42, giveback=-0.022578
+- Exit example `518880` `2019-08-02`: type=signal_sell, delay_sessions=37, giveback=-0.081276
+- Exit example `159915` `2021-12-20`: type=signal_sell, delay_sessions=36, giveback=-0.044829

@@ -55,6 +55,7 @@ def make_g(**overrides):
         "execution_date": None,
         "deferred_scores": [],
         "deferred_signal_date": None,
+        "atr_stop_history": [],
         "failed_buy_codes": set(),
         "buy_backfill_pending": False,
         "live_state_schema_version": None,
@@ -70,6 +71,7 @@ def make_g(**overrides):
         "__deferred_sell_proceeds": 0.0,
         "__deferred_sold_codes": set(),
         "__selected_buy_codes_today": None,
+        "__iopv_shadow_deferred_buys": {},
         "__order_state_unknown": False,
         "__is_live": True,
         "__mode_verified": True,
@@ -134,9 +136,9 @@ def make_sell_score(code="513100.SS"):
 
 
 def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
-    assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.2"
-    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260730.1"
-    assert pt.LIVE_STATE_SCHEMA_VERSION == 6
+    assert pt.STRATEGY_VERSION == jq.STRATEGY_VERSION == "cross-v0.3.3"
+    assert pt.DEPLOYMENT_BUILD_ID == jq.DEPLOYMENT_BUILD_ID == "20260822.2"
+    assert pt.LIVE_STATE_SCHEMA_VERSION == 7
     assert pt.get_default_params() == jq.get_default_params()
     assert pt.get_default_etf_pool() == [
         "159915.SZ",
@@ -150,6 +152,7 @@ def test_ptrade_business_configuration_matches_frozen_joinquant_mainline():
         "159985.SZ",
     ]
     assert pt.business_config_fingerprint() == jq.business_config_fingerprint()
+    assert pt.business_config_fingerprint() == "77e44d93d255"
 
 
 def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
@@ -195,6 +198,7 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
         tmp_path / pt.AUDIT_LOG_DIR / pt.AUDIT_LOG_FILENAME)
     text = audit_path.read_text(encoding="utf-8")
     assert created == [pt.AUDIT_LOG_DIR]
+    assert audit_path.name == "cross_signal_audit.log"
     assert text.splitlines() == [
         "2026-07-22 09:35:01 - INFO - " + detail,
         "2026-07-22 09:35:01 - DEBUG - " + debug_detail,
@@ -209,30 +213,27 @@ def test_live_audit_log_uses_dedicated_directory_and_mirrors_full_messages(
     ]
 
 
-def test_audit_log_rolls_at_complete_utf8_lines_and_stays_bounded(tmp_path):
-    path = tmp_path / "cross_signal_v032_audit.log"
-    old_lines = [
-        ("旧明细%02d-" % index) + ("甲" * 20)
-        for index in range(12)
-    ]
-    path.write_text("\n".join(old_lines) + "\n", encoding="utf-8")
+def test_audit_log_rotates_full_active_file_to_timestamped_archive(
+        tmp_path, monkeypatch):
+    path = tmp_path / "cross_signal_audit.log"
+    original = "旧明细00-甲乙丙丁\n旧明细01-戊己庚辛\n"
+    path.write_text(original, encoding="utf-8")
     newest = "2026-07-22 09:35:00 - INFO - [候选排名] 最新完整明细\n"
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 8, 18, 14, 35, 22))
 
     assert pt._append_audit_log_text(
-        path, newest, max_bytes=420, compact_target_bytes=260) is True
+        path, newest, max_bytes=100) is True
 
-    raw = path.read_bytes()
-    text = raw.decode("utf-8")
-    assert len(raw) <= 420
-    assert text.endswith(newest)
-    assert "旧明细00" not in text
-    assert "最新完整明细" in text
-    assert all(line.startswith(("旧明细", "2026-07-22")) for line in text.splitlines())
+    archive = tmp_path / "cross_signal_audit_20260818_143522.log"
+    assert archive.read_text(encoding="utf-8") == original
+    assert path.read_text(encoding="utf-8") == newest
+    assert not list(tmp_path.glob("*.compact"))
 
 
-def test_audit_log_compaction_failure_preserves_original_file(
+def test_audit_log_rotation_failure_preserves_original_file(
         tmp_path, monkeypatch):
-    path = tmp_path / "cross_signal_v032_audit.log"
+    path = tmp_path / "cross_signal_audit.log"
     original = (("原始完整日志行\n" * 30).encode("utf-8"))
     path.write_bytes(original)
 
@@ -245,9 +246,95 @@ def test_audit_log_compaction_failure_preserves_original_file(
         path,
         "2026-07-22 09:35:00 - INFO - 新日志\n",
         max_bytes=300,
-        compact_target_bytes=180,
     ) is False
     assert path.read_bytes() == original
+
+
+def test_audit_log_rotation_uses_milliseconds_instead_of_overwriting(
+        tmp_path, monkeypatch):
+    path = tmp_path / "cross_signal_audit.log"
+    original = "原始日志\n" * 20
+    path.write_text(original, encoding="utf-8")
+    existing = tmp_path / "cross_signal_audit_20260818_143522.log"
+    existing.write_text("已有归档\n", encoding="utf-8")
+    monkeypatch.setattr(
+        pt,
+        "_audit_now",
+        lambda: datetime(2026, 8, 18, 14, 35, 22, 123000),
+    )
+
+    assert pt._append_audit_log_text(
+        path,
+        "2026-08-18 14:35:22 - INFO - 新日志\n",
+        max_bytes=100,
+    ) is True
+
+    collision_safe = tmp_path / "cross_signal_audit_20260818_143522_123.log"
+    assert existing.read_text(encoding="utf-8") == "已有归档\n"
+    assert collision_safe.read_text(encoding="utf-8") == original
+    assert path.read_text(encoding="utf-8") == (
+        "2026-08-18 14:35:22 - INFO - 新日志\n")
+
+
+def test_live_audit_log_leaves_legacy_versioned_files_untouched(
+        tmp_path, monkeypatch):
+    audit_dir = tmp_path / pt.AUDIT_LOG_DIR
+    audit_dir.mkdir(parents=True)
+    legacy_v032 = audit_dir / "cross_signal_v032_audit.log"
+    legacy_v033 = audit_dir / "cross_signal_v033_audit.log"
+    legacy_v032.write_bytes(b"legacy-v032\n")
+    legacy_v033.write_bytes(b"legacy-v033\n")
+    raw_log = types.SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        debug=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(pt, "log", raw_log)
+    monkeypatch.setattr(
+        pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "create_dir", lambda relative_path: True, raising=False)
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 8, 18, 14, 35, 22))
+
+    assert pt._install_live_audit_log(enabled=True) is True
+    pt.log.info("新活动日志")
+
+    assert legacy_v032.read_bytes() == b"legacy-v032\n"
+    assert legacy_v033.read_bytes() == b"legacy-v033\n"
+    active = audit_dir / "cross_signal_audit.log"
+    assert "新活动日志" in active.read_text(encoding="utf-8")
+
+
+def test_live_audit_log_restart_appends_to_existing_active_file(
+        tmp_path, monkeypatch):
+    audit_dir = tmp_path / pt.AUDIT_LOG_DIR
+    audit_dir.mkdir(parents=True)
+    active = audit_dir / "cross_signal_audit.log"
+    active.write_text("重启前日志\n", encoding="utf-8")
+    raw_log = types.SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        debug=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
+    )
+
+    monkeypatch.setattr(pt, "log", raw_log)
+    monkeypatch.setattr(
+        pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(pt, "create_dir", lambda relative_path: True, raising=False)
+    monkeypatch.setattr(
+        pt, "_audit_now", lambda: datetime(2026, 8, 18, 15, 30, 0))
+
+    assert pt._install_live_audit_log(enabled=True) is True
+    pt.log.info("重启后日志")
+
+    assert active.read_text(encoding="utf-8").splitlines() == [
+        "重启前日志",
+        "2026-08-18 15:30:00 - INFO - 重启后日志",
+    ]
+    assert list(audit_dir.glob("cross_signal_audit_*.log")) == []
 
 
 def test_audit_log_proxy_isolates_platform_log_failure(monkeypatch):
@@ -515,6 +602,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "calc_macd",
         "calc_rsi",
         "calc_stop_price",
+        "calc_stress_adjusted_buy_target_value",
         "can_sell_by_signal",
         "crossed_above_by_diff_recent",
         "crossed_above_recent",
@@ -533,6 +621,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "is_protected_by_strong_adx_uptrend",
         "is_strong_adx_uptrend",
         "latest_cross_direction_by_diff_recent",
+        "portfolio_atr_stress_buy_scale",
         "rsi_group_direction",
         "score_buy_snapshot",
         "score_sell_snapshot",
@@ -541,6 +630,7 @@ def test_ptrade_pure_business_functions_are_ast_identical_to_joinquant():
         "sort_candidates",
         "summarize_cross_signal_candidates",
         "summarize_loose_reversal_candidates",
+        "trading_days_between",
     }
 
     def functions(path):
@@ -909,7 +999,7 @@ def test_automatic_live_state_path_is_isolated_by_account_and_trade(monkeypatch,
 
     assert len({simulation_path, other_account_path, live_path}) == 3
     assert Path(simulation_path).name.startswith(
-        "cross_signal_v032_live_state_v6_")
+        "cross_signal_live_state_")
     assert Path(simulation_path).suffix == ".journal"
     assert {
         state_parent(simulation_path),
@@ -933,6 +1023,58 @@ def test_automatic_live_state_path_survives_manual_restart(monkeypatch, tmp_path
     second_path = pt._live_state_path()
 
     assert first_path == second_path
+
+
+def test_automatic_live_state_path_survives_strategy_and_schema_upgrade(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(pt, "get_research_path", lambda: str(tmp_path), raising=False)
+    monkeypatch.setattr(
+        pt, "get_user_name", lambda real_trade: "account-a", raising=False
+    )
+    monkeypatch.setattr(pt, "get_trade_name", lambda: "cross-signal", raising=False)
+
+    original_path = pt._live_state_path()
+    monkeypatch.setattr(pt, "STRATEGY_VERSION", "cross-v9.9.9")
+    monkeypatch.setattr(pt, "LIVE_STATE_SCHEMA_VERSION", 99)
+
+    assert pt._live_state_path() == original_path
+    assert Path(original_path).name.startswith("cross_signal_live_state_")
+
+
+def test_current_versioned_journal_is_migrated_to_stable_path_without_deletion(
+        monkeypatch, tmp_path):
+    legacy_path = tmp_path / "cross_signal_v033_live_state_v7_legacy.journal"
+    stable_path = tmp_path / "cross_signal_live_state_legacy.journal"
+    buy_date = date(2026, 8, 5)
+    position = types.SimpleNamespace(
+        amount=400, cost_basis=2.2543, last_sale_price=2.267)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(current_dt=datetime(2026, 8, 17, 8, 30)),
+        portfolio=types.SimpleNamespace(positions={"513100.SS": position}),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.267},
+        entry_atr={"513100.SS": 0.0385},
+        buy_date={"513100.SS": buy_date},
+    )
+    assert pt._persist_live_state(context, path=legacy_path) is True
+    monkeypatch.setattr(
+        pt,
+        "_legacy_live_state_paths",
+        lambda state_path: [str(legacy_path)],
+        raising=False,
+    )
+
+    pt.g = make_g()
+    assert pt._migrate_legacy_live_state_journal(
+        context, str(stable_path)) is True
+
+    assert legacy_path.exists()
+    assert stable_path.exists()
+    assert pt._restore_live_state(context, path=stable_path) is True
+    assert pt.g.buy_date == {"513100.SS": buy_date}
+    assert pt.g.entry_atr == {"513100.SS": 0.0385}
+    assert pt.g.highest_since_buy == {"513100.SS": 2.267}
 
 
 def test_automatic_live_state_path_fails_closed_without_instance_identity(
@@ -2530,6 +2672,68 @@ def test_confirm_previous_session_highs_fails_closed_on_future_pending_date(
     assert pt.g.unverified_positions == {code}
 
 
+def test_confirm_previous_session_highs_defers_same_session_pending_after_close(
+        monkeypatch):
+    code = "513050.SS"
+    confirmed_through = date(2026, 8, 3)
+    pending_date = date(2026, 8, 4)
+    pending = {
+        "session_date": pending_date,
+        "prior_confirmed_high": 1.17,
+        "observed_close": 1.18,
+    }
+    pt.g = make_g(
+        highest_since_buy={code: 1.18},
+        entry_atr={code: 0.038214},
+        buy_date={code: date(2026, 7, 30)},
+        pending_close_confirmations={code: dict(pending)},
+        unverified_positions={code},
+        __position_recovery_source={code: "journal"},
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 8, 4, 23, 47, 50)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=4800,
+                    cost_basis=1.1351,
+                )
+            }
+        ),
+    )
+    calls = []
+    infos = []
+    monkeypatch.setattr(
+        pt,
+        "get_confirmed_session_bar",
+        lambda requested, requested_date:
+            calls.append((requested, requested_date)),
+    )
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: infos.append(
+                message % args if args else str(message)),
+            warning=lambda *args, **kwargs: None,
+            error=lambda *args, **kwargs: None,
+        ),
+    )
+
+    assert pt._confirm_previous_session_highs(
+        context, confirmed_through) is True
+    assert calls == []
+    assert pt.g.highest_since_buy[code] == pytest.approx(1.18)
+    assert pt.g.pending_close_confirmations == {code: pending}
+    assert pt.g.unverified_positions == set()
+    assert any(
+        "当日盘后观察" in message and
+        "延至下一交易日盘前确认" in message
+        for message in infos
+    )
+
+
 def test_confirm_previous_session_highs_catches_up_stale_pending_range(
         monkeypatch):
     code = "513100.SS"
@@ -2931,6 +3135,59 @@ def test_iopv_observation_uses_the_same_snapshot_as_the_live_buy_price():
     assert observation["snapshot_age_seconds"] == pytest.approx(1.0)
 
 
+def test_iopv_observation_prefers_supplied_executable_price_over_last_price():
+    observation = pt.build_iopv_observation(
+        "513100.SS",
+        {
+            "last_px": 2.0,
+            "iopv": 2.0,
+            "hsTimeStamp": "20260713093500123",
+        },
+        execution_price=2.1,
+        observed_at=datetime(2026, 7, 13, 9, 35, 1),
+    )
+
+    assert observation["market_price"] == pytest.approx(2.1)
+    assert observation["premium"] == pytest.approx(0.05)
+
+
+def test_live_iopv_log_uses_wall_clock_when_callback_context_is_stale(
+    monkeypatch,
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 8, 20, 9, 35, 0)
+
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 8, 20, 9, 10, 0)))
+    pt.g = make_g(
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "iopv": 1.95,
+                "hsTimeStamp": "20260820093500",
+            }
+        }
+    )
+    messages = []
+    monkeypatch.setattr(pt, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        pt.log,
+        "info",
+        lambda message, *args: messages.append(
+            message % args if args else str(message)),
+    )
+
+    pt.log_iopv_buy_observation(context, code, 2.01)
+
+    assert len(messages) == 1
+    assert "时间=2026-08-20 09:35:00" in messages[0]
+    assert "行情延迟秒数=0.0" in messages[0]
+
+
 def test_iopv_observation_is_limited_to_qdii_and_tolerates_missing_values():
     assert pt.build_iopv_observation(
         "159915.SZ", {"last_px": 2.0, "iopv": 1.95}, 2.0
@@ -2942,6 +3199,460 @@ def test_iopv_observation_is_limited_to_qdii_and_tolerates_missing_values():
     assert observation["valid"] is False
     assert observation["iopv"] is None
     assert observation["premium"] is None
+
+
+def test_high_premium_qdii_buy_records_shadow_but_submits_original_order(
+    monkeypatch,
+):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g(
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "up_px": 2.2,
+                "offer_grp": {5: [2.01, 10000, 3]},
+                "iopv": 1.90,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        }
+    )
+    events = []
+
+    def log_info(message, *args):
+        rendered = message % args if args else message
+        events.append(("log", str(rendered)))
+
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(info=log_info, warning=log_info, error=log_info),
+    )
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: events.append(("order", (args, kwargs)))
+        or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score(code)],
+        date(2026, 7, 13),
+        diagnostic_source="09:35主流程",
+    ) == 1
+
+    assert ("order", ((code, 3100), {"limit_price": 2.01})) in events
+    assert code in pt.g.__iopv_shadow_deferred_buys
+    shadow_logs = [
+        value for kind, value in events
+        if kind == "log" and value.startswith("[IOPV影子买入]")
+    ]
+    assert len(shadow_logs) == 1
+    assert "动作=拟延迟" in shadow_logs[0]
+    assert "执行价=2.01" in shadow_logs[0]
+
+
+@pytest.mark.parametrize(
+    ("iopv", "expected_action"),
+    [(1.95, "拟恢复买入"), (1.80, "拟继续放弃")],
+)
+def test_1035_iopv_shadow_recheck_is_observation_only(
+    monkeypatch, iopv, expected_action
+):
+    code = "513100.SS"
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 10, 35, 0)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    pt.g = make_g(
+        __iopv_shadow_deferred_buys={
+            code: {
+                "code": code,
+                "initial_premium": 0.06,
+                "initial_execution_price": 2.01,
+            }
+        },
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "up_px": 2.2,
+                "offer_grp": {5: [2.0, 10000, 3]},
+                "iopv": iopv,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: messages.append(
+                message % args if args else str(message)),
+            warning=lambda message, *args: messages.append(
+                message % args if args else str(message)),
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("10:35 shadow recheck must not submit buy orders")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt,
+        "order_target",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("10:35 shadow recheck must not submit sell orders")
+        ),
+        raising=False,
+    )
+
+    pt.recheck_iopv_shadow_deferred_buys(context)
+
+    assert pt.g.__iopv_shadow_deferred_buys == {}
+    assert any(
+        message.startswith("[IOPV影子复查]")
+        and ("动作=%s" % expected_action) in message
+        for message in messages
+    )
+
+
+def test_1035_wrapper_runs_iopv_shadow_recheck_before_halt_recovery(monkeypatch):
+    events = []
+    context = object()
+    monkeypatch.setattr(
+        pt,
+        "recheck_iopv_shadow_deferred_buys",
+        lambda received: events.append(("recheck", received)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pt, "halt_recover", lambda received: events.append(("halt", received)))
+    monkeypatch.setattr(
+        pt, "_persist_live_state", lambda received: events.append(("persist", received)))
+
+    pt._halt_recover_wrapper(context)
+
+    assert events == [
+        ("recheck", context),
+        ("halt", context),
+        ("persist", context),
+    ]
+
+
+def test_1035_iopv_shadow_exception_cannot_block_halt_recovery(monkeypatch):
+    events = []
+    context = object()
+    monkeypatch.setattr(
+        pt,
+        "recheck_iopv_shadow_deferred_buys",
+        lambda received: (_ for _ in ()).throw(RuntimeError("shadow failed")),
+    )
+    monkeypatch.setattr(
+        pt, "halt_recover", lambda received: events.append(("halt", received)))
+    monkeypatch.setattr(
+        pt, "_persist_live_state", lambda received: events.append(("persist", received)))
+    monkeypatch.setattr(pt.log, "warning", lambda *args: None)
+
+    pt._halt_recover_wrapper(context)
+
+    assert events == [("halt", context), ("persist", context)]
+
+
+@pytest.mark.parametrize(
+    ("blocker_updates", "expected_blocker"),
+    [
+        (
+            {
+                "close_below_ma20": False,
+                "close_below_boll_mid": False,
+                "close_below_falling_ma10": False,
+                "downside_continuation": False,
+                "far_above_ma20_and_rsi6_down": False,
+            },
+            "价格确认不足",
+        ),
+        (
+            {
+                "close_below_ma20": False,
+                "close_below_boll_mid": True,
+                "close_below_falling_ma10": False,
+                "downside_continuation": False,
+                "far_above_ma20_and_rsi6_down": False,
+                "adx": 30.0,
+                "plus_di": 25.0,
+                "minus_di": 10.0,
+                "ma20_slope_non_negative": True,
+            },
+            "ADX保护",
+        ),
+    ],
+)
+def test_eight_percent_premium_executes_blocked_qdii_sell(
+    monkeypatch, blocker_updates, expected_blocker
+):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=500, cost_basis=1.0, last_sale_price=2.0)
+            }
+        ),
+    )
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        entry_atr={code: 0.05},
+        highest_since_buy={code: 2.1},
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "bid_grp": {1: [1.995, 10000, 3]},
+                "iopv": 1.995 / 1.08,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    score = make_sell_score(code)
+    score["sell_score"] = 30
+    score.update(blocker_updates)
+    messages = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt.log, "info", lambda message, *args: messages.append(
+            message % args if args else str(message)))
+    sold = []
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda sold_code, sold_context, reason: (
+            sold.append((sold_code, sold_context, reason)) or True
+        ),
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [
+            buy_date,
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 4),
+            date(2026, 6, 5),
+            today,
+        ],
+    ) is True
+
+    override_logs = [
+        message for message in messages
+        if message.startswith("[IOPV卖出加速]")
+    ]
+    assert sold[0][0:2] == (code, context)
+    assert sold[0][2].startswith("sell_score 30 iopv_override")
+    assert len(override_logs) == 1
+    assert ("原规则阻断=%s" % expected_blocker) in override_logs[0]
+    assert "执行价=1.995" in override_logs[0]
+    assert "阈值百分比=8.0" in override_logs[0]
+
+
+def test_below_eight_percent_keeps_original_blocked_sell(monkeypatch):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={code: types.SimpleNamespace(
+                amount=500, cost_basis=1.0, last_sale_price=2.0)}),
+    )
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        __last_snapshot={
+            code: {
+                "last_px": 2.0,
+                "bid_grp": {1: [1.995, 10000, 3]},
+                "iopv": 1.85,
+                "trade_status": "TRADE",
+                "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+            }
+        },
+    )
+    score = make_sell_score(code)
+    score.update({
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+    })
+    messages = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt.log, "info", lambda message, *args: messages.append(
+            message % args if args else str(message)))
+    monkeypatch.setattr(
+        pt,
+        "execute_sell",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("premium below 8% must not sell")),
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [buy_date, date(2026, 6, 2), date(2026, 6, 3),
+         date(2026, 6, 4), date(2026, 6, 5), today],
+    ) is False
+    assert any(
+        message.startswith("[IOPV卖出加速]")
+        and "阈值百分比=8.0" in message
+        and "动作=不触发" in message
+        for message in messages
+    )
+    assert not any(
+        message.startswith("[IOPV影子卖出]")
+        and "动作=拟加速卖出" in message
+        for message in messages
+    )
+
+
+@pytest.mark.parametrize("unsafe_case", ["non_live", "halted", "stale"])
+def test_iopv_sell_override_rejects_unsafe_snapshot(
+    monkeypatch, unsafe_case
+):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    snapshot = {
+        "last_px": 2.0,
+        "bid_grp": {1: [1.995, 10000, 3]},
+        "iopv": 1.84,
+        "trade_status": "TRADE",
+        "hsTimeStamp": datetime.now().strftime("%Y%m%d%H%M%S"),
+    }
+    is_live = True
+    if unsafe_case == "non_live":
+        is_live = False
+    elif unsafe_case == "halted":
+        snapshot["trade_status"] = "HALT"
+    else:
+        snapshot["hsTimeStamp"] = (
+            datetime.now() - timedelta(seconds=11)
+        ).strftime("%Y%m%d%H%M%S")
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={code: types.SimpleNamespace(
+                amount=500, cost_basis=1.0, last_sale_price=2.0)}),
+    )
+    pt.g = make_g(
+        buy_date={code: buy_date},
+        __is_live=is_live,
+        __last_snapshot={code: snapshot},
+    )
+    score = make_sell_score(code)
+    score.update({
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+    })
+    sold = []
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda candidate: 2.0)
+    monkeypatch.setattr(
+        pt, "execute_sell",
+        lambda *args: sold.append(args) or True,
+    )
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [buy_date, date(2026, 6, 2), date(2026, 6, 3),
+         date(2026, 6, 4), date(2026, 6, 5), today],
+    ) is False
+    assert sold == []
+
+
+def test_iopv_sell_override_exception_cannot_interrupt_sell_evaluation(
+    monkeypatch,
+):
+    code = "513100.SS"
+    buy_date = date(2026, 6, 1)
+    today = date(2026, 7, 13)
+    context = types.SimpleNamespace(
+        portfolio=types.SimpleNamespace(
+            positions={
+                code: types.SimpleNamespace(
+                    amount=500, cost_basis=1.0, last_sale_price=2.0)
+            }
+        )
+    )
+    pt.g = make_g(buy_date={code: buy_date})
+    score = make_sell_score(code)
+    score.update({
+        "close_below_ma20": False,
+        "close_below_boll_mid": False,
+        "close_below_falling_ma10": False,
+        "downside_continuation": False,
+        "far_above_ma20_and_rsi6_down": False,
+    })
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(
+        pt,
+        "try_iopv_blocked_sell_override",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("iopv failed")),
+    )
+    monkeypatch.setattr(pt.log, "warning", lambda *args: None)
+
+    assert pt._evaluate_signal_sell(
+        context,
+        code,
+        score,
+        today,
+        [
+            buy_date,
+            date(2026, 6, 2),
+            date(2026, 6, 3),
+            date(2026, 6, 4),
+            date(2026, 6, 5),
+            today,
+        ],
+    ) is False
+
 
 
 def test_prev_trade_date_does_not_guess_weekdays_when_apis_fail(monkeypatch):
@@ -3307,6 +4018,49 @@ def test_sell_submission_keeps_state_until_full_fill(monkeypatch):
     assert "累计成交=0" in lifecycle
     assert "剩余数量=500" in lifecycle
     assert "耗时=0.000秒" in lifecycle
+
+
+def test_sell_submission_freezes_cash_before_synchronous_broker_update(
+        monkeypatch):
+    position = types.SimpleNamespace(
+        amount=400,
+        cost_basis=2.2543,
+        last_sale_price=2.222,
+    )
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 8, 20, 10, 35, 0),
+        portfolio=types.SimpleNamespace(
+            positions={"513100.SS": position},
+            cash=16608.32,
+            portfolio_value=17497.12,
+        ),
+    )
+    pt.g = make_g(
+        highest_since_buy={"513100.SS": 2.274},
+        entry_atr={"513100.SS": 0.0385},
+        buy_date={"513100.SS": date(2026, 8, 5)},
+        __last_snapshot={
+            "513100.SS": make_fresh_live_snapshot(last_px=2.222),
+        },
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.222)
+    monkeypatch.setattr(
+        pt, "get_sell_limit_price", lambda code, price: 1.980)
+
+    def synchronous_order_target(code, amount, limit_price=None):
+        context.portfolio.cash = 17497.12
+        return "sell-order-1"
+
+    monkeypatch.setattr(
+        pt, "order_target", synchronous_order_target, raising=False)
+
+    assert pt.execute_sell("513100.SS", context, "sell_score 45") is True
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score("518880.SS")],
+        date(2026, 8, 20),
+    ) == 0
+    assert pt.g.__deferred_buy_base_cash == pytest.approx(16608.32)
 
 
 @pytest.mark.parametrize(
@@ -6342,6 +7096,41 @@ def test_qdii_buy_logs_iopv_but_never_changes_order_path(
     assert observations[0][0] < order_index
 
 
+def test_buy_shadow_exception_cannot_block_original_buy_order(monkeypatch):
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 9, 35, 1)),
+        portfolio=types.SimpleNamespace(
+            positions={}, portfolio_value=20000, cash=20000),
+    )
+    pt.g = make_g()
+    orders = []
+    monkeypatch.setattr(pt, "is_paused", lambda code: False)
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 2.0)
+    monkeypatch.setattr(pt, "get_buy_limit_price", lambda code, current: 2.01)
+    monkeypatch.setattr(pt, "log_iopv_buy_observation", lambda *args: {})
+    monkeypatch.setattr(
+        pt,
+        "log_iopv_buy_shadow",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("shadow failed")),
+    )
+    monkeypatch.setattr(pt.log, "warning", lambda *args: None)
+    monkeypatch.setattr(
+        pt,
+        "order",
+        lambda *args, **kwargs: orders.append((args, kwargs)) or "buy-order-1",
+        raising=False,
+    )
+
+    assert pt.execute_buy_candidates(
+        context,
+        [make_buy_score()],
+        date(2026, 7, 13),
+        diagnostic_source="09:35主流程",
+    ) == 1
+    assert orders == [(("513100.SS", 3100), {"limit_price": 2.01})]
+
+
 def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
     context = types.SimpleNamespace(
         blotter=types.SimpleNamespace(current_dt=datetime(2026, 7, 13, 9, 35)),
@@ -6370,7 +7159,7 @@ def test_non_qdii_buy_does_not_emit_iopv_observation(monkeypatch):
     assert not any(message.startswith("[IOPV观察]") for message in messages)
 
 
-def test_release_docs_keep_iopv_observation_non_binding():
+def test_release_docs_describe_iopv_buy_shadow_and_eight_percent_sell_override():
     deployment = (
         ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
     ).read_text(encoding="utf-8")
@@ -6384,7 +7173,10 @@ def test_release_docs_keep_iopv_observation_non_binding():
     assert "[IOPV观察]" in deployment
     assert "must never block or resize an order" in deployment
     assert "Observe PTrade IOPV Without Changing Frozen Orders" in decisions
-    assert "observation-only IOPV" in readme
+    assert "[IOPV卖出加速]" in deployment
+    assert "8%" in deployment
+    assert "Activate An 8% PTrade IOPV Sell Override" in decisions
+    assert "8% live sell override" in readme
 
 
 def test_release_docs_describe_buy_rejection_diagnostics():
@@ -6486,6 +7278,124 @@ def test_halt_recovery_merges_resumed_scores_without_second_portfolio_pass(monke
         (["159985.SZ", "513100.SS"], "10:35复牌/卖单补偿")
     ]
     assert pt.g.paused_pool_codes == set()
+
+
+def test_halt_recovery_logs_complete_resumed_score_diagnostics(monkeypatch):
+    code = "513100.SS"
+    today = date(2026, 7, 13)
+    signal_date = date(2026, 7, 10)
+    score = make_buy_score(code)
+    score.update({
+        "buy_score": 37,
+        "reversal_score": 23,
+        "location_score": 17,
+        "trend_score": -15,
+        "volume_score": 12,
+        "sell_score": 0,
+        "cross_window": 3,
+        "rsi6": 59.21,
+        "rsi12": 54.77,
+        "rsi24": 50.01,
+        "rsi6_prev": 51.0,
+        "rsi12_prev": 52.0,
+        "rsi24_prev": 53.0,
+        "dif": -0.0101,
+        "dea": -0.0199,
+        "macd_hist": 0.0196,
+        "dif_prev": -0.0300,
+        "dea_prev": -0.0200,
+        "k": 64.21,
+        "d": 42.36,
+        "j": 107.91,
+        "k_prev": 30.0,
+        "d_prev": 35.0,
+        "j_prev": 20.0,
+        "rsi6_cross_rsi12_up": True,
+        "rsi6_cross_rsi12_up_age": 2,
+        "rsi6_cross_rsi24_up": False,
+        "macd_cross_up": True,
+        "macd_cross_up_age": 0,
+        "kdj_k_cross_up": True,
+        "kdj_k_cross_up_age": 1,
+        "kdj_j_cross_up": False,
+        "rsi6_cross_rsi12_down": False,
+        "rsi6_cross_rsi24_down": False,
+        "macd_cross_down": False,
+        "kdj_k_cross_down": False,
+        "kdj_j_cross_down": False,
+    })
+    pt.g = make_g(
+        paused_pool_codes={code},
+        execution_date=today,
+        deferred_signal_date=signal_date,
+        deferred_scores=[],
+    )
+    context = types.SimpleNamespace(
+        blotter=types.SimpleNamespace(
+            current_dt=datetime(2026, 7, 13, 10, 35)),
+        portfolio=types.SimpleNamespace(positions={}),
+    )
+    info_messages = []
+    debug_messages = []
+    monkeypatch.setattr(
+        pt,
+        "log",
+        types.SimpleNamespace(
+            info=lambda message, *args: info_messages.append(
+                message % args if args else str(message)),
+            debug=lambda message, *args: debug_messages.append(
+                message % args if args else str(message)),
+            warning=lambda *args: None,
+            error=lambda *args: None,
+        ),
+    )
+    monkeypatch.setattr(pt, "get_prev_trade_date", lambda context: signal_date)
+    monkeypatch.setattr(pt, "is_paused", lambda candidate: False)
+    monkeypatch.setattr(
+        pt, "reconcile_recent_fills_and_resume_buys", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pt, "_reconcile_open_orders", lambda context: True)
+    monkeypatch.setattr(
+        pt, "_recover_live_state_with_available_sources", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pt, "current_hold_codes", lambda context: [])
+    monkeypatch.setattr(pt, "check_atr_stops", lambda context, codes=None: [])
+    monkeypatch.setattr(
+        pt,
+        "calc_cross_signal_score",
+        lambda candidate, end_date, return_reason=False: (dict(score), None),
+    )
+    monkeypatch.setattr(pt, "execute_buy_candidates", lambda *args, **kwargs: 0)
+
+    pt.halt_recover(context)
+
+    assert any(
+        message.startswith("[复牌评分]")
+        and "来源=10:35复牌/卖单补偿" in message
+        and "信号日期=2026-07-10" in message
+        and "代码=513100.SS" in message
+        and "买入评分=37" in message
+        and "反转评分=23" in message
+        and "位置评分=17" in message
+        and "趋势评分=-15" in message
+        and "量能评分=12" in message
+        and "卖出评分=0" in message
+        and "买入筛选=拒绝:评分不足(37<60)" in message
+        for message in info_messages
+    )
+    assert any(
+        message.startswith("[复牌交叉]")
+        and "信号日期=2026-07-10" in message
+        and "RSI6上穿RSI12(近3日有效,距发生2个交易日)" in message
+        and "DIF上穿DEA(近3日有效,当日新发生)" in message
+        and "K上穿D(近3日有效,距发生1个交易日)" in message
+        for message in info_messages
+    )
+    assert any(
+        message.startswith("[指标明细][复牌评分][513100.SS]")
+        and "RSI6上穿RSI12=是" in message
+        and "RSI[6/12/24]=59.2/54.8/50.0" in message
+        and "MACD[DIF/DEA/HIST]=-0.0101/-0.0199/0.0196" in message
+        for message in debug_messages
+    )
 
 
 def test_halt_recovery_runs_atr_stop_for_resumed_holding(monkeypatch):
@@ -7036,15 +7946,15 @@ def test_delivery_reconstruction_finds_current_open_position_episode():
         },
         {
             "stock_code": "513100",
-            "business_name": "\u8bc1\u5238\u4e70\u5165",
-            "occur_amount": 500,
+            "business_name": "\u8bc1\u5238\u5356\u51fa",
+            "occur_amount": 1000,
             "init_date": 20260303,
             "business_time": 93503,
         },
         {
             "stock_code": "513100",
-            "business_name": "\u8bc1\u5238\u5356\u51fa",
-            "occur_amount": 100,
+            "business_name": "\u8bc1\u5238\u4e70\u5165",
+            "occur_amount": 500,
             "init_date": 20260310,
             "business_time": 93504,
         },
@@ -7052,15 +7962,60 @@ def test_delivery_reconstruction_finds_current_open_position_episode():
 
     recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
 
-    assert recovered["buy_date"] == date(2026, 3, 3)
+    assert recovered["buy_date"] == date(2026, 3, 10)
     assert recovered["amount"] == pytest.approx(400)
 
 
-def test_delivery_reconstruction_rejects_quantity_mismatch():
+def test_delivery_reconstruction_uses_broker_amount_without_replaying_quantity():
     records = [{
         "stock_code": "513100",
         "entrust_bs": "1",
         "business_amount": 500,
+        "business_price": 1.18,
+        "init_date": 20260303,
+        "business_time": 93503,
+    }]
+
+    recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
+
+    assert recovered["buy_date"] == date(2026, 3, 3)
+    assert recovered["amount"] == pytest.approx(400)
+    assert recovered["entry_price"] == pytest.approx(1.18)
+
+
+def test_delivery_reconstruction_uses_first_buy_after_last_sell():
+    records = [
+        {
+            "stock_code": "513100",
+            "entrust_bs": "2",
+            "business_amount": 700,
+            "business_price": 2.146,
+            "init_date": 20260609,
+            "business_time": 93501,
+        },
+        {
+            "stock_code": "513100",
+            "entrust_bs": "1",
+            "business_amount": 400,
+            "business_price": 2.253,
+            "init_date": 20260805,
+            "business_time": 93502,
+        },
+    ]
+
+    recovered = pt._reconstruct_open_position(records, "513100.SS", 400)
+
+    assert recovered["buy_date"] == date(2026, 8, 5)
+    assert recovered["amount"] == pytest.approx(400)
+    assert recovered["entry_price"] == pytest.approx(2.253)
+
+
+def test_delivery_reconstruction_rejects_last_sell_without_later_buy():
+    records = [{
+        "stock_code": "513100",
+        "entrust_bs": "2",
+        "business_amount": 400,
+        "business_price": 1.18,
         "init_date": 20260303,
         "business_time": 93503,
     }]
@@ -7068,8 +8023,8 @@ def test_delivery_reconstruction_rejects_quantity_mismatch():
     assert pt._reconstruct_open_position(records, "513100.SS", 400) is None
 
 
-def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
-    monkeypatch,
+def test_live_recovery_logs_sanitized_delivery_replay_without_open_buy_episode(
+        monkeypatch,
 ):
     position = types.SimpleNamespace(amount=400, cost_basis=1.18, last_sale_price=1.28)
     context = types.SimpleNamespace(
@@ -7078,7 +8033,7 @@ def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
     pt.g = make_g()
     records = [{
         "stock_code": "513100",
-        "entrust_bs": "1",
+        "entrust_bs": "2",
         "business_amount": 500,
         "business_price": 1.18,
         "init_date": 20260303,
@@ -7105,16 +8060,16 @@ def test_live_recovery_logs_sanitized_delivery_replay_on_quantity_mismatch(
 
     summary = next(
         message for message in messages
-        if "阶段=交割单重放" in message
+        if "阶段=交割单持仓周期" in message
     )
     assert "代码=513100.SS" in summary
     assert "券商持仓=400" in summary
     assert "总记录数=1" in summary
     assert "标的记录数=1" in summary
     assert "有效记录数=1" in summary
-    assert "买入笔数=1" in summary
-    assert "卖出笔数=0" in summary
-    assert "净数量=500" in summary
+    assert "买入笔数=0" in summary
+    assert "卖出笔数=1" in summary
+    assert "净数量=-500" in summary
     assert "日期范围=2026-03-03~2026-03-03" in summary
     assert "可用代码=513100.SS" in summary
     rendered = "\n".join(messages)
@@ -7864,7 +8819,7 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
         ROOT / "cross_signal_strategy" / "docs" / "ptrade_deployment.md"
     ).read_text(encoding="utf-8")
 
-    assert "cross-v0.3.2" in notes
+    assert "cross-v0.3.3" in notes
     assert "09:35" in notes
     assert "09:36" in notes
     assert "10:35" in notes
@@ -7883,14 +8838,14 @@ def test_ptrade_deployment_notes_pin_frozen_version_and_live_schedule():
     assert "resumed holdings repeat the 09:35 ATR-stop and signal-sell checks" in notes
     assert "does not rerun already processed ETFs" in notes
     assert "[发布指纹]" in notes
-    assert "20260730.1" in notes
-    assert "1506a0e834fe" in notes
-    assert "状态结构=6" in notes
+    assert "20260822.2" in notes
+    assert "77e44d93d255" in notes
+    assert "状态结构=7" in notes
     assert "provisional risk state" in notes
     assert "exact finalized T-1 daily bar" in notes
     assert "corrects the provisional high" in notes
     assert "volume is zero" in notes
-    assert "schema 6" in notes
+    assert "schema 7" in notes
     assert "[交易日开始]" in notes
     assert "[交易日结束]" in notes
     assert "`INFO`" in notes
@@ -7924,11 +8879,12 @@ def test_ptrade_deployment_notes_define_bounded_full_audit_log():
     ).read_text(encoding="utf-8")
 
     assert "cross_signal_logs" in notes
-    assert "cross_signal_v032_audit.log" in notes
+    assert "cross_signal_audit.log" in notes
     assert "完整镜像" in notes
-    assert "20 MB" in notes
-    assert "16 MB" in notes
-    assert "最旧的完整日志行" in notes
+    assert "20 MiB" in notes
+    assert "cross_signal_audit_YYYYMMDD_HHMMSS.log" in notes
+    assert "任何既有归档都不会被覆盖" in notes
+    assert "不迁移、不删除" in notes
     assert "PTrade 平台自身" in notes
 
 
@@ -7952,6 +8908,10 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "[持仓风险恢复]" in deployment
     assert "账户接管:交割单" in deployment
     assert "one account runs one active" in deployment
+    assert "cross_signal_live_state_" in deployment
+    assert "最后一次实际卖出" in deployment
+    assert "此后第一笔实际买入" in deployment
+    assert "不要求历史交割数量与当前持仓数量相等" in deployment
     assert "same calendar date as the running process" in deployment
     assert "reads `get_open_orders()` without cancelling or resubmitting" in deployment
     assert "business-configuration fingerprint" in deployment
@@ -7961,3 +8921,110 @@ def test_release_docs_describe_resilient_ptrade_state_recovery():
     assert "Adopt Existing PTrade Account Positions On Strategy Handover" in decisions
     assert "Replace A/B Checkpoints With Broker-First State Journal" in decisions
     assert "Prefer Broker-Validated PTrade G State On Restart" in decisions
+
+
+def test_live_state_validates_and_normalizes_atr_stop_history():
+    state = {
+        "highest_since_buy": {},
+        "entry_atr": {},
+        "buy_date": {},
+        "pending_close_confirmations": {},
+        "last_scores": {},
+        "sold_today": {},
+        "sell_retry_reasons": {},
+        "paused_pool_codes": set(),
+        "unverified_positions": set(),
+        "execution_date": date(2026, 8, 14),
+        "deferred_scores": [],
+        "deferred_signal_date": date(2026, 8, 13),
+        "atr_stop_history": ["2026-08-01", date(2026, 8, 2)],
+    }
+
+    validated = pt._validated_live_state(state)
+
+    assert validated["atr_stop_history"] == [date(2026, 8, 1), date(2026, 8, 2)]
+
+    with pytest.raises(ValueError):
+        pt._validated_live_state(dict(state, atr_stop_history="not-a-list"))
+
+    with pytest.raises(ValueError):
+        pt._validated_live_state(dict(state, atr_stop_history=["not-a-date"]))
+
+
+def test_execute_sell_backtest_branch_records_atr_stop_date(monkeypatch):
+    pt.g = make_g(__is_live=False, __mode_verified=True)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 8, 14, 9, 35),
+        portfolio=types.SimpleNamespace(
+            positions={
+                "513100.SS": types.SimpleNamespace(
+                    amount=100, cost_basis=1.0, last_sale_price=1.05
+                )
+            },
+        ),
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.05, raising=False)
+    monkeypatch.setattr(
+        pt, "get_sell_limit_price", lambda code, current: round(current, 3),
+        raising=False)
+    monkeypatch.setattr(
+        pt, "order_target", lambda code, amount, limit_price: "order-1",
+        raising=False)
+
+    assert pt.execute_sell("513100.SS", context, "atr_stop 1.000<=1.050") is True
+
+    assert pt.g.atr_stop_history == [date(2026, 8, 14)]
+
+
+def test_execute_sell_backtest_branch_does_not_record_signal_sell(monkeypatch):
+    pt.g = make_g(__is_live=False, __mode_verified=True)
+    context = types.SimpleNamespace(
+        current_dt=datetime(2026, 8, 14, 9, 35),
+        portfolio=types.SimpleNamespace(
+            positions={
+                "513100.SS": types.SimpleNamespace(
+                    amount=100, cost_basis=1.0, last_sale_price=1.05
+                )
+            },
+        ),
+    )
+    monkeypatch.setattr(pt, "get_current_price", lambda code: 1.05, raising=False)
+    monkeypatch.setattr(
+        pt, "get_sell_limit_price", lambda code, current: round(current, 3),
+        raising=False)
+    monkeypatch.setattr(
+        pt, "order_target", lambda code, amount, limit_price: "order-1",
+        raising=False)
+
+    assert pt.execute_sell("513100.SS", context, "sell_score 32") is True
+
+    assert pt.g.atr_stop_history == []
+
+
+def test_finish_terminal_sell_records_atr_stop_on_full_fill():
+    pt.g = make_g(__is_live=True)
+    pending = {
+        "requested_qty": 100.0,
+        "filled_qty": 100.0,
+        "reason": "atr_stop 1.000<=1.050",
+        "trigger_date": date(2026, 8, 14),
+    }
+
+    assert pt._finish_terminal_sell("513100.SS", pending) is True
+
+    assert pt.g.atr_stop_history == [date(2026, 8, 14)]
+
+
+def test_finish_terminal_sell_does_not_record_partial_atr_stop():
+    pt.g = make_g(__is_live=True)
+    pending = {
+        "requested_qty": 100.0,
+        "filled_qty": 60.0,
+        "reason": "atr_stop 1.000<=1.050",
+        "trigger_date": date(2026, 8, 14),
+    }
+
+    # 部分成交不算完成: 函数返回 False, 不记账、不清仓。
+    assert pt._finish_terminal_sell("513100.SS", pending) is False
+
+    assert pt.g.atr_stop_history == []

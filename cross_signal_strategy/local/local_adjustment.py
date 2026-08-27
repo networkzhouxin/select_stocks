@@ -24,7 +24,21 @@ TRAINING_ADJUSTMENT_RECORDS = (
 
 
 TRAINING_DAILY_CORRECTION_RECORDS = (
+    {"code": "513880", "date": "2019-12-11", "close": 1.091},
     {"code": "512100", "date": "2020-09-02", "close": 1.001},
+)
+
+
+TRAINING_SNAPSHOT_CORRECTION_RECORDS = (
+    {
+        "code": "513880",
+        "date": "2020-10-28",
+        "fields": {"ma5_gt_ma10": True},
+        "provenance": (
+            "cross-v0.3.3 JoinQuant 2020-10-29 log: trend_score=14 with "
+            "MA5/MA10 both rounded to 1.072; local three-decimal closes tie exactly"
+        ),
+    },
 )
 
 
@@ -131,3 +145,14 @@ def default_training_adjustment_factors() -> LocalAdjustmentFactors:
 def default_training_daily_corrections() -> LocalDailyCorrections:
     """Return confirmed local daily-bar corrections for 2019-2021 training replay."""
     return LocalDailyCorrections.from_records(TRAINING_DAILY_CORRECTION_RECORDS)
+
+
+def default_training_snapshot_corrections() -> dict:
+    """Return proven JoinQuant/local precision-boundary flag corrections."""
+    return {
+        (str(row["code"]).split(".")[0], str(row["date"])): {
+            "fields": dict(row["fields"]),
+            "provenance": str(row["provenance"]),
+        }
+        for row in TRAINING_SNAPSHOT_CORRECTION_RECORDS
+    }

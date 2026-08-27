@@ -46,6 +46,11 @@ The probe checks `09:34`, `09:35`, and `09:36` so that a value can be compared
 with its `hsTimeStamp`. It does not calculate a premium or classify any value
 as acceptable for trading.
 
+The callback timestamp and `age_seconds` use the PTrade server wall clock.
+Live evidence showed that `context.current_dt` can remain at the earlier
+before-trading callback time, so it is not a valid freshness clock for this
+probe.
+
 ## Evidence Gate
 
 Point-in-time IOPV is operationally available only if all of the following are

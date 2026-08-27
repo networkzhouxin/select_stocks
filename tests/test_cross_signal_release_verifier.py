@@ -22,9 +22,9 @@ def test_release_verifier_passes_static_formal_checks():
     report = verifier.verify_release(ROOT, run_tests=False)
 
     assert report["status"] == "通过"
-    assert report["strategy_version"] == "cross-v0.3.2"
-    assert report["deployment_build"] == "20260730.1"
-    assert len(report["business_fingerprint"]) == 12
+    assert report["strategy_version"] == "cross-v0.3.3"
+    assert report["deployment_build"] == "20260822.2"
+    assert report["business_fingerprint"] == "77e44d93d255"
     assert all(item["status"] == "通过" for item in report["checks"])
 
 
@@ -40,7 +40,16 @@ def test_release_verifier_requires_high_risk_execution_contract_tests():
 
     assert contract_check["status"] == "通过"
     assert contract_check["label"] == "跨平台高风险执行合同"
-    assert "6" in contract_check["detail"]
+    assert "10" in contract_check["detail"]
+    ptrade_contracts = verifier.EXECUTION_CONTRACT_TESTS[
+        "test_cross_signal_ptrade_strategy.py"
+    ]
+    assert {
+        "test_eight_percent_premium_executes_blocked_qdii_sell",
+        "test_below_eight_percent_keeps_original_blocked_sell",
+        "test_iopv_sell_override_rejects_unsafe_snapshot",
+        "test_iopv_sell_override_exception_cannot_interrupt_sell_evaluation",
+    } <= ptrade_contracts
 
 
 def test_release_verifier_disables_pytest_cache_for_full_gate(monkeypatch):
@@ -107,6 +116,17 @@ def test_release_verifier_registers_cross_age_helper_for_ast_parity():
 
     assert (
         "_latest_cross_age_by_diff_recent"
+        in verifier.PURE_BUSINESS_FUNCTIONS
+    )
+
+
+def test_release_verifier_registers_atr_stress_functions_for_ast_parity():
+    verifier = load_verifier()
+
+    assert "trading_days_between" in verifier.PURE_BUSINESS_FUNCTIONS
+    assert "portfolio_atr_stress_buy_scale" in verifier.PURE_BUSINESS_FUNCTIONS
+    assert (
+        "calc_stress_adjusted_buy_target_value"
         in verifier.PURE_BUSINESS_FUNCTIONS
     )
 

@@ -38,4 +38,12 @@ def test_no_512100_candidate_only_removes_512100_from_mainline_pool():
     assert "512100.XSHG" in main_pool
     assert "512100.XSHG" not in candidate_pool
     assert candidate_pool == [code for code in main_pool if code != "512100.XSHG"]
-    assert candidate.get_default_params() == mainline.get_default_params()
+    # 候选冻结于 v0.3.1 时代, 主线此后新增了冻结参数(如 ATR-stress);
+    # 候选声明过的每个键必须与主线一致, 但允许主线携带更新参数。
+    candidate_params = candidate.get_default_params()
+    main_params = mainline.get_default_params()
+    assert {
+        key: candidate_params[key] for key in candidate_params
+    } == {
+        key: main_params[key] for key in candidate_params
+    }
