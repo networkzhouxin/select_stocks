@@ -1534,6 +1534,22 @@ def test_session_evidence_and_namespace_contract_are_symmetric_by_role():
     assert normal["continue_candidate"] is True
 
 
+def test_session_evidence_missing_summary_is_attributed_to_its_own_role():
+    candidate = [record for record in make_candidate_records()
+                 if not (record.get("event") == "portfolio_summary"
+                         and record.get("closing_date") == "2019-01-03")]
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    errors = report["data_quality"]["errors"]
+    assert any("candidate session evidence missing summary: 2019-01-03" in error
+               for error in errors)
+    assert not any(error.startswith("baseline session evidence missing summary:")
+                   for error in errors)
+    assert any("candidate/baseline session calendar dates differ" in error
+               for error in errors)
+
+
 def test_formal_horizon_five_must_close_after_its_signal_date():
     baseline = make_baseline_records()
     formal_outcome = next(record for record in baseline

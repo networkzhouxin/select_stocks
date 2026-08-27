@@ -1206,8 +1206,12 @@ def analyze_records(candidate_records, baseline_records):
     session_calendar = _common_session_calendar(
         candidate_session_calendar, baseline_session_calendar, errors,
     )
-    _validate_session_evidence(candidate_records, "candidate", session_calendar, errors)
-    _validate_session_evidence(baseline_records, "baseline", session_calendar, errors)
+    _validate_session_evidence(
+        candidate_records, "candidate", candidate_session_calendar, errors,
+    )
+    _validate_session_evidence(
+        baseline_records, "baseline", baseline_session_calendar, errors,
+    )
     _validate_baseline_observation_namespaces(baseline_records, errors)
     candidate_session_evidence = _candidate_session_evidence(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
