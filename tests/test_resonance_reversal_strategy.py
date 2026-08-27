@@ -3779,6 +3779,102 @@ def test_relative_outcome_adds_direction_adjusted_return_without_orders(
     assert outcome["direction_adjusted_return"] == pytest.approx(0.1)
 
 
+def test_relative_outcome_horizons_and_terminal_cleanup_remain_unchanged(
+        monkeypatch):
+    code = "510300.XSHG"
+    observation = {
+        "relative_observation_id": "RELATIVE:horizons",
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": "SOFT_ALL_THREE",
+        "code": code,
+        "direction": strategy.TurnDirection.BUY_TURN,
+        "signal_date": date(2021, 1, 5),
+        "supporters": ("BOLL", "KDJ", "RSI"),
+        "supporter_event_dates": {},
+        "hard_or_relative_source_by_indicator": {},
+        "expires_date": date(2021, 1, 6),
+        "event_close": 10.0,
+    }
+    runtime = runtime_state()
+    logged = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: list(pd.bdate_range(
+            kwargs["start_date"], kwargs["end_date"],
+        ).date),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: logged.append((event, payload)),
+    )
+    assert strategy.register_relative_observation_event(observation) is True
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-06"),
+        {code: current_record(price=11.0)},
+    )
+    record = runtime.observation_events["RELATIVE:horizons"]
+    assert set(record["outcomes"]) == {1}
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-08"),
+        {code: current_record(price=12.0)},
+    )
+    record = runtime.observation_events["RELATIVE:horizons"]
+    assert set(record["outcomes"]) == {1, 3}
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-12"),
+        {code: current_record(price=13.0)},
+    )
+
+    assert "RELATIVE:horizons" not in runtime.observation_events
+    assert [payload["horizon"] for event, payload in logged
+            if event == "observation_outcome"] == [1, 3, 5]
+
+
+def test_relative_outcome_future_data_error_is_rethrown_unchanged(monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future relative outcome")
+    observation = {
+        "relative_observation_id": "RELATIVE:future-outcome",
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": "SOFT_ALL_THREE",
+        "code": "510300.XSHG",
+        "direction": strategy.TurnDirection.BUY_TURN,
+        "signal_date": date(2021, 1, 5),
+        "supporters": (),
+        "supporter_event_dates": {},
+        "hard_or_relative_source_by_indicator": {},
+        "expires_date": date(2021, 1, 6),
+        "event_close": 10.0,
+    }
+    runtime = runtime_state()
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "FutureDataError", FutureDataError, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: (_ for _ in ()).throw(expected),
+        raising=False,
+    )
+    assert strategy.register_relative_observation_event(observation) is True
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.record_due_observation_outcomes(
+            fake_context(current_date="2021-01-06"),
+            {"510300.XSHG": current_record(price=11.0)},
+        )
+
+    assert raised.value is expected
+    assert "RELATIVE:future-outcome" in runtime.observation_events
+
+
 def test_formal_observation_outcome_log_has_no_relative_contract_fields(
         monkeypatch):
     runtime = runtime_state()
@@ -4119,6 +4215,51 @@ def test_damaged_relative_observation_isolated_before_formal_after_close(
     assert "RELATIVE:damaged" not in runtime.observation_events
     assert formal["outcomes"][1]["return"] == pytest.approx(0.1)
     assert diagnostics[0][0] == "relative_observation_record"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("event_date", "not-a-date"),
+    ("event_close", "not-a-number"),
+])
+def test_invalid_relative_consumption_fields_do_not_block_formal_after_close(
+        monkeypatch, field, value):
+    code = "510300.XSHG"
+    runtime = runtime_state()
+    damaged = strategy.make_relative_observation_event({
+        "relative_observation_id": "RELATIVE:invalid-" + field,
+        "code": code,
+        "signal_date": date(2021, 1, 5),
+        "event_close": 10.0,
+        "branch": "SOFT_ALL_THREE",
+        "direction": strategy.TurnDirection.BUY_TURN,
+        "supporters": (),
+        "supporter_event_dates": {},
+        "hard_or_relative_source_by_indicator": {},
+        "expires_date": date(2021, 1, 6),
+    })
+    damaged[field] = value
+    formal = strategy.make_observation_event(
+        "formal-fixture", code, date(2021, 1, 5), 10.0,
+    )
+    runtime.observation_events = {
+        damaged["relative_observation_id"]: damaged,
+        "formal-fixture": formal,
+    }
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_current_data", lambda: {code: current_record(11.0)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: [date(2021, 1, 5), date(2021, 1, 6)],
+        raising=False,
+    )
+
+    strategy.after_close(fake_context(current_date="2021-01-06"))
+
+    assert damaged["relative_observation_id"] not in runtime.observation_events
+    assert formal["outcomes"][1]["return"] == pytest.approx(0.1)
 
 
 def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(

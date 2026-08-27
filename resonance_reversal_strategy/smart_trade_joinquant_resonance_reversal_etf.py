@@ -487,6 +487,90 @@ def _validate_relative_observation_record(record):
             "relative_observation_id", "branch", "supporters", "build",
             "relative_observation_fingerprint"):
         record[field]
+    if _calendar_date(record["event_date"]) is None:
+        raise ValueError("relative observation event_date is required")
+    if not is_finite_positive(record["event_close"]):
+        raise ValueError("relative observation event_close must be finite positive")
+
+
+def _record_due_observation_outcomes_for_record(
+        resonance_id, record, closing_date, current_data):
+    event_date = _calendar_date(record["event_date"])
+    if event_date is None or closing_date <= event_date:
+        return
+    trade_days = get_trade_days(
+        start_date=event_date, end_date=closing_date,
+    )
+    elapsed_trade_dates = sorted({
+        trade_date
+        for trade_date in (_calendar_date(day) for day in trade_days)
+        if (trade_date is not None
+            and event_date < trade_date <= closing_date)
+    })
+    elapsed_sessions = len(elapsed_trade_dates)
+    due_horizons = due_observation_horizons(record, elapsed_sessions)
+    if not due_horizons:
+        return
+    for horizon in due_horizons:
+        due_date = elapsed_trade_dates[horizon - 1]
+        if horizon < elapsed_sessions:
+            outcome = {
+                "status": "HORIZON_MISSED",
+                "closing_date": due_date,
+                "closing_price": None,
+                "return": None,
+            }
+        else:
+            closing_price = get_execution_price(current_data, record["code"])
+            if closing_price is None:
+                outcome = {
+                    "status": "PRICE_UNAVAILABLE",
+                    "closing_date": due_date,
+                    "closing_price": None,
+                    "return": None,
+                }
+            else:
+                outcome = {
+                    "status": "RECORDED",
+                    "closing_date": due_date,
+                    "closing_price": closing_price,
+                    "return": closing_price / record["event_close"] - 1.0,
+                }
+                if record.get("observation_kind") == "RELATIVE_RESONANCE":
+                    direction = record["direction"]
+                    direction_value = (
+                        direction.value
+                        if isinstance(direction, TurnDirection) else direction
+                    )
+                    raw_return = outcome["return"]
+                    outcome["direction_adjusted_return"] = (
+                        raw_return
+                        if direction_value == TurnDirection.BUY_TURN.value
+                        else -raw_return
+                    )
+        record["outcomes"][horizon] = outcome
+        outcome_payload = {
+            "resonance_id": resonance_id,
+            "code": record["code"],
+            "event_date": record["event_date"],
+            "horizon": horizon,
+            "outcome": outcome,
+        }
+        if record.get("observation_kind") == "RELATIVE_RESONANCE":
+            outcome_payload.update({
+                "relative_observation_id": record["relative_observation_id"],
+                "observation_kind": record["observation_kind"],
+                "branch": record["branch"],
+                "direction": record["direction"],
+                "supporters": record["supporters"],
+                "build": record["build"],
+                "relative_observation_fingerprint": (
+                    record["relative_observation_fingerprint"]
+                ),
+            })
+        _emit_structured_log("observation_outcome", outcome_payload)
+    if _observation_record_is_terminal(record):
+        g.observation_events.pop(resonance_id, None)
 
 
 def _prune_terminal_observation_records():
@@ -647,91 +731,17 @@ def record_due_observation_outcomes(context, current_data):
         if _is_relative_observation_record(resonance_id):
             try:
                 _validate_relative_observation_record(record)
+                _record_due_observation_outcomes_for_record(
+                    resonance_id, record, closing_date, current_data,
+                )
             except Exception as error:
                 if _is_future_data_error(error):
                     raise
                 _discard_damaged_relative_observation(resonance_id, error)
-                continue
-        event_date = _calendar_date(record["event_date"])
-        if event_date is None or closing_date <= event_date:
-            continue
-        trade_days = get_trade_days(
-            start_date=event_date, end_date=closing_date,
-        )
-        elapsed_trade_dates = sorted({
-            trade_date
-            for trade_date in (_calendar_date(day) for day in trade_days)
-            if (trade_date is not None
-                and event_date < trade_date <= closing_date)
-        })
-        elapsed_sessions = len(elapsed_trade_dates)
-        due_horizons = due_observation_horizons(
-            record, elapsed_sessions,
-        )
-        if not due_horizons:
-            continue
-        for horizon in due_horizons:
-            due_date = elapsed_trade_dates[horizon - 1]
-            if horizon < elapsed_sessions:
-                outcome = {
-                    "status": "HORIZON_MISSED",
-                    "closing_date": due_date,
-                    "closing_price": None,
-                    "return": None,
-                }
-            else:
-                closing_price = get_execution_price(
-                    current_data, record["code"],
-                )
-                if closing_price is None:
-                    outcome = {
-                        "status": "PRICE_UNAVAILABLE",
-                        "closing_date": due_date,
-                        "closing_price": None,
-                        "return": None,
-                    }
-                else:
-                    outcome = {
-                        "status": "RECORDED",
-                        "closing_date": due_date,
-                        "closing_price": closing_price,
-                        "return": closing_price / record["event_close"] - 1.0,
-                    }
-                    if record.get("observation_kind") == "RELATIVE_RESONANCE":
-                        direction = record["direction"]
-                        direction_value = (
-                            direction.value
-                            if isinstance(direction, TurnDirection) else direction
-                        )
-                        raw_return = outcome["return"]
-                        outcome["direction_adjusted_return"] = (
-                            raw_return
-                            if direction_value == TurnDirection.BUY_TURN.value
-                            else -raw_return
-                        )
-            record["outcomes"][horizon] = outcome
-            outcome_payload = {
-                "resonance_id": resonance_id,
-                "code": record["code"],
-                "event_date": record["event_date"],
-                "horizon": horizon,
-                "outcome": outcome,
-            }
-            if record.get("observation_kind") == "RELATIVE_RESONANCE":
-                outcome_payload.update({
-                    "relative_observation_id": record["relative_observation_id"],
-                    "observation_kind": record["observation_kind"],
-                    "branch": record["branch"],
-                    "direction": record["direction"],
-                    "supporters": record["supporters"],
-                    "build": record["build"],
-                    "relative_observation_fingerprint": (
-                        record["relative_observation_fingerprint"]
-                    ),
-                })
-            _emit_structured_log("observation_outcome", outcome_payload)
-        if _observation_record_is_terminal(record):
-            g.observation_events.pop(resonance_id, None)
+        else:
+            _record_due_observation_outcomes_for_record(
+                resonance_id, record, closing_date, current_data,
+            )
 
 
 def ensure_runtime_state():
