@@ -652,10 +652,21 @@ def test_relative_candidate_rejects_opposite_or_incomplete_support(
         hard_directions, relative_directions):
     hard = event_book_for_directions(
         *hard_directions, event_date="2021-01-08",
+        expires_date="2021-01-08",
     )
     relative = relative_event_book_for_directions(
         *relative_directions, event_date="2021-01-08",
+        expires_date="2021-01-08",
     )
+    if hard_directions == ("BUY_TURN", "SELL_TURN", "NEUTRAL"):
+        support_only = event_book_for_directions(
+            "BUY_TURN", "NEUTRAL", "NEUTRAL", event_date="2021-01-08",
+            expires_date="2021-01-08",
+        )
+        assert strategy.build_relative_resonance_observation(
+            "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+            support_only, relative, date(2021, 1, 8), 10.0,
+        ) is not None
     assert strategy.build_relative_resonance_observation(
         "510300.XSHG", strategy.TurnDirection.BUY_TURN,
         hard, relative, date(2021, 1, 8), 10.0,
