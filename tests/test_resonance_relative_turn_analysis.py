@@ -33,13 +33,13 @@ FINGERPRINT = "f47d32b87be6d926"
 SESSION_DATES = {
     2019: ("2019-01-02", "2019-01-03", "2019-01-04", "2019-01-07", "2019-01-08",
            "2019-01-09", "2019-01-10", "2019-01-11", "2019-01-14", "2019-01-15",
-           "2019-01-16"),
+           "2019-01-16", "2019-01-17", "2019-01-18"),
     2020: ("2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07", "2020-01-08",
            "2020-01-09", "2020-01-10", "2020-01-13", "2020-01-14", "2020-01-15",
-           "2020-01-16"),
+           "2020-01-16", "2020-01-17", "2020-01-20"),
     2021: ("2020-12-31", "2021-01-04", "2021-01-05", "2021-01-06", "2021-01-07",
            "2021-01-08", "2021-01-11", "2021-01-12", "2021-01-13", "2021-01-14",
-           "2021-01-15"),
+           "2021-01-15", "2021-01-18", "2021-01-19"),
 }
 
 
@@ -84,7 +84,7 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         "HARD_BOLL_SOFT_OSC" if index % 2 else "SOFT_ALL_THREE"
     )
     code = code or ("510300.XSHG", "159915.XSHE", "518880.XSHG")[index % 3]
-    signal_date = (SESSION_DATES[year][index % 10 + 1]
+    signal_date = (SESSION_DATES[year][index % 10 + 2]
                    if year in SESSION_DATES else "2028-01-02")
     if branch == "HARD_BOLL_SOFT_OSC":
         supporters = ["BOLL", "RSI"]
@@ -93,9 +93,12 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         supporters = ["BOLL", "KDJ", "RSI"]
         source_map = {indicator: "RELATIVE" for indicator in supporters}
     date_map = {indicator: signal_date for indicator in supporters}
-    registration_timestamp = (
-        date.fromisoformat(signal_date) + timedelta(days=1)
-    ).isoformat() + "T09:35:00"
+    session_dates = SESSION_DATES.get(year)
+    if session_dates is not None:
+        registration_date = session_dates[session_dates.index(signal_date) + 1]
+    else:
+        registration_date = (date.fromisoformat(signal_date) + timedelta(days=1)).isoformat()
+    registration_timestamp = registration_date + "T09:35:00"
     return {
         "event": "relative_resonance_observation",
         "relative_observation_id": _relative_observation_id(
@@ -122,7 +125,8 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
 
 def make_outcome(record, horizon, value):
     adjusted = value if record["direction"] == "BUY_TURN" else -value
-    closing_date = (date.fromisoformat(record["signal_date"]) + timedelta(days=horizon)).isoformat()
+    registration_date = date.fromisoformat(record["_log_timestamp"][:10])
+    closing_date = (registration_date + timedelta(days=horizon)).isoformat()
     return {
         "event": "observation_outcome",
         "resonance_id": record["relative_observation_id"],
@@ -149,11 +153,17 @@ def make_outcome(record, horizon, value):
 def make_candidate_records():
     records = [make_initialized_record()]
     for year in sorted(SESSION_DATES):
-        for session_date in SESSION_DATES[year]:
+        session_dates = SESSION_DATES[year]
+        for index, session_date in enumerate(session_dates[1:], 1):
             records.append({
                 "event": "signal_snapshot", "build": BUILD,
+                "parameter_fingerprint": "e1227fbd8b4a884e",
+                "pool_fingerprint": "9123995edeb1ed84",
+                "event_logic_fingerprint": "1c0b8a22f48c97c3",
+                "relative_observation_fingerprint": FINGERPRINT,
                 "code": "510300.XSHG", "decision_date": session_date,
-                "valid": True, "_log_timestamp": session_date + "T09:35:00",
+                "signal_date": session_dates[index - 1], "valid": True,
+                "_log_timestamp": session_date + "T09:35:00",
             })
     for index in range(30):
         record = make_relative_record(index)
@@ -478,6 +488,74 @@ def test_weekend_previous_trading_session_is_legal_with_snapshot_evidence():
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
     assert report["continue_candidate"] is True
+
+
+def _session_snapshot(decision_date, signal_date, timestamp=None):
+    return {
+        "event": "signal_snapshot", "build": BUILD,
+        "parameter_fingerprint": "e1227fbd8b4a884e",
+        "pool_fingerprint": "9123995edeb1ed84",
+        "event_logic_fingerprint": "1c0b8a22f48c97c3",
+        "relative_observation_fingerprint": FINGERPRINT,
+        "code": "510300.XSHG", "decision_date": decision_date,
+        "signal_date": signal_date, "valid": True,
+        "_log_timestamp": timestamp or decision_date + "T09:35:00",
+    }
+
+
+def test_relative_support_window_uses_explicit_snapshot_decision_to_signal_mapping():
+    registration = make_relative_record(0)
+    registration["signal_date"] = registration["expires_date"] = "2019-01-08"
+    registration["supporter_event_dates"] = {
+        "BOLL": "2019-01-04", "KDJ": "2019-01-08", "RSI": "2019-01-08",
+    }
+    registration["_log_timestamp"] = "2019-01-11T09:35:00"
+    _replace_relative_identity(registration, [])
+    candidate = [
+        make_initialized_record(),
+        _session_snapshot("2019-01-04", "2019-01-03"),
+        _session_snapshot("2019-01-11", "2019-01-08"),
+        registration,
+    ]
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert any("candidate supporter window unverifiable" in error
+               for error in report["data_quality"]["errors"])
+
+    registration["supporter_event_dates"] = {
+        "BOLL": "2019-01-07", "KDJ": "2019-01-08", "RSI": "2019-01-08",
+    }
+    _replace_relative_identity(registration, [])
+    candidate.append(_session_snapshot("2019-01-08", "2019-01-07"))
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert not any("candidate supporter window" in error
+                   or "invalid candidate supporter trading-session window" in error
+                   for error in report["data_quality"]["errors"])
+    assert not any("relative registration session evidence mismatch" in error
+                   for error in report["data_quality"]["errors"])
+
+
+def test_candidate_session_snapshot_requires_frozen_identity_time_and_consistency():
+    candidate = make_candidate_records()
+    malformed = next(record for record in candidate
+                     if record.get("event") == "signal_snapshot")
+    malformed.pop("relative_observation_fingerprint")
+    malformed["_log_timestamp"] = malformed["decision_date"] + "T15:30:00"
+    conflicting = _session_snapshot("2019-01-08", "2019-01-04")
+    candidate.append(conflicting)
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    errors = report["data_quality"]["errors"]
+    assert any("candidate signal_snapshot relative_observation_fingerprint mismatch" in error
+               for error in errors)
+    assert any("candidate signal_snapshot log timestamp must equal 09:35" in error
+               for error in errors)
+    assert any("conflicting candidate signal_snapshot session evidence" in error
+               for error in errors)
 
 
 def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
