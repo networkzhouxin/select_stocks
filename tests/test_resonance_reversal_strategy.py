@@ -949,6 +949,81 @@ def test_build_signal_snapshot_keeps_observations_out_of_event_builder(
     assert captured[0][1:] == (signal_date, signal_date + pd.offsets.BDay(1))
 
 
+@pytest.mark.parametrize("invalid_atr", [np.nan, np.inf, -np.inf, 0.0])
+def test_invalid_current_atr_blocks_only_new_buy_not_existing_signal_exit(
+        monkeypatch, invalid_atr):
+    held, candidate = "510300.XSHG", "159915.XSHE"
+    params = strategy.get_default_params()
+    price_frame = make_ohlcv_frame(params["lookback_days"])
+    indicators = strategy.build_indicator_frame(price_frame, params)
+    indicators.loc[indicators.index[-1], "atr14"] = invalid_atr
+    signal_date = "2021-01-05"
+    event_books = iter([
+        event_book_for_directions(
+            "SELL_TURN", "SELL_TURN", "NEUTRAL", signal_date,
+        ),
+        event_book_for_directions(
+            "BUY_TURN", "BUY_TURN", "NEUTRAL", signal_date,
+        ),
+    ])
+    monkeypatch.setattr(
+        strategy, "load_signal_price_frame", lambda *args: price_frame,
+    )
+    monkeypatch.setattr(
+        strategy, "build_indicator_frame", lambda *args: indicators.copy(),
+    )
+    monkeypatch.setattr(
+        strategy, "collect_latest_events", lambda *args: next(event_books),
+    )
+
+    sell_snapshot = strategy.build_signal_snapshot(
+        held, signal_date, params, "2021-01-06",
+    )
+    buy_snapshot = strategy.build_signal_snapshot(
+        candidate, signal_date, params, "2021-01-06",
+    )
+
+    assert sell_snapshot["valid"] is True
+    assert buy_snapshot["valid"] is True
+    assert sell_snapshot["entry_atr"] is None
+    assert buy_snapshot["entry_atr"] is None
+
+    state = strategy.make_position_state(
+        pd.Timestamp("2021-01-04").date(), 1.0, 10.0,
+    )
+    runtime = runtime_state(max_holdings=2, position_states={held: state})
+    context = fake_context(positions={held: fake_position(100)})
+    current_data = {
+        held: current_record(10.0), candidate: current_record(5.0),
+    }
+    submitted_sells = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_sell",
+        lambda context_arg, code, reason, trigger: submitted_sells.append(
+            (code, reason, trigger)
+        ) or strategy.OrderOutcome.FILLED,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: pytest.fail("invalid current ATR must block a new buy"),
+    )
+
+    sell_attempts = strategy.run_signal_exits(
+        context, current_data, {held: sell_snapshot},
+    )
+    buy_results = strategy.run_signal_buys(
+        context, current_data, {candidate: buy_snapshot},
+    )
+
+    assert sell_attempts == {held}
+    assert submitted_sells == [
+        (held, strategy.ExitReason.SIGNAL_EXIT, pytest.approx(20.0)),
+    ]
+    assert buy_results == []
+    assert candidate not in runtime.daily_attempted_buys
+
+
 def test_build_signal_snapshots_uses_trading_calendar_for_next_session(
         monkeypatch):
     calendar_calls = []
@@ -1070,6 +1145,26 @@ def test_platform_position_tradability_and_execution_price_boundaries(
         assert strategy.get_execution_price(current_data, code) == pytest.approx(
             expected_price
         )
+
+
+def test_nonfinite_risk_inputs_and_execution_prices_are_rejected():
+    code = "510300.XSHG"
+    for price in (np.inf, -np.inf, np.nan):
+        assert strategy.get_execution_price(
+            {code: current_record(price)}, code,
+        ) is None
+
+    params = strategy.get_default_params()
+    for anchor, entry_atr in (
+        (np.inf, 1.0), (-np.inf, 1.0),
+        (100.0, np.inf), (100.0, -np.inf),
+    ):
+        assert strategy.calc_stop_state(anchor, entry_atr, params) is None
+
+    state = strategy.make_position_state("2021-01-05", 1.0, 100.0)
+    for closing_price in (np.inf, -np.inf, np.nan):
+        strategy.update_highest_close_anchor(state, closing_price)
+    assert state["highest_close_anchor"] == pytest.approx(100.0)
 
 
 def test_after_close_cleans_only_actual_flats_and_updates_held_close_anchor(
@@ -1396,6 +1491,58 @@ def test_paused_buy_candidate_does_not_consume_slot_and_backfills(monkeypatch):
     assert submitted == [backfill]
     assert runtime.daily_attempted_buys == {backfill}
     assert len(runtime.processed_resonance_ids) == 1
+
+
+def test_refreshed_paused_buy_rolls_back_marks_and_backfills(monkeypatch):
+    refreshed_paused, backfill = "159915.XSHE", "510300.XSHG"
+    runtime = runtime_state(max_holdings=1)
+    context = fake_context()
+    initial_current_data = {
+        refreshed_paused: current_record(5.0),
+        backfill: current_record(10.0),
+    }
+    refreshed_current_data = {
+        refreshed_paused: current_record(5.0, paused=True),
+        backfill: current_record(10.0),
+    }
+    submitted = []
+
+    def fill_backfill(code, target_value):
+        submitted.append(code)
+        context.portfolio.positions[code] = fake_position(100)
+        return types.SimpleNamespace(amount=100, filled=100)
+
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_current_data", lambda: refreshed_current_data,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target_value", fill_backfill, raising=False,
+    )
+    snapshots = {
+        refreshed_paused: resonance_snapshot(refreshed_paused),
+        backfill: resonance_snapshot(backfill),
+    }
+    backfill_decision = strategy.build_resonance_decision(
+        backfill, strategy.TurnDirection.BUY_TURN,
+        snapshots[backfill]["event_book"], snapshots[backfill]["signal_date"],
+    )
+
+    results = strategy.run_signal_buys(
+        context, initial_current_data, snapshots,
+    )
+
+    assert results == [
+        (refreshed_paused, strategy.OrderOutcome.PAUSED),
+        (backfill, strategy.OrderOutcome.FILLED),
+    ]
+    assert submitted == [backfill]
+    assert runtime.daily_attempted_buys == {backfill}
+    assert runtime.processed_resonance_ids == {
+        backfill_decision["resonance_id"]: backfill_decision["expires_date"],
+    }
+    assert set(runtime.position_states) == {backfill}
 
 
 def test_unknown_buy_candidate_consumes_slot_without_backfill(monkeypatch):

@@ -181,6 +181,14 @@ import numpy as np
 import pandas as pd
 
 
+def is_finite_positive(value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(numeric) and numeric > 0)
+
+
 def load_signal_price_frame(code, prev_date, lookback_days):
     return get_price(
         code,
@@ -209,12 +217,19 @@ def build_signal_snapshot(code, prev_date, params, next_trade_date):
     indicators = build_indicator_frame(price_frame, params)
     latest = indicators.iloc[-1]
     required = list(TRADE_INDICATOR_COLUMNS)
-    if latest[required].isna().any() or latest["atr14"] <= 0:
+    signal_required = [name for name in required if name != "atr14"]
+    if latest[signal_required].isna().any():
         return {
             "code": code,
             "valid": False,
             "reason": "INVALID_TRADE_INDICATORS",
         }
+
+    entry_atr = (
+        float(latest["atr14"])
+        if is_finite_positive(latest["atr14"])
+        else None
+    )
 
     event_book = collect_latest_events(
         indicators, prev_date, next_trade_date,
@@ -224,7 +239,7 @@ def build_signal_snapshot(code, prev_date, params, next_trade_date):
         "valid": True,
         "signal_date": prev_date,
         "close": float(latest["close"]),
-        "entry_atr": float(latest["atr14"]),
+        "entry_atr": entry_atr,
         "event_book": event_book,
         "trade_values": latest[required].to_dict(),
         "observation_values": latest[list(OBSERVATION_COLUMNS)].to_dict(),
@@ -250,8 +265,8 @@ def calc_buy_target_value(total_value, available_cash, params):
 
 
 def calc_stop_state(highest_close_anchor, entry_atr, params):
-    if (highest_close_anchor <= 0 or pd.isna(highest_close_anchor)
-            or entry_atr <= 0 or pd.isna(entry_atr)):
+    if (not is_finite_positive(highest_close_anchor)
+            or not is_finite_positive(entry_atr)):
         return None
     raw_pct = params["atr_multiplier"] * entry_atr / highest_close_anchor
     stop_pct = min(params["stop_cap"], max(params["stop_floor"], raw_pct))
@@ -294,7 +309,7 @@ def get_execution_price(current_data, code):
     if record is None:
         return None
     price = getattr(record, "last_price", None)
-    if price is None or pd.isna(price) or price <= 0:
+    if not is_finite_positive(price):
         return None
     return float(price)
 
@@ -355,7 +370,9 @@ def submit_buy(context, code, snapshot, decision):
     order = None
     target_amount = None
 
-    if tradability is Tradability.TRADEABLE and execution_price is not None:
+    if (tradability is Tradability.TRADEABLE
+            and execution_price is not None
+            and is_finite_positive(snapshot.get("entry_atr"))):
         target_value = calc_buy_target_value(
             context.portfolio.total_value,
             context.portfolio.available_cash,
@@ -414,7 +431,7 @@ def retry_pending_exits(context, current_data):
 
 
 def update_highest_close_anchor(position_state, closing_price):
-    if closing_price is not None and closing_price > 0:
+    if is_finite_positive(closing_price):
         position_state["highest_close_anchor"] = max(
             position_state["highest_close_anchor"], float(closing_price),
         )
@@ -794,7 +811,8 @@ def mark_resonance_processed(processed, decision):
 def collect_buy_decisions(snapshots, actual_positions):
     decisions = []
     for code, snapshot in snapshots.items():
-        if not snapshot.get("valid"):
+        if (not snapshot.get("valid")
+                or not is_finite_positive(snapshot.get("entry_atr"))):
             continue
         decision = build_resonance_decision(
             code, TurnDirection.BUY_TURN,
@@ -902,5 +920,9 @@ def run_signal_buys(context, current_data, snapshots):
             continue
         outcome = submit_buy(context, code, snapshots[code], decision)
         results.append((code, outcome))
+        if outcome is OrderOutcome.PAUSED:
+            g.processed_resonance_ids.pop(decision["resonance_id"], None)
+            g.daily_attempted_buys.discard(code)
+            continue
         remaining_slots -= 1
     return results
