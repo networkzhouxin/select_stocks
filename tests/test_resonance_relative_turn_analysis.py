@@ -261,9 +261,10 @@ def test_load_records_skips_bad_lines_and_preserves_source_file(tmp_path):
 
 def test_parser_keeps_truncated_known_structured_event_as_quality_sentinel():
     parsed = analyzer.parse_joinquant_log_line(
-        '2021-01-05 09:35:00 - INFO - {"event":"relative_resonance_observation",', 9,
+        '2021-01-05 09:35:00 - INFO - {"event":"signal_snapshot",', 9,
     )
 
+    assert parsed is not None
     assert parsed["_parse_error"].startswith("invalid structured JSON:")
     assert parsed["_ordinal"] == 9
 
@@ -274,7 +275,7 @@ def test_cli_reports_truncated_known_structured_line_without_mutating_input(tmp_
     output_path = tmp_path / "report.json"
     _write_log(candidate_path, make_candidate_records())
     with candidate_path.open("a", encoding="utf-8") as stream:
-        stream.write('\n2021-01-05 09:35:00 - INFO - {"event":"observation_outcome",')
+        stream.write('\n2021-01-05 09:35:00 - INFO - {"event":"signal_snapshot",')
     original = candidate_path.read_bytes()
     _write_log(baseline_path, make_baseline_records())
 

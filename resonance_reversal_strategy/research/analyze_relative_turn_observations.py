@@ -39,7 +39,7 @@ STRICT_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 STRUCTURED_EVENT_TOKENS = frozenset((
     "relative_resonance_observation", "observation_outcome",
     "strategy_initialized", "resonance_decision", "order_transition",
-    "portfolio_summary",
+    "portfolio_summary", "signal_snapshot",
 ))
 
 
