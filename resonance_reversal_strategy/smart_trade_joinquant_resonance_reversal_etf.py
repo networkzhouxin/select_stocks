@@ -145,7 +145,8 @@ def calc_buy_target_value(total_value, available_cash, params):
 
 
 def calc_stop_state(highest_close_anchor, entry_atr, params):
-    if highest_close_anchor <= 0 or entry_atr <= 0 or pd.isna(entry_atr):
+    if (highest_close_anchor <= 0 or pd.isna(highest_close_anchor)
+            or entry_atr <= 0 or pd.isna(entry_atr)):
         return None
     raw_pct = params["atr_multiplier"] * entry_atr / highest_close_anchor
     stop_pct = min(params["stop_cap"], max(params["stop_floor"], raw_pct))

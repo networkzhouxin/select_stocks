@@ -535,6 +535,12 @@ def test_atr_stop_clamps_percentage(anchor, entry_atr, expected_pct):
     assert result["stop_price"] == pytest.approx(anchor * (1 - expected_pct))
 
 
+def test_atr_stop_rejects_nan_highest_close_anchor():
+    assert strategy.calc_stop_state(
+        float("nan"), 4.0, strategy.get_default_params(),
+    ) is None
+
+
 def test_highest_anchor_only_moves_up_on_close_and_entry_atr_stays_frozen():
     state = strategy.make_position_state("2021-01-05", 2.0, 100.0)
 

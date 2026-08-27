@@ -41,3 +41,13 @@ No boolean or mode parameter was added. The only state cleanup predicate is the 
 
 - No JoinQuant runtime/backtest or order submission was started: Task 5 intentionally supplies helpers only.
 - The buy-date comparison relies on the supplied decision dates; the scheduled trading entrypoint remains responsible for trading-session context, as required.
+
+## Fix Round 1: Reject NaN Highest-Close Anchor
+
+- Finding addressed: `calc_stop_state` previously allowed `highest_close_anchor=NaN` through the nonpositive guard, returning a state with `raw_pct` and `stop_price` equal to `NaN`.
+- Scope: only the existing invalid-input guard now also checks `pd.isna(highest_close_anchor)`; all valid-anchor arithmetic, ATR handling, clamping, and public interfaces remain unchanged.
+- RED: `python -m pytest tests/test_resonance_reversal_strategy.py -k "atr_stop_rejects_nan_highest_close_anchor" -v` selected 1 test and failed as expected: the old code returned `{'raw_pct': nan, 'stop_pct': 0.05, 'stop_price': nan}` instead of `None`.
+- GREEN focused: `python -m pytest tests/test_resonance_reversal_strategy.py -k "atr_stop" -v` passed 4/4 in 0.38s, including all three pre-existing clamp cases and the NaN-anchor case.
+- Dedicated suite: `python -m pytest tests/test_resonance_reversal_strategy.py -v` passed 51/51 in 0.43s.
+- Compile/static: `python -m py_compile resonance_reversal_strategy\\smart_trade_joinquant_resonance_reversal_etf.py` exited 0; `git diff --check` exited 0 (only Git LF-to-CRLF warnings).
+- Control flow: the new `pd.isna(highest_close_anchor)` disjunct shares the existing `return None` invalid-stop path. It adds no flag, caller, order, resource cleanup, or alternate valid-input branch.
