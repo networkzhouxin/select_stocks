@@ -41,6 +41,11 @@ STRUCTURED_EVENT_TOKENS = frozenset((
     "strategy_initialized", "resonance_decision", "order_transition",
     "portfolio_summary", "signal_snapshot",
 ))
+STRUCTURED_EVENT_FIELD_RE = re.compile(
+    r'"event"\s*:\s*"(?:%s)"' % "|".join(
+        re.escape(token) for token in sorted(STRUCTURED_EVENT_TOKENS)
+    ),
+)
 
 
 def _reject_json_constant(value):
@@ -57,7 +62,7 @@ def parse_joinquant_log_line(line, ordinal):
     try:
         payload = json.loads(text[payload_start:], parse_constant=_reject_json_constant)
     except json.JSONDecodeError as exc:
-        if match and any(token in text for token in STRUCTURED_EVENT_TOKENS):
+        if match and STRUCTURED_EVENT_FIELD_RE.search(text[payload_start:]):
             payload = {"_parse_error": "invalid structured JSON: %s" % exc.msg}
         else:
             return None

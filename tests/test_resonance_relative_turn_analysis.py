@@ -269,6 +269,21 @@ def test_parser_keeps_truncated_known_structured_event_as_quality_sentinel():
     assert parsed["_ordinal"] == 9
 
 
+def test_parser_matches_known_event_field_not_diagnostic_substrings():
+    truncated = '2021-01-05 09:35:00 - INFO - { "event" : "signal_snapshot",'
+    escaped = truncated.replace('"', "&quot;")
+
+    assert analyzer.parse_joinquant_log_line(
+        '2021-01-05 09:35:00 - INFO - diagnostic mentions signal_snapshot {not-json', 10,
+    ) is None
+    assert analyzer.parse_joinquant_log_line(truncated, 11)["_parse_error"].startswith(
+        "invalid structured JSON:",
+    )
+    assert analyzer.parse_joinquant_log_line(escaped, 12)["_parse_error"].startswith(
+        "invalid structured JSON:",
+    )
+
+
 def test_cli_reports_truncated_known_structured_line_without_mutating_input(tmp_path):
     candidate_path = tmp_path / "candidate.log"
     baseline_path = tmp_path / "baseline.log"
