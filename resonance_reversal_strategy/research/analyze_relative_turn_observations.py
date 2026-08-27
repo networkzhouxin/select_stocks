@@ -8,6 +8,7 @@ import os
 import pathlib
 import re
 import statistics
+import sys
 import tempfile
 from collections import Counter
 from datetime import date, datetime
@@ -66,13 +67,17 @@ def load_log_records(paths):
     """Read explicit log paths without changing the input files."""
     records = []
     ordinal = 0
-    for source_index, path_value in enumerate(paths):
+    normalized_paths = sorted(
+        (pathlib.Path(path_value).expanduser().resolve(strict=True) for path_value in paths),
+        key=lambda path: str(path),
+    )
+    for source_index, path_value in enumerate(normalized_paths):
         with pathlib.Path(path_value).open("r", encoding="utf-8-sig") as stream:
             for line_number, line in enumerate(stream, 1):
                 ordinal += 1
                 record = parse_joinquant_log_line(line, ordinal)
                 if record is not None:
-                    record["_source_path"] = str(pathlib.Path(path_value).resolve())
+                    record["_source_path"] = str(path_value)
                     record["_source_index"] = source_index
                     record["_source_line"] = line_number
                     records.append(record)
@@ -113,6 +118,8 @@ def _is_relative_record(record):
         or (record.get("event") == "observation_outcome" and (
             record.get("relative_observation_id")
             or record.get("observation_kind") == "RELATIVE_RESONANCE"
+            or (isinstance(record.get("resonance_id"), str)
+                and record.get("resonance_id").startswith("RELATIVE:"))
         ))
     )
 
@@ -123,6 +130,26 @@ def _matching_relative_record(record):
         and record.get("build") == CANDIDATE_BUILD
         and record.get("relative_observation_fingerprint") == RELATIVE_OBSERVATION_FINGERPRINT
     )
+
+
+def _audit_record_namespace(record, errors):
+    """Keep RELATIVE IDs out of formal-record classification."""
+    relative_id = record.get("relative_observation_id")
+    kind = record.get("observation_kind")
+    resonance_id = record.get("resonance_id")
+    relative_resonance = isinstance(resonance_id, str) and resonance_id.startswith("RELATIVE:")
+    relative_marker = relative_id is not None or kind == "RELATIVE_RESONANCE"
+    if relative_id is not None and (
+            not isinstance(relative_id, str) or not relative_id.startswith("RELATIVE:")):
+        errors.append("invalid relative observation namespace: %r" % relative_id)
+    if relative_resonance and not relative_marker:
+        errors.append("relative namespace record missing relative markers: %s" % resonance_id)
+    if kind == "RELATIVE_RESONANCE" and not isinstance(relative_id, str):
+        errors.append("relative namespace record missing relative observation id")
+    if relative_marker and relative_resonance and relative_id != resonance_id:
+        errors.append("relative namespace identity conflict: %s" % resonance_id)
+    if relative_marker and kind not in (None, "RELATIVE_RESONANCE"):
+        errors.append("relative namespace kind conflict: %r" % kind)
 
 
 def _text(record, field, label, errors):
@@ -165,7 +192,8 @@ def _validate_support_contract(record, prefix, signal_date, errors):
                     and supported_date > signal_date):
                 errors.append("%s supporter date after signal date" % prefix)
     if (not isinstance(sources, dict) or set(sources) != support_set
-            or not set(sources.values()).issubset(SOURCES)):
+            or any(type(value) is not str or value not in SOURCES
+                   for value in sources.values())):
         errors.append("invalid %s hard_or_relative_source_by_indicator" % prefix)
         return
     branch = record.get("branch")
@@ -377,7 +405,7 @@ def _validate_baseline(records, errors):
             else:
                 registrations[resonance_id] = record
     for record in records:
-        if record.get("event") != "observation_outcome" or record.get("relative_observation_id"):
+        if record.get("event") != "observation_outcome" or _is_relative_record(record):
             continue
         resonance_id = _text(record, "resonance_id", "formal outcome resonance id", errors)
         horizon = record.get("horizon")
@@ -510,11 +538,8 @@ def extract_final_asset(records):
 
 def _sort_key(record):
     return (str(record.get("_log_timestamp") or "9999-12-31T23:59:59"),
-            str(record.get("signal_date") or record.get("event_date") or ""),
-            str(record.get("relative_observation_id") or record.get("resonance_id") or ""),
-            str(record.get("horizon") or ""),
-            json.dumps({key: value for key, value in record.items() if not key.startswith("_")},
-                       sort_keys=True, ensure_ascii=False, default=repr))
+            str(record.get("_source_path") or ""),
+            int(record.get("_source_line") or record.get("_input_index") or 0))
 
 
 def _grouped_summaries(values_by_group, errors=None):
@@ -536,8 +561,32 @@ def _formal_five_day_returns(registrations, outcomes):
 
 
 def _normalized_timeline(records):
-    """Stable complete-timestamp ordering; tie-break only on record content."""
-    return sorted((dict(record) for record in records), key=_sort_key)
+    """Preserve source-line order; only canonical source paths break file ties."""
+    normalized = []
+    for index, record in enumerate(records):
+        item = dict(record)
+        item.setdefault("_input_index", index)
+        normalized.append(item)
+    return sorted(normalized, key=_sort_key)
+
+
+def _has_cross_file_filled_timestamp(records, role, errors):
+    sources_by_timestamp = {}
+    for record in records:
+        if record.get("event") != "order_transition" or record.get("outcome") != "FILLED":
+            continue
+        source = record.get("_source_path")
+        timestamp = record.get("_log_timestamp")
+        if source and timestamp:
+            sources_by_timestamp.setdefault(timestamp, set()).add(source)
+    ambiguous = False
+    for timestamp, sources in sorted(sources_by_timestamp.items()):
+        if len(sources) > 1:
+            ambiguous = True
+            errors.append("ambiguous filled order timestamp across files in %s: %s" % (
+                role, timestamp,
+            ))
+    return ambiguous
 
 
 def analyze_records(candidate_records, baseline_records):
@@ -548,6 +597,13 @@ def analyze_records(candidate_records, baseline_records):
     for record in candidate_records + baseline_records:
         if record.get("_parse_error"):
             errors.append("parse error: %s" % record["_parse_error"])
+        _audit_record_namespace(record, errors)
+    candidate_order_ambiguous = _has_cross_file_filled_timestamp(
+        candidate_records, "candidate", errors,
+    )
+    baseline_order_ambiguous = _has_cross_file_filled_timestamp(
+        baseline_records, "baseline", errors,
+    )
     _validate_candidate_initializations(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
@@ -665,7 +721,8 @@ def analyze_records(candidate_records, baseline_records):
     year_2021 = summarize_returns(five_day_2021, errors, "year_2021_horizon_5")
     formal_horizon_5 = summarize_returns(
         _formal_five_day_returns(formal_registrations, formal_outcomes), errors, "formal_horizon_5")
-    formal_order_path_exact = (len(candidate_path) == BASELINE_FILLED_COUNT
+    formal_order_path_exact = (not candidate_order_ambiguous and not baseline_order_ambiguous
+                               and len(candidate_path) == BASELINE_FILLED_COUNT
                                and len(baseline_path) == BASELINE_FILLED_COUNT
                                and candidate_path == baseline_path)
     final_asset_exact = (candidate_asset is not None and baseline_asset is not None
@@ -716,7 +773,7 @@ def analyze_records(candidate_records, baseline_records):
 def _normalized_input_paths(paths):
     normalized = []
     for path_value in paths:
-        path = pathlib.Path(path_value).expanduser().resolve(strict=True)
+        path = pathlib.Path(path_value).expanduser().resolve(strict=False)
         if not path.is_file():
             raise ValueError("input log must be a file: %s" % path)
         normalized.append(path)
@@ -738,15 +795,21 @@ def main(argv=None):
     parser.add_argument("--baseline-log", action="append", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
-    candidate_paths = _normalized_input_paths(args.candidate_log)
-    baseline_paths = _normalized_input_paths(args.baseline_log)
-    output_path = pathlib.Path(args.output).expanduser().resolve(strict=False)
-    if _output_conflicts_with_input(output_path, candidate_paths + baseline_paths):
-        raise ValueError("output path must not match an input log")
-    report = analyze_records(load_log_records(candidate_paths), load_log_records(baseline_paths))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        candidate_paths = _normalized_input_paths(args.candidate_log)
+        baseline_paths = _normalized_input_paths(args.baseline_log)
+        output_path = pathlib.Path(args.output).expanduser().resolve(strict=False)
+        if _output_conflicts_with_input(output_path, candidate_paths + baseline_paths):
+            raise ValueError("output path must not match an input log")
+        candidate_records = load_log_records(candidate_paths)
+        baseline_records = load_log_records(baseline_paths)
+    except (OSError, ValueError) as exc:
+        print("input error: %s" % exc, file=sys.stderr)
+        return 2
+    report = analyze_records(candidate_records, baseline_records)
     temporary_path = None
     try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=output_path.parent,
                 prefix=".%s." % output_path.name, suffix=".tmp", delete=False) as stream:
@@ -755,10 +818,11 @@ def main(argv=None):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, output_path)
-    except Exception:
+    except OSError as exc:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
-        raise
+        print("output error: %s" % exc, file=sys.stderr)
+        return 2
     return 0
 
 

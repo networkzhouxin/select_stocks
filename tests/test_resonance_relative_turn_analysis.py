@@ -482,7 +482,7 @@ def test_parser_rejects_nonfinite_json_constants_and_records_reject_bad_fields()
     assert any("invalid filled order" in error for error in errors)
 
 
-def test_cli_rejects_output_alias_of_an_input_without_overwriting(tmp_path):
+def test_cli_rejects_output_alias_of_an_input_without_overwriting(tmp_path, capsys):
     candidate_path = tmp_path / "candidate.log"
     baseline_path = tmp_path / "baseline.log"
     candidate_path.write_text("noise", encoding="utf-8")
@@ -491,13 +491,14 @@ def test_cli_rejects_output_alias_of_an_input_without_overwriting(tmp_path):
     alias_path = tmp_path / "candidate-alias.log"
     os.link(candidate_path, alias_path)
 
-    with pytest.raises(ValueError, match="output path must not match an input log"):
-        analyzer.main([
-            "--candidate-log", str(candidate_path),
-            "--baseline-log", str(baseline_path),
-            "--output", str(alias_path),
-        ])
+    status = analyzer.main([
+        "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path),
+        "--output", str(alias_path),
+    ])
 
+    assert status == 2
+    assert capsys.readouterr().err == "input error: output path must not match an input log\n"
     assert candidate_path.read_bytes() == before
     assert alias_path.read_bytes() == before
 
@@ -600,7 +601,7 @@ def _write_log(path, records):
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_cli_atomic_write_keeps_existing_output_when_replace_fails(tmp_path):
+def test_cli_atomic_write_keeps_existing_output_when_replace_fails(tmp_path, capsys):
     candidate_path = tmp_path / "candidate.log"
     baseline_path = tmp_path / "baseline.log"
     output_path = tmp_path / "report.json"
@@ -609,12 +610,13 @@ def test_cli_atomic_write_keeps_existing_output_when_replace_fails(tmp_path):
     output_path.write_bytes(b"old output")
 
     with mock.patch.object(analyzer.os, "replace", side_effect=OSError("disk fault")):
-        with pytest.raises(OSError, match="disk fault"):
-            analyzer.main([
-                "--candidate-log", str(candidate_path),
-                "--baseline-log", str(baseline_path), "--output", str(output_path),
-            ])
+        status = analyzer.main([
+            "--candidate-log", str(candidate_path),
+            "--baseline-log", str(baseline_path), "--output", str(output_path),
+        ])
 
+    assert status == 2
+    assert capsys.readouterr().err == "output error: disk fault\n"
     assert output_path.read_bytes() == b"old output"
     assert not list(tmp_path.glob(".report.json.*"))
 
@@ -765,3 +767,68 @@ def test_nonfinite_parse_datetime_sort_and_positive_contribution_overflow_are_qu
                for error in report["data_quality"]["errors"])
     assert report["metrics"]["max_positive_contribution_by_etf"] is None
     assert json.dumps(report, allow_nan=False)
+
+
+def test_same_second_baseline_filled_records_preserve_line_order_and_detect_inverse_path():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    baseline_orders = [record for record in baseline if record.get("event") == "order_transition"]
+    baseline[:] = ([record for record in baseline if record.get("event") != "order_transition"]
+                   + list(reversed(baseline_orders)))
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["gates"]["formal_order_path_exact"] is False
+
+
+def test_loader_uses_canonical_file_order_and_flags_same_second_cross_file_ambiguity(tmp_path):
+    first_path = tmp_path / "a.log"
+    second_path = tmp_path / "z.log"
+    first_path.write_text('2021-01-05 09:35:00 - {"event":"order_transition","outcome":"FILLED"}', encoding="utf-8")
+    second_path.write_text('2021-01-05 09:35:00 - {"event":"order_transition","outcome":"FILLED"}', encoding="utf-8")
+
+    loaded = analyzer.load_log_records([second_path, first_path])
+    report = analyzer.analyze_records(loaded, [])
+
+    assert [pathlib.Path(record["_source_path"]).name for record in loaded] == ["a.log", "z.log"]
+    assert any("ambiguous filled order timestamp across files" in error
+               for error in report["data_quality"]["errors"])
+    assert report["gates"]["formal_order_path_exact"] is False
+
+
+def test_relative_namespace_without_relative_markers_is_a_quality_error():
+    lost = {
+        "event": "observation_outcome", "resonance_id": "RELATIVE:lost",
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 5,
+        "outcome": {"status": "RECORDED", "return": 0.01},
+    }
+
+    report = analyzer.analyze_records([make_initialized_record(), lost], [])
+
+    assert any("relative namespace record missing relative markers" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_support_source_json_container_is_a_quality_error_not_an_exception():
+    candidate = make_relative_record(0)
+    candidate["hard_or_relative_source_by_indicator"]["BOLL"] = ["HARD"]
+
+    report = analyzer.analyze_records([make_initialized_record(), candidate], [])
+
+    assert any("invalid candidate hard_or_relative_source_by_indicator" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_cli_io_failures_return_stable_nonzero_without_traceback(tmp_path, capsys):
+    missing = tmp_path / "missing.log"
+    output = tmp_path / "report.json"
+
+    status = analyzer.main([
+        "--candidate-log", str(missing), "--baseline-log", str(missing), "--output", str(output),
+    ])
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert captured.err == "input error: input log must be a file: %s\n" % missing.resolve()
+    assert "Traceback" not in captured.err
+    assert not output.exists()
