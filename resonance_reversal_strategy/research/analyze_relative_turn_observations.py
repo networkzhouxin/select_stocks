@@ -387,6 +387,26 @@ def _validate_candidate_initializations(records, errors):
     return valid
 
 
+def _validate_baseline_initializations(records, errors):
+    initialized = [record for record in records if record.get("event") == "strategy_initialized"]
+    if not initialized:
+        errors.append("missing baseline strategy_initialized record")
+        return False
+    expected = {
+        "build": BASELINE_BUILD,
+        "parameter_fingerprint": PARAMETER_FINGERPRINT,
+        "pool_fingerprint": POOL_FINGERPRINT,
+        "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
+    }
+    valid = True
+    for record in initialized:
+        for field, expected_value in expected.items():
+            if record.get(field) != expected_value:
+                errors.append("baseline initialization %s mismatch: %r" % (field, record.get(field)))
+                valid = False
+    return valid
+
+
 def _validated_session_calendar(records, role, initialization_valid, errors):
     """Use unconditional after-close portfolio summaries as session evidence."""
     if not initialization_valid:
@@ -425,6 +445,46 @@ def _validated_session_calendar(records, role, initialization_valid, errors):
     if not evidence:
         errors.append("missing %s portfolio_summary session evidence" % role)
     return tuple(sorted(evidence))
+
+
+def _common_session_calendar(candidate_calendar, baseline_calendar, errors):
+    if candidate_calendar != baseline_calendar:
+        errors.append("candidate/baseline session calendar dates differ")
+        return ()
+    return candidate_calendar
+
+
+def _validate_session_evidence(records, role, calendar, errors):
+    """Evidence may expose a missing summary, but cannot create a session."""
+    dates = set()
+    for record in records:
+        event = record.get("event")
+        if role == "candidate" and event == "signal_snapshot":
+            try:
+                decision_date = _calendar_date(record.get("decision_date"))
+            except ValueError:
+                decision_date = None
+            if decision_date is not None:
+                dates.add(decision_date)
+        if event == "order_transition" and record.get("outcome") == "FILLED":
+            timestamp = _parse_strict_log_timestamp(record)
+            if timestamp is not None:
+                dates.add(timestamp.date())
+        if event == "observation_outcome":
+            if role == "baseline" and record.get("_record_namespace") != "formal":
+                continue
+            payload = record.get("outcome")
+            if type(payload) is not dict:
+                continue
+            try:
+                closing_date = _calendar_date(payload.get("closing_date"))
+            except ValueError:
+                closing_date = None
+            if closing_date is not None:
+                dates.add(closing_date)
+    for session_date in sorted(dates):
+        if session_date not in calendar:
+            errors.append("%s session evidence missing summary: %s" % (role, session_date))
 
 
 def _expected_outcome_session(event_date, horizon, calendar):
@@ -744,25 +804,13 @@ def _valid_baseline_horizon_five(registration, outcome_record, session_calendar=
             and outcome_timestamp > registration_timestamp)
 
 
-def _validate_baseline(records, errors):
-    initialized = [record for record in records if record.get("event") == "strategy_initialized"]
-    if not initialized:
-        errors.append("missing baseline strategy_initialized record")
-    expected = {
-        "build": BASELINE_BUILD,
-        "parameter_fingerprint": PARAMETER_FINGERPRINT,
-        "pool_fingerprint": POOL_FINGERPRINT,
-        "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
-    }
-    initialization_valid = bool(initialized)
-    for record in initialized:
-        for field, expected_value in expected.items():
-            if record.get(field) != expected_value:
-                errors.append("baseline initialization %s mismatch: %r" % (field, record.get(field)))
-                initialization_valid = False
-    session_calendar = _validated_session_calendar(
-        records, "baseline", initialization_valid, errors,
-    )
+def _validate_baseline(records, errors, initialization_valid=None, session_calendar=None):
+    if initialization_valid is None:
+        initialization_valid = _validate_baseline_initializations(records, errors)
+    if session_calendar is None:
+        session_calendar = _validated_session_calendar(
+            records, "baseline", initialization_valid, errors,
+        )
     registrations = {}
     registration_replicas = {}
     outcomes = {}
@@ -1138,9 +1186,18 @@ def analyze_records(candidate_records, baseline_records):
         baseline_records, "baseline", errors,
     )
     candidate_initialization_valid = _validate_candidate_initializations(candidate_records, errors)
+    baseline_initialization_valid = _validate_baseline_initializations(baseline_records, errors)
     candidate_session_calendar = _validated_session_calendar(
         candidate_records, "candidate", candidate_initialization_valid, errors,
     )
+    baseline_session_calendar = _validated_session_calendar(
+        baseline_records, "baseline", baseline_initialization_valid, errors,
+    )
+    session_calendar = _common_session_calendar(
+        candidate_session_calendar, baseline_session_calendar, errors,
+    )
+    _validate_session_evidence(candidate_records, "candidate", session_calendar, errors)
+    _validate_session_evidence(baseline_records, "baseline", session_calendar, errors)
     candidate_session_evidence = _candidate_session_evidence(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
@@ -1153,7 +1210,9 @@ def analyze_records(candidate_records, baseline_records):
                     and record.get("resonance_id").startswith("RELATIVE:")))):
             _validate_relative_outcome_shape(record, errors)
     (formal_registrations, formal_outcomes, formal_missing_outcome_count,
-     canonical_formal_registrations) = _validate_baseline(baseline_records, errors)
+     canonical_formal_registrations) = _validate_baseline(
+         baseline_records, errors, baseline_initialization_valid, session_calendar,
+     )
     selected, ignored_record_counts = _filter_candidate_records(candidate_records)
     registrations = {}
     candidates = []
@@ -1187,7 +1246,7 @@ def analyze_records(candidate_records, baseline_records):
             continue
         outcomes[key] = record
     _validate_outcome_sessions(
-        registrations, outcomes, candidate_session_calendar, "relative", HORIZONS, errors,
+        registrations, outcomes, session_calendar, "relative", HORIZONS, errors,
     )
     _validate_relative_recorded_closing_order(registrations, outcomes, errors)
     year_counts = {"2019": 0, "2020": 0, "2021": 0}

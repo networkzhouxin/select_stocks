@@ -1441,6 +1441,60 @@ def test_session_calendar_accepts_holiday_spanning_runtime_horizon():
                    for error in report["data_quality"]["errors"])
 
 
+def test_horizon_calendar_requires_matching_bidirectional_summary_evidence():
+    complete_candidate = make_candidate_records()
+    complete_baseline = make_baseline_records()
+    complete = analyzer.analyze_records(complete_candidate, complete_baseline)
+
+    missing_candidate_snapshot = [record for record in make_candidate_records()
+                                  if not (record.get("event") == "portfolio_summary"
+                                          and record.get("closing_date") == "2019-01-03")]
+    missing_baseline_formal = [record for record in make_baseline_records()
+                               if not (record.get("event") == "portfolio_summary"
+                                       and record.get("closing_date") == "2021-01-12")]
+    different_sets = [record for record in make_candidate_records()
+                      if not (record.get("event") == "portfolio_summary"
+                              and record.get("closing_date") == "2019-01-23")]
+    invalid_initialization = make_baseline_records()
+    invalid_initialization[0]["parameter_fingerprint"] = "bad"
+    conflicting_summary = make_candidate_records()
+    summary = next(record for record in conflicting_summary
+                   if record.get("event") == "portfolio_summary"
+                   and record.get("closing_date") == "2019-01-23")
+    conflicting_summary.append(dict(summary, total_value=1.0))
+
+    candidate_report = analyzer.analyze_records(missing_candidate_snapshot,
+                                                 make_baseline_records())
+    baseline_report = analyzer.analyze_records(make_candidate_records(),
+                                                missing_baseline_formal)
+    different_report = analyzer.analyze_records(different_sets, make_baseline_records())
+    invalid_initialization_report = analyzer.analyze_records(
+        make_candidate_records(), invalid_initialization,
+    )
+    conflicting_summary_report = analyzer.analyze_records(
+        conflicting_summary, make_baseline_records(),
+    )
+    reversed_report = analyzer.analyze_records(
+        list(reversed(complete_candidate)), list(reversed(complete_baseline)),
+    )
+
+    assert complete["continue_candidate"] is True
+    assert any("candidate session evidence missing summary: 2019-01-03" in error
+               for error in candidate_report["data_quality"]["errors"])
+    assert any("baseline session evidence missing summary: 2021-01-12" in error
+               for error in baseline_report["data_quality"]["errors"])
+    for report in (candidate_report, baseline_report, different_report,
+                   invalid_initialization_report, conflicting_summary_report):
+        assert report["continue_candidate"] is False
+        assert any("candidate/baseline session calendar dates differ" in error
+                   for error in report["data_quality"]["errors"])
+    assert any("baseline session calendar unavailable: invalid initialization" in error
+               for error in invalid_initialization_report["data_quality"]["errors"])
+    assert any("conflicting candidate session calendar evidence: 2019-01-23" in error
+               for error in conflicting_summary_report["data_quality"]["errors"])
+    assert reversed_report == complete
+
+
 def test_formal_horizon_five_must_close_after_its_signal_date():
     baseline = make_baseline_records()
     formal_outcome = next(record for record in baseline
