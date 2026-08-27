@@ -195,3 +195,28 @@ def test_indicator_frame_separates_trade_and_observation_columns():
         "boll_width", "boll_mid_slope",
     }
     assert set(strategy.TRADE_INDICATOR_COLUMNS).isdisjoint(strategy.OBSERVATION_COLUMNS)
+
+
+def test_indicator_frame_populates_trade_and_observation_values():
+    index = pd.bdate_range("2020-01-01", periods=31)
+    close = pd.Series(list(range(1, 31)) + [29.0], index=index)
+    price_frame = pd.DataFrame({
+        "open": close,
+        "high": close + 1.0,
+        "low": close - 1.0,
+        "close": close,
+        "volume": pd.Series(np.arange(1, 32, dtype=float) * 100.0, index=index),
+    }, index=index)
+
+    frame = strategy.build_indicator_frame(price_frame, strategy.get_default_params())
+
+    assert set(strategy.TRADE_INDICATOR_COLUMNS) <= set(frame.columns)
+    assert set(strategy.OBSERVATION_COLUMNS) <= set(frame.columns)
+    assert frame["rsi6"].iloc[-1] == pytest.approx(83.33333333333333)
+    assert frame["rsi12"].iloc[-1] == pytest.approx(91.66666666666667)
+    assert frame["rsi24"].iloc[-1] == pytest.approx(95.83333333333333)
+    assert frame["volume_ma5"].iloc[-1] == pytest.approx(2900.0)
+    assert frame["volume_ma20"].iloc[-1] == pytest.approx(2150.0)
+    assert frame["volume_ratio"].iloc[-1] == pytest.approx(3100.0 / 2150.0)
+    assert frame["boll_width"].iloc[-1] == pytest.approx(1.0497286790354372)
+    assert frame["boll_mid_slope"].iloc[-1] == pytest.approx(0.9)
