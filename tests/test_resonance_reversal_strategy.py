@@ -1,4 +1,7 @@
+import ast
 import importlib.util
+import inspect
+import json
 import pathlib
 import sys
 import types
@@ -883,7 +886,7 @@ def test_signal_loader_is_strictly_t_minus_one(monkeypatch):
 
 def test_signal_loader_propagates_future_data_error(monkeypatch):
     class FutureDataError(RuntimeError):
-        pass
+        """Local sentinel proving the loader preserves platform errors."""
 
     expected = FutureDataError("future boundary")
 
@@ -1719,3 +1722,436 @@ def test_current_quote_does_not_change_frozen_buy_candidate_order(monkeypatch):
         observed_orders.append(submitted)
 
     assert observed_orders == [[first, second], [first, second]]
+
+
+def test_decision_payload_cannot_receive_observation_fields():
+    assert list(inspect.signature(
+        strategy.build_resonance_decision,
+    ).parameters) == [
+        "code", "direction", "event_book", "signal_date",
+    ]
+
+
+def test_strategy_ast_has_no_cross_signal_import_dependency():
+    tree = ast.parse(STRATEGY_PATH.read_text(encoding="utf-8"))
+    imported_modules = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported_modules.append(node.module or "")
+
+    assert all(
+        "cross_signal_strategy" not in module
+        and "smart_trade_joinquant_cross_signal_etf" not in module
+        for module in imported_modules
+    )
+
+
+def test_observation_outcomes_are_retrospective_and_one_shot():
+    record = strategy.make_observation_event(
+        resonance_id="abc",
+        code="510300.XSHG",
+        event_date="2021-01-05",
+        event_close=10.0,
+        due_dates={
+            1: "2021-01-06", 3: "2021-01-08", 5: "2021-01-12",
+        },
+    )
+
+    assert strategy.due_observation_horizons(record, "2021-01-05") == []
+    assert strategy.due_observation_horizons(record, "2021-01-06") == [1]
+    record["outcomes"][1] = {"return": 0.01}
+    assert strategy.due_observation_horizons(record, "2021-01-06") == []
+    assert record["event_close"] == pytest.approx(10.0)
+
+
+def test_register_observation_event_uses_only_forward_trading_sessions(
+        monkeypatch):
+    code = "510300.XSHG"
+    snapshot = resonance_snapshot(code)
+    decision = strategy.build_resonance_decision(
+        code, strategy.TurnDirection.BUY_TURN,
+        snapshot["event_book"], snapshot["signal_date"],
+    )
+    runtime = runtime_state()
+    calendar = [
+        pd.Timestamp(date).date()
+        for date in (
+            "2021-01-05", "2021-01-06", "2021-01-07",
+            "2021-01-08", "2021-01-11", "2021-01-12",
+        )
+    ]
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days", lambda **kwargs: calendar, raising=False,
+    )
+
+    strategy.register_observation_event(
+        decision, pd.Timestamp("2021-01-05").date(), 10.0,
+    )
+
+    assert runtime.observation_events[decision["resonance_id"]]["due_dates"] == {
+        1: pd.Timestamp("2021-01-06").date(),
+        3: pd.Timestamp("2021-01-08").date(),
+        5: pd.Timestamp("2021-01-12").date(),
+    }
+    assert runtime.position_states == {}
+    assert runtime.processed_resonance_ids == {}
+
+
+def test_record_due_observation_outcomes_is_close_only_read_projection(
+        monkeypatch):
+    code = "510300.XSHG"
+    closing_date = pd.Timestamp("2021-01-06").date()
+    record = strategy.make_observation_event(
+        resonance_id="abc",
+        code=code,
+        event_date=pd.Timestamp("2021-01-05").date(),
+        event_close=10.0,
+        due_dates={1: closing_date, 3: pd.Timestamp("2021-01-08").date()},
+    )
+    runtime = runtime_state()
+    runtime.observation_events = {"abc": record}
+    context = fake_context(current_date="2021-01-06")
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "order_target",
+        lambda *args: pytest.fail("close observation must never sell"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target_value",
+        lambda *args: pytest.fail("close observation must never buy"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log", types.SimpleNamespace(info=lambda *args: None),
+        raising=False,
+    )
+
+    strategy.record_due_observation_outcomes(
+        context, {code: current_record(11.0)},
+    )
+
+    assert record["outcomes"] == {
+        1: {
+            "closing_date": closing_date,
+            "closing_price": 11.0,
+            "return": pytest.approx(0.1),
+        },
+    }
+    assert "abc" in runtime.observation_events
+    assert runtime.position_states == {}
+    assert runtime.processed_resonance_ids == {}
+
+
+def test_structured_logging_contract_contains_required_audit_fields(
+        monkeypatch):
+    messages = []
+    runtime = runtime_state()
+    runtime.state_date = pd.Timestamp("2021-01-06").date()
+
+    def capture(message, *args):
+        messages.append(message % args if args else message)
+
+    monkeypatch.setattr(
+        strategy, "log", types.SimpleNamespace(info=capture), raising=False,
+    )
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    snapshot = resonance_snapshot("510300.XSHG", support_count=3)
+    snapshot.update({
+        "decision_date": "2021-01-06",
+        "trade_values": {
+            "rsi14": 28.0, "k": 18.0, "d": 19.0, "j": 16.0,
+            "kd_diff": -1.0, "boll_mid": 10.0, "boll_upper": 11.0,
+            "boll_lower": 9.0, "atr14": 0.5,
+        },
+        "observation_values": {
+            "rsi6": 30.0, "rsi12": 31.0, "rsi24": 32.0,
+            "plus_di": 20.0, "minus_di": 25.0, "adx14": np.nan,
+            "volume": 1000.0, "volume_ma5": 900.0,
+            "volume_ma20": 800.0, "volume_ratio": 1.25,
+            "boll_width": 0.2, "boll_mid_slope": 0.1,
+        },
+    })
+    decision = strategy.build_resonance_decision(
+        snapshot["code"], strategy.TurnDirection.BUY_TURN,
+        snapshot["event_book"], snapshot["signal_date"],
+    )
+
+    strategy.log_signal_snapshot(snapshot)
+    strategy.log_resonance_decision(decision, True, "BUY_CANDIDATE_SORTED:1")
+    strategy.log_order_transition(
+        snapshot["code"], strategy.OrderSide.BUY,
+        strategy.OrderOutcome.PARTIAL, 0, 100, 200,
+        {"reason": strategy.ExitReason.SIGNAL_EXIT},
+    )
+
+    payloads = [json.loads(message) for message in messages]
+    signal_payload = next(item for item in payloads if item["event"] == "signal_snapshot")
+    assert signal_payload["version"] == strategy.STRATEGY_VERSION
+    assert signal_payload["build"] == strategy.DEPLOYMENT_BUILD_ID
+    assert signal_payload["parameter_fingerprint"]
+    assert signal_payload["pool_fingerprint"]
+    assert signal_payload["decision_date"] == "2021-01-06"
+    assert signal_payload["signal_date"] == "2021-01-05"
+    assert set(signal_payload["trade_values"]) == set(strategy.TRADE_INDICATOR_COLUMNS)
+    assert set(signal_payload["observation_values"]) == set(strategy.OBSERVATION_COLUMNS)
+    assert signal_payload["observation_values"]["adx14"] is None
+    assert "active_events" in signal_payload
+    assert "invalidated_events" in signal_payload
+
+    decision_payload = next(
+        item for item in payloads if item["event"] == "resonance_decision"
+    )
+    assert decision_payload["accepted"] is True
+    assert decision_payload["reason"] == "BUY_CANDIDATE_SORTED:1"
+    assert decision_payload["decision_date"] == "2021-01-06"
+    assert decision_payload["signal_date"] == "2021-01-05"
+    assert decision_payload["supporters"] == ["BOLL", "RSI", "KDJ"]
+    assert decision_payload["support_count"] == 3
+    assert decision_payload["boll_age"] == 0
+
+    order_payload = next(item for item in payloads if item["event"] == "order_transition")
+    assert order_payload["side"] == "BUY"
+    assert order_payload["outcome"] == "PARTIAL"
+    assert order_payload["before_amount"] == 0
+    assert order_payload["after_amount"] == 100
+    assert order_payload["requested_target"] == 200
+    assert order_payload["pending_exit"]["reason"] == "SIGNAL_EXIT"
+
+    held_state = strategy.make_position_state(
+        pd.Timestamp("2021-01-05").date(), 0.5, 10.0,
+    )
+    runtime = runtime_state(position_states={"510300.XSHG": held_state})
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    strategy.log_portfolio_summary(fake_context(
+        positions={"510300.XSHG": fake_position(100)},
+        total_value=21000.0,
+        available_cash=5000.0,
+    ))
+    portfolio_payload = json.loads(messages[-1])
+    assert portfolio_payload["event"] == "portfolio_summary"
+    assert portfolio_payload["total_value"] == pytest.approx(21000.0)
+    assert portfolio_payload["available_cash"] == pytest.approx(5000.0)
+    assert portfolio_payload["positions"] == {"510300.XSHG": 100}
+    assert portfolio_payload["highest_close_anchors"] == {
+        "510300.XSHG": 10.0,
+    }
+
+
+def test_initialize_emits_version_and_separate_configuration_fingerprints(
+        monkeypatch):
+    messages = []
+    monkeypatch.setattr(strategy, "set_option", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "set_benchmark", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "PriceRelatedSlippage", lambda value: value, raising=False)
+    monkeypatch.setattr(strategy, "set_slippage", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(strategy, "OrderCost", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(strategy, "set_order_cost", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(strategy, "run_daily", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda message, *args: messages.append(
+            message % args if args else message
+        )),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "g", types.SimpleNamespace(), raising=False)
+
+    strategy.initialize(types.SimpleNamespace())
+
+    payload = json.loads(messages[-1])
+    assert payload["event"] == "strategy_initialized"
+    assert payload["version"] == strategy.STRATEGY_VERSION
+    assert payload["build"] == strategy.DEPLOYMENT_BUILD_ID
+    assert payload["parameter_fingerprint"]
+    assert payload["pool_fingerprint"]
+
+
+def test_after_close_runs_observations_anchor_cleanup_and_summary_without_orders(
+        monkeypatch):
+    runtime = runtime_state()
+    context = fake_context(current_date="2021-01-06")
+    order = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "record_due_observation_outcomes",
+        lambda *args: order.append("observations"), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_portfolio_summary",
+        lambda *args: order.append("summary"), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target",
+        lambda *args: pytest.fail("15:30 must not submit sell orders"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target_value",
+        lambda *args: pytest.fail("15:30 must not submit buy orders"),
+        raising=False,
+    )
+
+    strategy.after_close(context)
+
+    assert order == ["observations", "summary"]
+
+
+def test_buy_attempt_logs_transition_and_registers_retrospective_event(
+        monkeypatch):
+    code = "510300.XSHG"
+    snapshot = resonance_snapshot(code)
+    runtime = runtime_state(max_holdings=1)
+    context = fake_context()
+    registrations = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda *args: strategy.OrderOutcome.NOT_FILLED, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision", lambda *args: None, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "register_observation_event",
+        lambda decision, event_date, event_close: registrations.append(
+            (decision["resonance_id"], event_date, event_close)
+        ),
+        raising=False,
+    )
+
+    results = strategy.run_signal_buys(
+        context, {code: current_record(10.0)}, {code: snapshot},
+    )
+
+    assert results == [(code, strategy.OrderOutcome.NOT_FILLED)]
+    decision = strategy.build_resonance_decision(
+        code, strategy.TurnDirection.BUY_TURN,
+        snapshot["event_book"], snapshot["signal_date"],
+    )
+    assert registrations == [(
+        decision["resonance_id"], snapshot["signal_date"], snapshot["close"],
+    )]
+
+
+def test_submit_orders_log_actual_transition_after_state_sync(monkeypatch):
+    buy_code = "510300.XSHG"
+    sell_code = "159915.XSHE"
+    sell_state = strategy.make_position_state(
+        pd.Timestamp("2021-01-04").date(), 1.0, 10.0,
+    )
+    runtime = runtime_state(position_states={sell_code: sell_state})
+    context = fake_context(positions={sell_code: fake_position(100)})
+    current_data = {
+        buy_code: current_record(10.0), sell_code: current_record(10.0),
+    }
+    transitions = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
+    monkeypatch.setattr(
+        strategy, "order_target_value",
+        lambda *args: types.SimpleNamespace(amount=100, filled=0), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target",
+        lambda *args: types.SimpleNamespace(amount=-100, filled=0), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log_order_transition",
+        lambda *args: transitions.append(args), raising=False,
+    )
+    buy_snapshot = resonance_snapshot(buy_code)
+    buy_decision = strategy.build_resonance_decision(
+        buy_code, strategy.TurnDirection.BUY_TURN,
+        buy_snapshot["event_book"], buy_snapshot["signal_date"],
+    )
+
+    strategy.submit_buy(context, buy_code, buy_snapshot, buy_decision)
+    strategy.submit_sell(
+        context, sell_code, strategy.ExitReason.SIGNAL_EXIT, 9.0,
+    )
+
+    assert transitions[0][:5] == (
+        buy_code, strategy.OrderSide.BUY, strategy.OrderOutcome.NOT_FILLED,
+        0, 0,
+    )
+    assert transitions[0][6] is None
+    assert transitions[1][:5] == (
+        sell_code, strategy.OrderSide.SELL, strategy.OrderOutcome.NOT_FILLED,
+        100, 100,
+    )
+    assert transitions[1][5] == 0
+    assert transitions[1][6]["reason"] is strategy.ExitReason.SIGNAL_EXIT
+
+
+def test_buy_rejection_logs_third_indicator_conflict_and_stale_support(
+        monkeypatch):
+    conflict_code = "510300.XSHG"
+    stale_code = "159915.XSHE"
+    conflict = resonance_snapshot(conflict_code)
+    conflict["event_book"] = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "SELL_TURN", "2021-01-05",
+    )
+    stale = resonance_snapshot(stale_code)
+    stale["event_book"] = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-04",
+    )
+    reasons = []
+    monkeypatch.setattr(
+        strategy, "log_resonance_decision",
+        lambda decision, accepted, reason: reasons.append(
+            (decision["code"], accepted, reason)
+        ),
+        raising=False,
+    )
+
+    decisions = strategy.collect_buy_decisions(
+        {conflict_code: conflict, stale_code: stale}, {},
+    )
+
+    assert decisions == []
+    assert reasons == [
+        (conflict_code, False, "THIRD_INDICATOR_CONFLICT"),
+        (stale_code, False, "NO_FRESH_SUPPORTER"),
+    ]
+
+
+def test_atr_check_log_is_observation_only_and_contains_frozen_risk_state(
+        monkeypatch):
+    code = "510300.XSHG"
+    state = strategy.make_position_state(
+        pd.Timestamp("2021-01-05").date(), 1.0, 10.0,
+    )
+    runtime = runtime_state(position_states={code: state})
+    context = fake_context(positions={code: fake_position(100)})
+    payloads = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: payloads.append((event, payload)), raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_sell",
+        lambda *args: pytest.fail("price above stop must not sell"),
+        raising=False,
+    )
+
+    result = strategy.run_atr_exits(
+        context, {code: current_record(9.9)},
+    )
+
+    assert result == set()
+    assert payloads == [("atr_check", {
+        "code": code,
+        "entry_atr": 1.0,
+        "highest_close_anchor": 10.0,
+        "stop_price": pytest.approx(8.5),
+        "stop_pct": pytest.approx(0.15),
+        "current_price": 9.9,
+        "triggered": False,
+        "pending_exit": None,
+    })]

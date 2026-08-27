@@ -2,6 +2,7 @@ from jqdata import *
 
 import hashlib
 import json
+import math
 from enum import Enum
 
 
@@ -112,6 +113,207 @@ def business_config_fingerprint(params=None, etf_pool=None):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def _value_fingerprint(value):
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _json_ready(value):
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {
+            str(key): _json_ready(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, set):
+        return [_json_ready(item) for item in sorted(value, key=str)]
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if hasattr(value, "item"):
+        try:
+            return _json_ready(value.item())
+        except (TypeError, ValueError):
+            return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _emit_structured_log(event, payload):
+    logger = globals().get("log")
+    if logger is None:
+        return
+    body = {"event": event}
+    body.update(payload)
+    logger.info(json.dumps(
+        _json_ready(body), ensure_ascii=False, sort_keys=True, default=str,
+        allow_nan=False,
+    ))
+
+
+def _runtime_params_and_pool():
+    runtime = globals().get("g")
+    params = getattr(runtime, "params", get_default_params())
+    etf_pool = getattr(runtime, "etf_pool", get_default_etf_pool())
+    return params, etf_pool
+
+
+def log_signal_snapshot(snapshot):
+    params, etf_pool = _runtime_params_and_pool()
+    event_book = snapshot.get("event_book") or empty_event_book()
+    _emit_structured_log("signal_snapshot", {
+        "version": STRATEGY_VERSION,
+        "build": DEPLOYMENT_BUILD_ID,
+        "parameter_fingerprint": _value_fingerprint(params),
+        "pool_fingerprint": _value_fingerprint(etf_pool),
+        "code": snapshot.get("code"),
+        "decision_date": snapshot.get("decision_date"),
+        "signal_date": snapshot.get("signal_date"),
+        "valid": snapshot.get("valid"),
+        "reason": snapshot.get("reason"),
+        "trade_values": dict(snapshot.get("trade_values") or {}),
+        "observation_values": dict(snapshot.get("observation_values") or {}),
+        "active_events": dict(event_book.get("active") or {}),
+        "invalidated_events": list(event_book.get("invalidated") or []),
+    })
+
+
+def log_resonance_decision(decision, accepted, reason):
+    decision = dict(decision or {})
+    runtime = globals().get("g")
+    _emit_structured_log("resonance_decision", {
+        "code": decision.get("code"),
+        "direction": decision.get("direction"),
+        "decision_date": getattr(runtime, "state_date", None),
+        "signal_date": decision.get("signal_date"),
+        "accepted": bool(accepted),
+        "reason": reason,
+        "supporters": list(decision.get("supporters") or []),
+        "support_count": decision.get("support_count", 0),
+        "boll_age": decision.get("boll_age"),
+        "resonance_id": decision.get("resonance_id"),
+        "expires_date": decision.get("expires_date"),
+    })
+
+
+def log_order_transition(code, side, outcome, before_amount, after_amount,
+                         requested_target, pending_exit):
+    _emit_structured_log("order_transition", {
+        "code": code,
+        "side": side,
+        "outcome": outcome,
+        "before_amount": before_amount,
+        "after_amount": after_amount,
+        "requested_target": requested_target,
+        "pending_exit": dict(pending_exit) if pending_exit is not None else None,
+    })
+
+
+def log_portfolio_summary(context):
+    positions = {
+        code: get_actual_amount(context, code)
+        for code in context.portfolio.positions
+        if get_actual_amount(context, code) > 0
+    }
+    anchors = {
+        code: state.get("highest_close_anchor")
+        for code, state in g.position_states.items()
+        if code in positions
+    }
+    _emit_structured_log("portfolio_summary", {
+        "closing_date": context.current_dt.date(),
+        "total_value": context.portfolio.total_value,
+        "available_cash": context.portfolio.available_cash,
+        "positions": positions,
+        "highest_close_anchors": anchors,
+    })
+
+
+def make_observation_event(resonance_id, code, event_date, event_close,
+                           due_dates):
+    return {
+        "resonance_id": resonance_id,
+        "code": code,
+        "event_date": event_date,
+        "event_close": float(event_close),
+        "due_dates": dict(due_dates),
+        "outcomes": {},
+    }
+
+
+def due_observation_horizons(record, closing_date):
+    return sorted(
+        horizon
+        for horizon, due_date in record["due_dates"].items()
+        if due_date == closing_date and horizon not in record["outcomes"]
+    )
+
+
+def _calendar_date(value):
+    if hasattr(value, "date"):
+        return value.date()
+    return value
+
+
+def register_observation_event(decision, event_date, event_close):
+    if decision is None or not is_finite_positive(event_close):
+        return
+    resonance_id = decision["resonance_id"]
+    if resonance_id in g.observation_events:
+        return
+    trade_days_getter = globals().get("get_trade_days")
+    if trade_days_getter is None:
+        _emit_structured_log("observation_registration", {
+            "resonance_id": resonance_id,
+            "code": decision["code"],
+            "reason": "TRADE_CALENDAR_UNAVAILABLE",
+        })
+        return
+    trade_days = trade_days_getter(start_date=event_date, count=6)
+    if len(trade_days) < 6:
+        return
+    due_dates = {
+        horizon: _calendar_date(trade_days[horizon])
+        for horizon in (1, 3, 5)
+    }
+    g.observation_events[resonance_id] = make_observation_event(
+        resonance_id, decision["code"], _calendar_date(event_date),
+        event_close, due_dates,
+    )
+
+
+def record_due_observation_outcomes(context, current_data):
+    closing_date = context.current_dt.date()
+    for resonance_id, record in list(g.observation_events.items()):
+        due_horizons = due_observation_horizons(record, closing_date)
+        if not due_horizons:
+            continue
+        closing_price = get_execution_price(current_data, record["code"])
+        if closing_price is None:
+            continue
+        for horizon in due_horizons:
+            outcome = {
+                "closing_date": closing_date,
+                "closing_price": closing_price,
+                "return": closing_price / record["event_close"] - 1.0,
+            }
+            record["outcomes"][horizon] = outcome
+            _emit_structured_log("observation_outcome", {
+                "resonance_id": resonance_id,
+                "code": record["code"],
+                "event_date": record["event_date"],
+                "horizon": horizon,
+                "outcome": outcome,
+            })
+        if all(
+                horizon in record["outcomes"]
+                for horizon in record["due_dates"]):
+            g.observation_events.pop(resonance_id, None)
+
+
 def ensure_runtime_state():
     if not hasattr(g, "params"):
         g.params = get_default_params()
@@ -140,6 +342,13 @@ def do_trading(context):
     retry_pending_exits(context, current_data)
     run_atr_exits(context, current_data)
     snapshots = build_signal_snapshots(signal_date, g.params)
+    held_codes = set(get_actual_positions(context))
+    for snapshot in snapshots.values():
+        event_book = snapshot.get("event_book") or {}
+        if (snapshot.get("code") in held_codes
+                or event_book.get("active")
+                or event_book.get("invalidated")):
+            log_signal_snapshot(dict(snapshot, decision_date=decision_date))
     run_signal_exits(context, current_data, snapshots)
     run_signal_buys(context, current_data, snapshots)
 
@@ -154,6 +363,8 @@ def after_close(context):
             continue
         closing_price = get_execution_price(current_data, code)
         update_highest_close_anchor(state, closing_price)
+    record_due_observation_outcomes(context, current_data)
+    log_portfolio_summary(context)
 
 
 def initialize(context):
@@ -172,9 +383,13 @@ def initialize(context):
     run_daily(do_trading, time="09:35", reference_security=BENCHMARK)
     run_daily(after_close, time="15:30", reference_security=BENCHMARK)
     ensure_runtime_state()
-    log.info("version=%s build=%s fingerprint=%s pool=%s",
-             STRATEGY_VERSION, DEPLOYMENT_BUILD_ID,
-             business_config_fingerprint(), get_default_etf_pool())
+    _emit_structured_log("strategy_initialized", {
+        "version": STRATEGY_VERSION,
+        "build": DEPLOYMENT_BUILD_ID,
+        "parameter_fingerprint": _value_fingerprint(g.params),
+        "pool_fingerprint": _value_fingerprint(g.etf_pool),
+        "etf_pool": list(g.etf_pool),
+    })
 
 
 import numpy as np
@@ -368,6 +583,7 @@ def submit_buy(context, code, snapshot, decision):
     before_amount = get_actual_amount(context, code)
     execution_price = get_execution_price(current_data, code)
     order = None
+    target_value = None
     target_amount = None
 
     if (tradability is Tradability.TRADEABLE
@@ -389,10 +605,16 @@ def submit_buy(context, code, snapshot, decision):
         OrderSide.BUY, before_amount, after_amount, target_amount,
         tradability, order,
     )
-    return sync_buy_state_after_order(
+    result = sync_buy_state_after_order(
         code, outcome, before_amount, after_amount,
         context.current_dt.date(), snapshot["entry_atr"], execution_price,
     )
+    state = g.position_states.get(code)
+    log_order_transition(
+        code, OrderSide.BUY, result, before_amount, after_amount,
+        target_value, state.get("pending_exit") if state is not None else None,
+    )
+    return result
 
 
 def submit_sell(context, code, reason, trigger_value):
@@ -407,10 +629,16 @@ def submit_sell(context, code, reason, trigger_value):
         OrderSide.SELL, before_amount, after_amount, 0,
         tradability, order,
     )
-    return sync_sell_state_after_order(
+    result = sync_sell_state_after_order(
         code, outcome, reason, context.current_dt.date(),
         trigger_value, after_amount,
     )
+    state = g.position_states.get(code)
+    log_order_transition(
+        code, OrderSide.SELL, result, before_amount, after_amount, 0,
+        state.get("pending_exit") if state is not None else None,
+    )
+    return result
 
 
 def retry_pending_exits(context, current_data):
@@ -782,12 +1010,36 @@ def build_resonance_decision(code, direction, event_book, signal_date):
     return {
         "code": code,
         "direction": direction,
+        "signal_date": signal_date,
         "supporters": tuple(event["indicator"] for event in supporters),
         "support_count": len(supporters),
         "boll_age": 0 if boll["event_date"] == signal_date else 1,
         "resonance_id": build_resonance_id(code, direction, supporters),
         "expires_date": min(event["expires_date"] for event in supporters),
     }
+
+
+def resonance_rejection_reason(direction, event_book, signal_date):
+    boll = event_book["active"].get("BOLL")
+    if boll is None or boll["direction"] is not direction:
+        return "BOLL_NOT_SUPPORTING"
+    oscillators = [
+        event_book["active"].get("RSI"),
+        event_book["active"].get("KDJ"),
+    ]
+    if any(
+            event is not None and event["direction"] is OPPOSITE[direction]
+            for event in oscillators):
+        return "THIRD_INDICATOR_CONFLICT"
+    supporters = [boll] + [
+        event for event in oscillators
+        if event is not None and event["direction"] is direction
+    ]
+    if len(supporters) < 2:
+        return "INSUFFICIENT_SUPPORT"
+    if not any(event["event_date"] == signal_date for event in supporters):
+        return "NO_FRESH_SUPPORTER"
+    return "RESONANCE_REJECTED"
 
 
 def sort_buy_decisions(decisions):
@@ -811,8 +1063,17 @@ def mark_resonance_processed(processed, decision):
 def collect_buy_decisions(snapshots, actual_positions):
     decisions = []
     for code, snapshot in snapshots.items():
-        if (not snapshot.get("valid")
-                or not is_finite_positive(snapshot.get("entry_atr"))):
+        if not snapshot.get("valid"):
+            log_resonance_decision({
+                "code": code, "direction": TurnDirection.BUY_TURN,
+                "signal_date": snapshot.get("signal_date"),
+            }, False, snapshot.get("reason", "INVALID_SIGNAL_SNAPSHOT"))
+            continue
+        if not is_finite_positive(snapshot.get("entry_atr")):
+            log_resonance_decision({
+                "code": code, "direction": TurnDirection.BUY_TURN,
+                "signal_date": snapshot.get("signal_date"),
+            }, False, "INVALID_ENTRY_ATR")
             continue
         decision = build_resonance_decision(
             code, TurnDirection.BUY_TURN,
@@ -820,6 +1081,14 @@ def collect_buy_decisions(snapshots, actual_positions):
         )
         if decision is not None:
             decisions.append(decision)
+        else:
+            log_resonance_decision({
+                "code": code, "direction": TurnDirection.BUY_TURN,
+                "signal_date": snapshot.get("signal_date"),
+            }, False, resonance_rejection_reason(
+                TurnDirection.BUY_TURN, snapshot["event_book"],
+                snapshot["signal_date"],
+            ))
     return decisions
 
 
@@ -837,6 +1106,25 @@ def run_atr_exits(context, current_data):
             state["highest_close_anchor"], state["entry_atr"], g.params,
         )
         execution_price = get_execution_price(current_data, code)
+        triggered = bool(
+            stop_state is not None
+            and execution_price is not None
+            and execution_price <= stop_state["stop_price"]
+        )
+        _emit_structured_log("atr_check", {
+            "code": code,
+            "entry_atr": state["entry_atr"],
+            "highest_close_anchor": state["highest_close_anchor"],
+            "stop_price": (
+                stop_state["stop_price"] if stop_state is not None else None
+            ),
+            "stop_pct": (
+                stop_state["stop_pct"] if stop_state is not None else None
+            ),
+            "current_price": execution_price,
+            "triggered": triggered,
+            "pending_exit": state.get("pending_exit"),
+        })
         if (stop_state is None or execution_price is None
                 or execution_price > stop_state["stop_price"]):
             continue
@@ -875,6 +1163,13 @@ def run_signal_exits(context, current_data, snapshots):
             snapshot["event_book"], snapshot["signal_date"],
         )
         if decision is None:
+            log_resonance_decision({
+                "code": code, "direction": TurnDirection.SELL_TURN,
+                "signal_date": snapshot.get("signal_date"),
+            }, False, resonance_rejection_reason(
+                TurnDirection.SELL_TURN, snapshot["event_book"],
+                snapshot["signal_date"],
+            ))
             continue
         if decision["resonance_id"] in g.processed_resonance_ids:
             continue
@@ -882,9 +1177,14 @@ def run_signal_exits(context, current_data, snapshots):
         if tradability is Tradability.PAUSED:
             continue
         mark_resonance_processed(g.processed_resonance_ids, decision)
-        submit_sell(
+        log_resonance_decision(decision, True, "SIGNAL_EXIT_ATTEMPT")
+        outcome = submit_sell(
             context, code, ExitReason.SIGNAL_EXIT, snapshot["close"],
         )
+        if outcome is not OrderOutcome.PAUSED:
+            register_observation_event(
+                decision, snapshot["signal_date"], snapshot["close"],
+            )
         attempted.add(code)
     return attempted
 
@@ -899,7 +1199,12 @@ def run_signal_buys(context, current_data, snapshots):
 
     decisions = collect_buy_decisions(snapshots, actual_positions)
     results = []
-    for decision in sort_buy_decisions(decisions):
+    sorted_decisions = sort_buy_decisions(decisions)
+    for rank, decision in enumerate(sorted_decisions, start=1):
+        log_resonance_decision(
+            decision, True, "BUY_CANDIDATE_SORTED:%s" % rank,
+        )
+    for decision in sorted_decisions:
         if remaining_slots == 0:
             break
         code = decision["code"]
@@ -916,6 +1221,10 @@ def run_signal_buys(context, current_data, snapshots):
         g.daily_attempted_buys.add(code)
         if tradability is Tradability.UNKNOWN:
             results.append((code, OrderOutcome.UNKNOWN))
+            register_observation_event(
+                decision, snapshots[code]["signal_date"],
+                snapshots[code]["close"],
+            )
             remaining_slots -= 1
             continue
         outcome = submit_buy(context, code, snapshots[code], decision)
@@ -924,5 +1233,9 @@ def run_signal_buys(context, current_data, snapshots):
             g.processed_resonance_ids.pop(decision["resonance_id"], None)
             g.daily_attempted_buys.discard(code)
             continue
+        register_observation_event(
+            decision, snapshots[code]["signal_date"],
+            snapshots[code]["close"],
+        )
         remaining_slots -= 1
     return results
