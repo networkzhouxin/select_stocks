@@ -225,6 +225,12 @@ def _expected_relative_observation_id(record):
         return None
 
 
+def _is_formal_registration_record(record):
+    return (record.get("event") == "resonance_decision"
+            and record.get("accepted") is True
+            and record.get("reason") == "COMPLETE_RESONANCE")
+
+
 def _classify_record_namespace(record, errors):
     """Classify one record once; conflicting records enter neither contract."""
     if (record.get("event") == "observation_outcome"
@@ -252,7 +258,7 @@ def _classify_record_namespace(record, errors):
                 errors.append("invalid or conflicting relative record namespace")
             return "invalid"
         return "relative"
-    if event == "resonance_decision" and record.get("accepted") is True and record.get("reason") == "COMPLETE_RESONANCE":
+    if _is_formal_registration_record(record):
         if _valid_text(resonance_id) and not resonance_id.startswith("RELATIVE:"):
             return "formal"
         errors.append("invalid formal record namespace")
@@ -683,7 +689,7 @@ def _validate_baseline(records, errors):
     invalid_horizon_five_ids = set()
     for record in records:
         if (record.get("_record_namespace") != "formal"
-                or record.get("event") != "resonance_decision"):
+                or not _is_formal_registration_record(record)):
             continue
         resonance_id = _text(record, "resonance_id", "formal resonance id", errors)
         _text(record, "code", "formal code", errors)
@@ -706,7 +712,7 @@ def _validate_baseline(records, errors):
         if valid_replicas:
             registrations[resonance_id] = min(valid_replicas, key=_sort_key)
     for record in records:
-        if record.get("event") != "resonance_decision":
+        if not _is_formal_registration_record(record):
             continue
         resonance_id = record.get("resonance_id")
         if resonance_id in registrations and (

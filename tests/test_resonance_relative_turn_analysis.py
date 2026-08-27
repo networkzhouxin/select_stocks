@@ -723,6 +723,42 @@ def test_formal_registration_replica_permutation_is_deterministic():
                for error in first["data_quality"]["errors"])
 
 
+def test_formal_follow_up_decisions_are_not_registration_replicas():
+    baseline = _single_formal_baseline()
+    registration = next(record for record in baseline
+                        if record.get("event") == "resonance_decision")
+    follow_ups = [
+        dict(registration, accepted=True, reason="BUY_CANDIDATE_SORTED:1"),
+        dict(registration, accepted=False, reason="HELD_NO_ADD"),
+        dict(registration, accepted=False, reason="UNHELD_RECORD_ONLY"),
+    ]
+    expected = analyzer.analyze_records(
+        _candidate_overlapping_baseline_formal(), baseline,
+    )
+    before = [record for record in baseline if record is not registration]
+    before[1:1] = follow_ups + [registration]
+    after = list(baseline) + follow_ups
+
+    first = analyzer.analyze_records(
+        _candidate_overlapping_baseline_formal(), before,
+    )
+    second = analyzer.analyze_records(
+        _candidate_overlapping_baseline_formal(), after,
+    )
+
+    assert first == second == expected
+    assert first["data_quality"]["formal_overlap_count"] == 1
+
+    bad_complete = dict(registration, code="159915.XSHE")
+    report = analyzer.analyze_records(
+        _candidate_overlapping_baseline_formal(), baseline + [bad_complete],
+    )
+
+    assert report["data_quality"]["formal_overlap_count"] == 0
+    assert any("duplicate formal registration" in error
+               for error in report["data_quality"]["errors"])
+
+
 def test_filled_orders_and_frozen_summaries_require_emitter_time_and_date():
     candidate = make_candidate_records()
     baseline = make_baseline_records()
