@@ -220,3 +220,133 @@ def test_indicator_frame_populates_trade_and_observation_values():
     assert frame["volume_ratio"].iloc[-1] == pytest.approx(3100.0 / 2150.0)
     assert frame["boll_width"].iloc[-1] == pytest.approx(1.0497286790354372)
     assert frame["boll_mid_slope"].iloc[-1] == pytest.approx(0.9)
+
+
+def make_event(indicator, direction, event_date, expires_date,
+               reference_extreme=None):
+    return strategy.make_turn_event(
+        indicator=indicator,
+        direction=direction,
+        event_date=event_date,
+        expires_date=expires_date,
+        trigger_values={"fixture": True},
+        reference_extreme=reference_extreme,
+    )
+
+
+@pytest.mark.parametrize(
+    "previous,current,expected",
+    [
+        ({"rsi14": 28.0}, {"rsi14": 29.0}, strategy.TurnDirection.BUY_TURN),
+        ({"rsi14": 72.0}, {"rsi14": 71.0}, strategy.TurnDirection.SELL_TURN),
+        ({"rsi14": 31.0}, {"rsi14": 32.0}, strategy.TurnDirection.NEUTRAL),
+    ],
+)
+def test_rsi_event_does_not_require_threshold_cross(previous, current, expected):
+    assert strategy.detect_rsi_direction(
+        previous, current, strategy.get_default_params(),
+    ) is expected
+
+
+def test_kdj_buy_turn_can_precede_formal_golden_cross():
+    previous = {"k": 15.0, "d": 20.0, "j": 5.0, "kd_diff": -5.0}
+    current = {"k": 17.0, "d": 20.0, "j": 11.0, "kd_diff": -3.0}
+
+    assert current["k"] < current["d"]
+    assert strategy.detect_kdj_direction(
+        previous, current, strategy.get_default_params(),
+    ) is strategy.TurnDirection.BUY_TURN
+
+
+def test_boll_touch_without_return_inside_is_neutral():
+    previous = {
+        "low": 9.0, "high": 10.0, "close": 9.2,
+        "boll_lower": 9.3, "boll_upper": 11.0,
+    }
+    current = {
+        "low": 8.8, "high": 9.5, "close": 9.0,
+        "boll_lower": 9.1, "boll_upper": 10.8,
+    }
+
+    assert strategy.detect_boll_direction(
+        previous, current,
+    ) is strategy.TurnDirection.NEUTRAL
+
+
+def test_opposite_event_replaces_old_event_with_auditable_reason():
+    book = strategy.empty_event_book()
+    strategy.apply_event(book, make_event(
+        "RSI", strategy.TurnDirection.BUY_TURN, "2021-01-04", "2021-01-05",
+    ))
+    strategy.apply_event(book, make_event(
+        "RSI", strategy.TurnDirection.SELL_TURN, "2021-01-05", "2021-01-06",
+    ))
+
+    assert book["active"]["RSI"]["direction"] is strategy.TurnDirection.SELL_TURN
+    assert len(book["invalidated"]) == 1
+    assert book["invalidated"][0]["invalid_reason"] == "REPLACED_BY_OPPOSITE_EVENT"
+
+
+def test_boll_lower_band_new_low_invalidates_old_buy_event():
+    book = strategy.empty_event_book()
+    strategy.apply_event(book, make_event(
+        "BOLL", strategy.TurnDirection.BUY_TURN, "2021-01-04", "2021-01-05",
+        reference_extreme=9.0,
+    ))
+
+    invalidated = strategy.invalidate_boll_structure(book, {
+        "date": "2021-01-05", "close": 8.8, "low": 8.7,
+        "boll_lower": 8.9, "high": 9.1, "boll_upper": 10.5,
+    })
+
+    assert "BOLL" not in book["active"]
+    assert invalidated["invalid_reason"] == "NEW_LOWER_LOW_OUTSIDE_LOWER_BAND"
+
+
+def test_boll_upper_band_new_high_invalidates_old_sell_event():
+    book = strategy.empty_event_book()
+    strategy.apply_event(book, make_event(
+        "BOLL", strategy.TurnDirection.SELL_TURN, "2021-01-04", "2021-01-05",
+        reference_extreme=11.0,
+    ))
+
+    invalidated = strategy.invalidate_boll_structure(book, {
+        "date": "2021-01-05", "close": 11.2, "low": 10.9,
+        "boll_lower": 9.5, "high": 11.4, "boll_upper": 11.1,
+    })
+
+    assert "BOLL" not in book["active"]
+    assert invalidated["invalid_reason"] == "NEW_HIGHER_HIGH_OUTSIDE_UPPER_BAND"
+
+
+def test_expired_event_is_invalidated_only_after_its_calendar_expiry_date():
+    book = strategy.empty_event_book()
+    strategy.apply_event(book, make_event(
+        "KDJ", strategy.TurnDirection.BUY_TURN,
+        pd.Timestamp("2021-01-08"), pd.Timestamp("2021-01-11"),
+    ))
+
+    strategy.expire_events(book, pd.Timestamp("2021-01-11"))
+    assert "KDJ" in book["active"]
+
+    strategy.expire_events(book, pd.Timestamp("2021-01-12"))
+    assert book["invalidated"][0]["invalid_reason"] == "EVENT_EXPIRED"
+
+
+def test_collect_latest_events_uses_trading_sessions_for_event_expiry():
+    index = pd.to_datetime(["2021-01-07", "2021-01-08", "2021-01-11"])
+    frame = pd.DataFrame({
+        "open": [10.0, 10.0, 10.0], "high": [10.5, 10.5, 10.5],
+        "low": [9.5, 9.5, 9.5], "close": [10.0, 10.0, 10.0],
+        "rsi14": [28.0, 29.0, 28.0],
+        "k": [50.0, 50.0, 50.0], "d": [50.0, 50.0, 50.0],
+        "j": [50.0, 50.0, 50.0], "kd_diff": [0.0, 0.0, 0.0],
+        "boll_lower": [9.0, 9.0, 9.0], "boll_upper": [11.0, 11.0, 11.0],
+    }, index=index)
+
+    book = strategy.collect_latest_events(
+        frame, pd.Timestamp("2021-01-11"), pd.Timestamp("2021-01-12"),
+    )
+
+    assert book["active"]["RSI"]["event_date"] == pd.Timestamp("2021-01-08")
+    assert book["active"]["RSI"]["expires_date"] == pd.Timestamp("2021-01-11")

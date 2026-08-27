@@ -139,6 +139,7 @@ OBSERVATION_COLUMNS = (
     "volume", "volume_ma5", "volume_ma20", "volume_ratio",
     "boll_width", "boll_mid_slope",
 )
+INDICATORS = ("BOLL", "RSI", "KDJ")
 
 
 def calc_rsi(close, period):
@@ -237,3 +238,176 @@ def build_indicator_frame(price_frame, params):
     frame["boll_width"] = (upper - lower) / mid.replace(0, np.nan)
     frame["boll_mid_slope"] = mid.diff()
     return frame
+
+
+def detect_rsi_direction(previous, current, params):
+    prev_rsi, curr_rsi = previous["rsi14"], current["rsi14"]
+    if pd.isna(prev_rsi) or pd.isna(curr_rsi):
+        return TurnDirection.NEUTRAL
+    if prev_rsi <= params["rsi_low"] and curr_rsi > prev_rsi:
+        return TurnDirection.BUY_TURN
+    if prev_rsi >= params["rsi_high"] and curr_rsi < prev_rsi:
+        return TurnDirection.SELL_TURN
+    return TurnDirection.NEUTRAL
+
+
+def detect_kdj_direction(previous, current, params):
+    required = ("k", "d", "j", "kd_diff")
+    if any(pd.isna(previous[name]) or pd.isna(current[name]) for name in required):
+        return TurnDirection.NEUTRAL
+    buy_extreme = (min(previous["k"], previous["d"]) <= params["kdj_low"] or
+                   previous["j"] <= params["j_low"])
+    sell_extreme = (max(previous["k"], previous["d"]) >= params["kdj_high"] or
+                    previous["j"] >= params["j_high"])
+    if (buy_extreme and current["j"] > previous["j"] and
+            current["kd_diff"] > previous["kd_diff"]):
+        return TurnDirection.BUY_TURN
+    if (sell_extreme and current["j"] < previous["j"] and
+            current["kd_diff"] < previous["kd_diff"]):
+        return TurnDirection.SELL_TURN
+    return TurnDirection.NEUTRAL
+
+
+def detect_boll_direction(previous, current):
+    fields = ("low", "high", "close", "boll_lower", "boll_upper")
+    values = [previous.get(name) for name in fields]
+    values += [current.get(name) for name in fields]
+    if any(pd.isna(value) for value in values):
+        return TurnDirection.NEUTRAL
+    touched_lower = (previous["low"] <= previous["boll_lower"] or
+                     previous["close"] <= previous["boll_lower"] or
+                     current["low"] <= current["boll_lower"] or
+                     current["close"] <= current["boll_lower"])
+    touched_upper = (previous["high"] >= previous["boll_upper"] or
+                     previous["close"] >= previous["boll_upper"] or
+                     current["high"] >= current["boll_upper"] or
+                     current["close"] >= current["boll_upper"])
+    if (touched_lower and current["close"] > current["boll_lower"] and
+            current["close"] > previous["close"]):
+        return TurnDirection.BUY_TURN
+    if (touched_upper and current["close"] < current["boll_upper"] and
+            current["close"] < previous["close"]):
+        return TurnDirection.SELL_TURN
+    return TurnDirection.NEUTRAL
+
+
+def make_turn_event(indicator, direction, event_date, expires_date,
+                    trigger_values, reference_extreme=None):
+    return {
+        "indicator": indicator,
+        "direction": direction,
+        "event_date": event_date,
+        "expires_date": expires_date,
+        "trigger_values": dict(trigger_values),
+        "reference_extreme": reference_extreme,
+        "invalid_reason": None,
+    }
+
+
+def empty_event_book():
+    return {"active": {}, "invalidated": []}
+
+
+def invalidate_event(book, indicator, reason):
+    event = book["active"].pop(indicator, None)
+    if event is not None:
+        event = dict(event)
+        event["invalid_reason"] = reason
+        book["invalidated"].append(event)
+    return event
+
+
+def apply_event(book, event):
+    old = book["active"].get(event["indicator"])
+    if old is not None and old["direction"] is not event["direction"]:
+        invalidate_event(book, event["indicator"], "REPLACED_BY_OPPOSITE_EVENT")
+    book["active"][event["indicator"]] = event
+
+
+def expire_events(book, signal_date):
+    for indicator, event in list(book["active"].items()):
+        if event["expires_date"] < signal_date:
+            invalidate_event(book, indicator, "EVENT_EXPIRED")
+
+
+def invalidate_boll_structure(book, latest_row):
+    event = book["active"].get("BOLL")
+    if event is None:
+        return None
+    if event["direction"] is TurnDirection.BUY_TURN:
+        broken = (latest_row["close"] <= latest_row["boll_lower"] and
+                  latest_row["low"] < event["reference_extreme"])
+        if broken:
+            return invalidate_event(
+                book, "BOLL", "NEW_LOWER_LOW_OUTSIDE_LOWER_BAND",
+            )
+    if event["direction"] is TurnDirection.SELL_TURN:
+        broken = (latest_row["close"] >= latest_row["boll_upper"] and
+                  latest_row["high"] > event["reference_extreme"])
+        if broken:
+            return invalidate_event(
+                book, "BOLL", "NEW_HIGHER_HIGH_OUTSIDE_UPPER_BAND",
+            )
+    return None
+
+
+def _trigger_values(indicator, previous, current):
+    fields_by_indicator = {
+        "BOLL": ("low", "high", "close", "boll_lower", "boll_upper"),
+        "RSI": ("rsi14",),
+        "KDJ": ("k", "d", "j", "kd_diff"),
+    }
+    fields = fields_by_indicator[indicator]
+    return {
+        "previous": {name: previous[name] for name in fields},
+        "current": {name: current[name] for name in fields},
+    }
+
+
+def _make_detected_event(indicator, direction, previous, current,
+                         event_date, expires_date):
+    reference_extreme = None
+    if indicator == "BOLL":
+        reference_extreme = (
+            current["low"] if direction is TurnDirection.BUY_TURN
+            else current["high"]
+        )
+    return make_turn_event(
+        indicator=indicator,
+        direction=direction,
+        event_date=event_date,
+        expires_date=expires_date,
+        trigger_values=_trigger_values(indicator, previous, current),
+        reference_extreme=reference_extreme,
+    )
+
+
+def collect_latest_events(indicator_frame, signal_date, next_trade_date):
+    params = get_default_params()
+    complete_frame = indicator_frame.loc[indicator_frame.index <= signal_date]
+    book = empty_event_book()
+    first_event_position = max(1, len(complete_frame) - 2)
+    for position in range(first_event_position, len(complete_frame)):
+        previous = complete_frame.iloc[position - 1]
+        current = complete_frame.iloc[position]
+        event_date = complete_frame.index[position]
+        expires_date = (
+            complete_frame.index[position + 1]
+            if position + 1 < len(complete_frame) else next_trade_date
+        )
+        expire_events(book, event_date)
+        directions = {
+            "BOLL": detect_boll_direction(previous, current),
+            "RSI": detect_rsi_direction(previous, current, params),
+            "KDJ": detect_kdj_direction(previous, current, params),
+        }
+        for indicator in INDICATORS:
+            direction = directions[indicator]
+            if direction is not TurnDirection.NEUTRAL:
+                apply_event(book, _make_detected_event(
+                    indicator, direction, previous, current,
+                    event_date, expires_date,
+                ))
+        invalidate_boll_structure(book, current)
+    expire_events(book, signal_date)
+    return book
