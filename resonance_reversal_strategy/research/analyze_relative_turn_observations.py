@@ -459,7 +459,7 @@ def _validate_session_evidence(records, role, calendar, errors):
     dates = set()
     for record in records:
         event = record.get("event")
-        if role == "candidate" and event == "signal_snapshot":
+        if event == "signal_snapshot":
             try:
                 decision_date = _calendar_date(record.get("decision_date"))
             except ValueError:
@@ -471,8 +471,6 @@ def _validate_session_evidence(records, role, calendar, errors):
             if timestamp is not None:
                 dates.add(timestamp.date())
         if event == "observation_outcome":
-            if role == "baseline" and record.get("_record_namespace") != "formal":
-                continue
             payload = record.get("outcome")
             if type(payload) is not dict:
                 continue
@@ -485,6 +483,18 @@ def _validate_session_evidence(records, role, calendar, errors):
     for session_date in sorted(dates):
         if session_date not in calendar:
             errors.append("%s session evidence missing summary: %s" % (role, session_date))
+
+
+def _validate_baseline_observation_namespaces(records, errors):
+    for record in records:
+        event = record.get("event")
+        namespace = record.get("_record_namespace")
+        if event == "relative_resonance_observation":
+            errors.append("baseline relative observation registration is not allowed")
+        elif event == "observation_outcome" and namespace != "formal":
+            errors.append("baseline non-formal observation outcome is not allowed")
+        elif _is_formal_registration_record(record) and namespace != "formal":
+            errors.append("baseline non-formal observation registration is not allowed")
 
 
 def _expected_outcome_session(event_date, horizon, calendar):
@@ -1198,6 +1208,7 @@ def analyze_records(candidate_records, baseline_records):
     )
     _validate_session_evidence(candidate_records, "candidate", session_calendar, errors)
     _validate_session_evidence(baseline_records, "baseline", session_calendar, errors)
+    _validate_baseline_observation_namespaces(baseline_records, errors)
     candidate_session_evidence = _candidate_session_evidence(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:

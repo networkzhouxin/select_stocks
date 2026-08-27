@@ -1495,6 +1495,45 @@ def test_horizon_calendar_requires_matching_bidirectional_summary_evidence():
     assert reversed_report == complete
 
 
+def test_session_evidence_and_namespace_contract_are_symmetric_by_role():
+    candidate = [record for record in make_candidate_records()
+                 if not (record.get("event") == "portfolio_summary"
+                         and record.get("closing_date") == "2021-01-12")]
+    baseline = [record for record in make_baseline_records()
+                if not (record.get("event") == "portfolio_summary"
+                        and record.get("closing_date") == "2021-01-12")]
+    baseline.append({
+        "event": "signal_snapshot", "build": "20260827.3",
+        "parameter_fingerprint": "e1227fbd8b4a884e",
+        "pool_fingerprint": "9123995edeb1ed84",
+        "event_logic_fingerprint": "1c0b8a22f48c97c3",
+        "code": "510300.XSHG", "decision_date": "2021-01-12",
+        "signal_date": "2021-01-11", "valid": True,
+        "_log_timestamp": "2021-01-12T09:35:00",
+    })
+    baseline.append({
+        "event": "observation_outcome", "resonance_id": "RELATIVE:foreign",
+        "relative_observation_id": "RELATIVE:foreign",
+        "observation_kind": "RELATIVE_RESONANCE", "code": "510300.XSHG",
+        "direction": "BUY_TURN", "branch": "SOFT_ALL_THREE",
+        "event_date": "2021-01-05", "horizon": 5,
+        "outcome": {"status": "PRICE_UNAVAILABLE", "closing_date": "2021-01-12"},
+        "_log_timestamp": "2021-01-12T15:30:00",
+    })
+
+    report = analyzer.analyze_records(candidate, baseline)
+    normal = analyzer.analyze_records(make_candidate_records(), make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any("candidate session evidence missing summary: 2021-01-12" in error
+               for error in report["data_quality"]["errors"])
+    assert any("baseline session evidence missing summary: 2021-01-12" in error
+               for error in report["data_quality"]["errors"])
+    assert any("baseline non-formal observation outcome is not allowed" in error
+               for error in report["data_quality"]["errors"])
+    assert normal["continue_candidate"] is True
+
+
 def test_formal_horizon_five_must_close_after_its_signal_date():
     baseline = make_baseline_records()
     formal_outcome = next(record for record in baseline
