@@ -1,9 +1,10 @@
-"""Read-only descriptive analysis for relative-resonance observation logs."""
+"""Read-only validation and descriptive analysis for relative observation logs."""
 
 import argparse
 import html
 import json
 import math
+import os
 import pathlib
 import re
 import statistics
@@ -14,6 +15,7 @@ from datetime import date
 TRAIN_START = date(2019, 1, 1)
 TRAIN_END = date(2021, 12, 31)
 CANDIDATE_BUILD = "20260827.4"
+BASELINE_BUILD = "20260827.3"
 RELATIVE_OBSERVATION_FINGERPRINT = "f47d32b87be6d926"
 BASELINE_FILLED_COUNT = 138
 BASELINE_FINAL_ASSET = 23856.40
@@ -21,34 +23,42 @@ PARAMETER_FINGERPRINT = "e1227fbd8b4a884e"
 POOL_FINGERPRINT = "9123995edeb1ed84"
 FORMAL_EVENT_FINGERPRINT = "1c0b8a22f48c97c3"
 LOG_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+BRANCHES = ("HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE")
+DIRECTIONS = ("BUY_TURN", "SELL_TURN")
+HORIZONS = (1, 3, 5)
+INDICATORS = frozenset(("BOLL", "KDJ", "RSI"))
+SOURCES = frozenset(("HARD", "RELATIVE"))
+
+
+def _reject_json_constant(value):
+    raise ValueError("non-finite JSON constant: %s" % value)
 
 
 def parse_joinquant_log_line(line, ordinal):
-    """Return one structured payload from a JoinQuant log line, if present."""
+    """Return one finite JSON object from a JoinQuant log line, if present."""
     text = html.unescape(line.strip())
     payload_start = text.find("{")
     if payload_start < 0:
         return None
     try:
-        payload = json.loads(text[payload_start:])
-    except json.JSONDecodeError:
+        payload = json.loads(text[payload_start:], parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError):
         return None
     if not isinstance(payload, dict):
         return None
     match = LOG_DATE_RE.match(text)
-    payload = dict(payload)
-    payload["_log_date"] = match.group(1) if match else None
-    payload["_ordinal"] = int(ordinal)
-    return payload
+    result = dict(payload)
+    result["_log_date"] = match.group(1) if match else None
+    result["_ordinal"] = int(ordinal)
+    return result
 
 
 def load_log_records(paths):
-    """Read user-supplied logs without changing them."""
+    """Read explicit log paths without changing the input files."""
     records = []
     ordinal = 0
     for path_value in paths:
-        path = pathlib.Path(path_value)
-        with path.open("r", encoding="utf-8-sig") as stream:
+        with pathlib.Path(path_value).open("r", encoding="utf-8-sig") as stream:
             for line in stream:
                 ordinal += 1
                 record = parse_joinquant_log_line(line, ordinal)
@@ -60,50 +70,286 @@ def load_log_records(paths):
 def _calendar_date(value):
     if value in (None, ""):
         return None
-    return date.fromisoformat(str(value)[:10])
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("date must be an ISO string")
+    return date.fromisoformat(value[:10])
+
+
+def _is_training_date(value, label, errors):
+    try:
+        parsed = _calendar_date(value)
+    except ValueError:
+        errors.append("invalid %s date: %r" % (label, value))
+        return None
+    if parsed is None:
+        errors.append("missing %s date" % label)
+        return None
+    if not TRAIN_START <= parsed <= TRAIN_END:
+        errors.append("%s outside 2019-2021: %s" % (label, parsed))
+    return parsed
 
 
 def _is_relative_record(record):
-    event = record.get("event")
     return (
-        event == "relative_resonance_observation"
-        or (event == "observation_outcome" and (
+        record.get("event") == "relative_resonance_observation"
+        or (record.get("event") == "observation_outcome" and (
             record.get("relative_observation_id")
             or record.get("observation_kind") == "RELATIVE_RESONANCE"
         ))
     )
 
 
-def _is_matching_relative_record(record):
+def _matching_relative_record(record):
     return (
         _is_relative_record(record)
         and record.get("build") == CANDIDATE_BUILD
-        and record.get("relative_observation_fingerprint")
-        == RELATIVE_OBSERVATION_FINGERPRINT
+        and record.get("relative_observation_fingerprint") == RELATIVE_OBSERVATION_FINGERPRINT
     )
 
 
-def reject_nontraining_observations(records):
-    """Reject selected relative observations with a date outside 2019--2021."""
+def _text(record, field, label, errors):
+    value = record.get(field)
+    if not isinstance(value, str) or not value:
+        errors.append("missing or invalid %s: %r" % (label, value))
+        return None
+    return value
+
+
+def _finite_number(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _validate_support_contract(record, prefix, signal_date, errors):
+    supporters = record.get("supporters")
+    if (not isinstance(supporters, (list, tuple)) or not supporters
+            or any(not isinstance(item, str) for item in supporters)
+            or len(set(supporters)) != len(supporters)
+            or not set(supporters).issubset(INDICATORS)):
+        errors.append("invalid %s supporters" % prefix)
+        return
+    support_set = set(supporters)
+    dates = record.get("supporter_event_dates")
+    sources = record.get("hard_or_relative_source_by_indicator")
+    if not isinstance(dates, dict) or set(dates) != support_set:
+        errors.append("invalid %s supporter_event_dates" % prefix)
+    else:
+        for indicator in sorted(dates):
+            supported_date = _is_training_date(
+                dates[indicator], "%s supporter_event_dates" % prefix, errors,
+            )
+            if (supported_date is not None and signal_date is not None
+                    and supported_date > signal_date):
+                errors.append("%s supporter date after signal date" % prefix)
+    if (not isinstance(sources, dict) or set(sources) != support_set
+            or not set(sources.values()).issubset(SOURCES)):
+        errors.append("invalid %s hard_or_relative_source_by_indicator" % prefix)
+
+
+def _validate_candidate_initializations(records, errors):
+    initialized = [record for record in records if record.get("event") == "strategy_initialized"]
+    if not initialized:
+        errors.append("missing candidate strategy_initialized record")
+        return
+    expected = {
+        "build": CANDIDATE_BUILD,
+        "parameter_fingerprint": PARAMETER_FINGERPRINT,
+        "pool_fingerprint": POOL_FINGERPRINT,
+        "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
+        "relative_observation_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
+    }
+    for record in initialized:
+        for field, expected_value in expected.items():
+            if record.get(field) != expected_value:
+                errors.append("candidate initialization %s mismatch: %r" % (
+                    field, record.get(field),
+                ))
+
+
+def _validate_relative_common(record, errors):
+    observation_id = _text(record, "relative_observation_id", "relative observation id", errors)
+    if observation_id is not None and not observation_id.startswith("RELATIVE:"):
+        errors.append("invalid relative observation id: %s" % observation_id)
+    if record.get("build") != CANDIDATE_BUILD:
+        errors.append("relative build mismatch: %r" % record.get("build"))
+    if record.get("relative_observation_fingerprint") != RELATIVE_OBSERVATION_FINGERPRINT:
+        errors.append("relative fingerprint mismatch: %r" % record.get("relative_observation_fingerprint"))
+    if record.get("observation_kind") != "RELATIVE_RESONANCE":
+        errors.append("invalid relative observation_kind: %r" % record.get("observation_kind"))
+    return observation_id
+
+
+def _validate_relative_registration(record, errors):
+    observation_id = _validate_relative_common(record, errors)
+    if record.get("branch") not in BRANCHES:
+        errors.append("invalid branch: %r" % record.get("branch"))
+    if record.get("direction") not in DIRECTIONS:
+        errors.append("invalid candidate direction: %r" % record.get("direction"))
+    _text(record, "code", "candidate code", errors)
+    signal_date = _is_training_date(record.get("signal_date"), "signal", errors)
+    expires_date = _is_training_date(record.get("expires_date"), "expires", errors)
+    if (signal_date is not None and expires_date is not None
+            and expires_date < signal_date):
+        errors.append("expired candidate: %s" % observation_id)
+    _validate_support_contract(record, "candidate", signal_date, errors)
+    event_close = _finite_number(record.get("event_close"))
+    if event_close is None or event_close <= 0:
+        errors.append("invalid candidate event_close")
+    return observation_id
+
+
+def _validate_relative_outcome_shape(record, errors):
+    observation_id = _validate_relative_common(record, errors)
+    horizon = record.get("horizon")
+    if (isinstance(horizon, bool) or not isinstance(horizon, int)
+            or horizon not in HORIZONS):
+        errors.append("invalid relative horizon: %r" % horizon)
+        horizon = None
+    _text(record, "code", "relative outcome code", errors)
+    if record.get("branch") not in BRANCHES:
+        errors.append("invalid relative outcome branch: %r" % record.get("branch"))
+    if record.get("direction") not in DIRECTIONS:
+        errors.append("invalid relative outcome direction: %r" % record.get("direction"))
+    _is_training_date(record.get("event_date"), "relative outcome event", errors)
+    supporters = record.get("supporters")
+    if (not isinstance(supporters, (list, tuple)) or not supporters
+            or any(not isinstance(item, str) for item in supporters)
+            or len(set(supporters)) != len(supporters)):
+        errors.append("invalid relative outcome supporters")
+    outcome = record.get("outcome")
+    if not isinstance(outcome, dict):
+        errors.append("invalid relative outcome payload")
+    elif outcome.get("status") == "RECORDED":
+        _is_training_date(outcome.get("closing_date"), "relative outcome closing", errors)
+        if _finite_number(outcome.get("return")) is None:
+            errors.append("invalid relative outcome return")
+        if _finite_number(outcome.get("direction_adjusted_return")) is None:
+            errors.append("invalid relative outcome direction_adjusted_return")
+    return observation_id, horizon
+
+
+def _same_supporters(left, right):
+    return tuple(left or ()) == tuple(right or ())
+
+
+def _validate_relative_identity(registration, outcome, errors):
+    observation_id = registration.get("relative_observation_id")
+    for field in ("observation_kind", "code", "direction", "branch"):
+        if outcome.get(field) != registration.get(field):
+            errors.append("relative outcome %s mismatch: %s" % (field, observation_id))
+    if str(outcome.get("event_date"))[:10] != str(registration.get("signal_date"))[:10]:
+        errors.append("relative outcome event_date mismatch: %s" % observation_id)
+    if not _same_supporters(outcome.get("supporters"), registration.get("supporters")):
+        errors.append("relative outcome supporters mismatch: %s" % observation_id)
+    for field in ("supporter_event_dates", "hard_or_relative_source_by_indicator"):
+        if field in outcome and outcome.get(field) != registration.get(field):
+            errors.append("relative outcome %s mismatch: %s" % (field, observation_id))
+
+
+def _validate_filled_orders(records, role, errors):
     for record in records:
-        if not _is_relative_record(record):
+        if not (record.get("event") == "order_transition" and record.get("outcome") == "FILLED"):
             continue
-        outcome = record.get("outcome") or {}
-        observed_dates = (
-            record.get("signal_date"), record.get("event_date"),
-            outcome.get("closing_date") if isinstance(outcome, dict) else None,
-        )
-        normalized_dates = tuple(
-            _calendar_date(value) for value in observed_dates
-            if value not in (None, "")
-        )
-        if not normalized_dates:
-            raise ValueError("relative observation has no training date")
-        for observed_date in normalized_dates:
-            if not TRAIN_START <= observed_date <= TRAIN_END:
-                raise ValueError(
-                    "relative observation outside 2019-2021: %s" % observed_date
-                )
+        if record.get("side") not in ("BUY", "SELL") or not isinstance(record.get("code"), str):
+            errors.append("invalid filled order identity in %s" % role)
+        for field in ("before_amount", "after_amount"):
+            value = _finite_number(record.get(field))
+            if value is None or value < 0:
+                errors.append("invalid filled order %s in %s" % (field, role))
+
+
+def _validate_baseline(records, errors):
+    initialized = [record for record in records if record.get("event") == "strategy_initialized"]
+    if not initialized:
+        errors.append("missing baseline strategy_initialized record")
+    expected = {
+        "build": BASELINE_BUILD,
+        "parameter_fingerprint": PARAMETER_FINGERPRINT,
+        "pool_fingerprint": POOL_FINGERPRINT,
+        "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
+    }
+    for record in initialized:
+        for field, expected_value in expected.items():
+            if record.get(field) != expected_value:
+                errors.append("baseline initialization %s mismatch: %r" % (field, record.get(field)))
+    registrations = {}
+    outcomes = {}
+    for record in records:
+        if not (record.get("event") == "resonance_decision"
+                and record.get("accepted") is True
+                and record.get("reason") == "COMPLETE_RESONANCE"):
+            continue
+        resonance_id = _text(record, "resonance_id", "formal resonance id", errors)
+        _text(record, "code", "formal code", errors)
+        if record.get("direction") not in DIRECTIONS:
+            errors.append("invalid formal direction: %r" % record.get("direction"))
+        _is_training_date(record.get("signal_date"), "formal signal", errors)
+        if resonance_id is not None:
+            if resonance_id in registrations:
+                errors.append("duplicate formal registration: %s" % resonance_id)
+            else:
+                registrations[resonance_id] = record
+    for record in records:
+        if record.get("event") != "observation_outcome" or record.get("relative_observation_id"):
+            continue
+        resonance_id = _text(record, "resonance_id", "formal outcome resonance id", errors)
+        horizon = record.get("horizon")
+        if (isinstance(horizon, bool) or not isinstance(horizon, int)
+                or horizon not in HORIZONS):
+            errors.append("invalid formal horizon: %r" % horizon)
+            continue
+        _text(record, "code", "formal outcome code", errors)
+        _is_training_date(record.get("event_date"), "formal outcome event", errors)
+        outcome = record.get("outcome")
+        if not isinstance(outcome, dict):
+            errors.append("invalid formal outcome payload")
+        elif outcome.get("status") == "RECORDED":
+            _is_training_date(outcome.get("closing_date"), "formal outcome closing", errors)
+            if _finite_number(outcome.get("return")) is None:
+                errors.append("invalid formal outcome return")
+        if resonance_id not in registrations:
+            errors.append("orphan formal outcome: %s" % resonance_id)
+            continue
+        registration = registrations[resonance_id]
+        if record.get("code") != registration.get("code"):
+            errors.append("formal outcome code mismatch: %s" % resonance_id)
+        if str(record.get("event_date"))[:10] != str(registration.get("signal_date"))[:10]:
+            errors.append("formal outcome event_date mismatch: %s" % resonance_id)
+        if "direction" in record and record.get("direction") != registration.get("direction"):
+            errors.append("formal outcome direction mismatch: %s" % resonance_id)
+        key = (resonance_id, horizon)
+        if key in outcomes:
+            errors.append("duplicate formal outcome: %s/%s" % key)
+        else:
+            outcomes[key] = record
+    _validate_filled_orders(records, "baseline", errors)
+    return registrations, outcomes
+
+
+def _filter_candidate_records(records):
+    selected = []
+    ignored = Counter()
+    for record in records:
+        if _matching_relative_record(record) or (
+                record.get("event") == "strategy_initialized"
+                and record.get("build") == CANDIDATE_BUILD
+                and record.get("relative_observation_fingerprint") == RELATIVE_OBSERVATION_FINGERPRINT):
+            selected.append(record)
+        elif _is_relative_record(record):
+            ignored["relative_build_mismatch" if record.get("build") != CANDIDATE_BUILD
+                    else "relative_fingerprint_mismatch"] += 1
+        elif record.get("event") == "observation_outcome":
+            ignored["formal_observation_outcome"] += 1
+        elif record.get("event") == "strategy_initialized":
+            ignored["initialization_mismatch"] += 1
+    return selected, dict(sorted(ignored.items()))
 
 
 def lower_quartile(values):
@@ -122,203 +368,100 @@ def lower_quartile(values):
 def summarize_returns(values):
     values = tuple(float(value) for value in values)
     if not values:
-        return {
-            "count": 0, "mean": None, "median": None,
-            "hit_rate": None, "q1": None,
-        }
-    return {
-        "count": len(values),
-        "mean": statistics.fmean(values),
-        "median": statistics.median(values),
-        "hit_rate": sum(value > 0 for value in values) / len(values),
-        "q1": lower_quartile(values),
-    }
+        return {"count": 0, "mean": None, "median": None, "hit_rate": None, "q1": None}
+    return {"count": len(values), "mean": statistics.fmean(values),
+            "median": statistics.median(values),
+            "hit_rate": sum(value > 0 for value in values) / len(values),
+            "q1": lower_quartile(values)}
 
 
 def extract_filled_order_path(records):
-    return tuple(
-        (
-            record.get("_log_date"), record.get("side"),
-            record.get("code"), record.get("before_amount"),
-            record.get("after_amount"),
-        )
-        for record in records
-        if (record.get("event") == "order_transition"
-            and record.get("outcome") == "FILLED")
-    )
+    return tuple((record.get("_log_date"), record.get("side"), record.get("code"),
+                  record.get("before_amount"), record.get("after_amount"))
+                 for record in records if record.get("event") == "order_transition"
+                 and record.get("outcome") == "FILLED")
 
 
 def extract_final_asset(records):
-    summaries = [
-        record for record in records
-        if record.get("event") == "portfolio_summary"
-        and record.get("total_value") is not None
-    ]
-    return None if not summaries else _safe_number(summaries[-1]["total_value"])
-
-
-def _formal_five_day_returns(records):
-    directions = {
-        record["resonance_id"]: record.get("direction")
-        for record in records
-        if record.get("event") == "resonance_decision"
-        and record.get("accepted") is True
-        and record.get("reason") == "COMPLETE_RESONANCE"
-        and record.get("resonance_id")
-    }
-    values = []
-    for record in records:
-        if (record.get("event") != "observation_outcome"
-                or record.get("horizon") != 5):
-            continue
-        outcome = record.get("outcome") or {}
-        resonance_id = record.get("resonance_id")
-        raw_return = _safe_number(outcome.get("return"))
-        if (resonance_id not in directions
-                or outcome.get("status") != "RECORDED"
-                or raw_return is None):
-            continue
-        values.append(
-            raw_return if directions[resonance_id] == "BUY_TURN"
-            else -raw_return
-        )
-    return values
-
-
-def _safe_number(value):
-    if isinstance(value, bool):
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if math.isfinite(numeric) else None
+    summaries = [record for record in records if record.get("event") == "portfolio_summary"
+                 and record.get("total_value") is not None]
+    return None if not summaries else _finite_number(summaries[-1]["total_value"])
 
 
 def _sort_key(record):
-    return (
-        str(record.get("signal_date") or record.get("event_date") or ""),
-        str(record.get("relative_observation_id") or ""),
-        str(record.get("horizon") or ""),
-        int(record.get("_ordinal") or 0),
-    )
+    return (str(record.get("signal_date") or record.get("event_date") or ""),
+            str(record.get("relative_observation_id") or record.get("resonance_id") or ""),
+            str(record.get("horizon") or ""), int(record.get("_ordinal") or 0))
 
 
-def _filter_candidate_records(records):
-    selected = []
-    ignored = Counter()
-    for record in records:
-        event = record.get("event")
-        if event == "strategy_initialized":
-            if (record.get("build") == CANDIDATE_BUILD
-                    and record.get("relative_observation_fingerprint")
-                    == RELATIVE_OBSERVATION_FINGERPRINT):
-                selected.append(record)
-            else:
-                ignored["initialization_mismatch"] += 1
-        elif _is_relative_record(record):
-            if record.get("build") != CANDIDATE_BUILD:
-                ignored["relative_build_mismatch"] += 1
-            elif (record.get("relative_observation_fingerprint")
-                    != RELATIVE_OBSERVATION_FINGERPRINT):
-                ignored["relative_fingerprint_mismatch"] += 1
-            else:
-                selected.append(record)
-        elif event == "observation_outcome":
-            ignored["formal_observation_outcome"] += 1
-    return selected, dict(sorted(ignored.items()))
+def _grouped_summaries(values_by_group):
+    return {group: {"horizon_%d" % horizon: summarize_returns(values_by_group[group][horizon])
+                    for horizon in HORIZONS} for group in values_by_group}
 
 
-def _initialization_errors(records):
-    expected = {
-        "build": CANDIDATE_BUILD,
-        "parameter_fingerprint": PARAMETER_FINGERPRINT,
-        "pool_fingerprint": POOL_FINGERPRINT,
-        "event_logic_fingerprint": FORMAL_EVENT_FINGERPRINT,
-        "relative_observation_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
-    }
-    initialized = [
-        record for record in records
-        if record.get("event") == "strategy_initialized"
-    ]
-    if not initialized:
-        return ["missing matching strategy_initialized record"]
-    errors = []
-    for record in initialized:
-        for field, expected_value in expected.items():
-            if record.get(field) != expected_value:
-                errors.append("%s mismatch: %r" % (field, record.get(field)))
-    return errors
+def _formal_five_day_returns(registrations, outcomes):
+    values = []
+    for (resonance_id, horizon), record in outcomes.items():
+        if horizon != 5:
+            continue
+        outcome = record.get("outcome") or {}
+        value = _finite_number(outcome.get("return"))
+        if outcome.get("status") == "RECORDED" and value is not None:
+            values.append(value if registrations[resonance_id].get("direction") == "BUY_TURN" else -value)
+    return values
 
 
 def analyze_records(candidate_records, baseline_records):
-    """Produce the frozen descriptive report without mutating either input."""
+    """Validate immutable log contracts and return a deterministic report."""
     candidate_records = list(candidate_records)
     baseline_records = list(baseline_records)
+    errors = []
+    _validate_candidate_initializations(candidate_records, errors)
+    _validate_filled_orders(candidate_records, "candidate", errors)
+    for record in candidate_records:
+        if record.get("event") == "relative_resonance_observation":
+            _validate_relative_registration(record, errors)
+        elif _is_relative_record(record):
+            _validate_relative_outcome_shape(record, errors)
+    formal_registrations, formal_outcomes = _validate_baseline(baseline_records, errors)
     selected, ignored_record_counts = _filter_candidate_records(candidate_records)
-    relative_records = [record for record in selected if _is_relative_record(record)]
-    reject_nontraining_observations(relative_records)
-    errors = _initialization_errors(selected)
-
+    registrations = {}
     candidates = []
-    candidate_by_id = {}
-    for record in sorted(relative_records, key=_sort_key):
+    for record in sorted(selected, key=_sort_key):
         if record.get("event") != "relative_resonance_observation":
             continue
         observation_id = record.get("relative_observation_id")
-        if not isinstance(observation_id, str) or not observation_id.startswith("RELATIVE:"):
-            errors.append("invalid relative observation id: %r" % observation_id)
+        if not isinstance(observation_id, str):
             continue
-        if observation_id in candidate_by_id:
+        if observation_id in registrations:
             errors.append("duplicate relative candidate: %s" % observation_id)
             continue
-        if record.get("observation_kind") != "RELATIVE_RESONANCE":
-            errors.append("invalid observation kind: %s" % observation_id)
-        if record.get("branch") not in ("HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE"):
-            errors.append("invalid branch: %s" % observation_id)
-        signal_date = _calendar_date(record.get("signal_date"))
-        expires_date = _calendar_date(record.get("expires_date"))
-        if signal_date is None or expires_date is None:
-            errors.append("candidate date missing: %s" % observation_id)
-        elif expires_date < signal_date:
-            errors.append("expired candidate: %s" % observation_id)
-        candidate_by_id[observation_id] = record
+        registrations[observation_id] = record
         candidates.append(record)
-
     outcomes = {}
-    for record in sorted(relative_records, key=_sort_key):
+    for record in sorted(selected, key=_sort_key):
         if record.get("event") != "observation_outcome":
             continue
         observation_id = record.get("relative_observation_id")
-        try:
-            horizon = int(record.get("horizon"))
-        except (TypeError, ValueError):
-            errors.append("invalid relative horizon: %s" % observation_id)
+        horizon = record.get("horizon")
+        if (not isinstance(observation_id, str) or isinstance(horizon, bool)
+                or not isinstance(horizon, int) or horizon not in HORIZONS):
             continue
+        if observation_id not in registrations:
+            errors.append("orphan relative outcome: %s" % observation_id)
+            continue
+        _validate_relative_identity(registrations[observation_id], record, errors)
         key = (observation_id, horizon)
         if key in outcomes:
             errors.append("duplicate relative outcome: %s/%s" % key)
             continue
         outcomes[key] = record
-
-    formal_keys = {
-        (record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
-        for record in candidate_records
-        if record.get("event") == "resonance_decision"
-        and record.get("accepted") is True
-        and record.get("reason") == "COMPLETE_RESONANCE"
-    }
-    relative_keys = {
-        (record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
-        for record in candidates
-    }
-    formal_overlap_count = len(formal_keys & relative_keys)
-
     year_counts = {"2019": 0, "2020": 0, "2021": 0}
-    direction_counts = {"BUY_TURN": 0, "SELL_TURN": 0}
+    direction_counts = {direction: 0 for direction in DIRECTIONS}
     etf_counts = Counter()
-    returns_by_horizon = {1: [], 3: [], 5: []}
-    five_day_by_branch = {"HARD_BOLL_SOFT_OSC": [], "SOFT_ALL_THREE": []}
+    returns_by_horizon = {horizon: [] for horizon in HORIZONS}
+    by_branch = {branch: {horizon: [] for horizon in HORIZONS} for branch in BRANCHES}
+    by_direction = {direction: {horizon: [] for horizon in HORIZONS} for direction in DIRECTIONS}
     five_day_2021 = []
     positive_by_etf = Counter()
     missing_outcome_count = 0
@@ -330,117 +473,104 @@ def analyze_records(candidate_records, baseline_records):
         direction = candidate.get("direction")
         if direction in direction_counts:
             direction_counts[direction] += 1
-        else:
-            errors.append("invalid candidate direction: %s" % observation_id)
         code = candidate.get("code")
-        if code:
+        if isinstance(code, str):
             etf_counts[code] += 1
-        else:
-            errors.append("candidate code missing: %s" % observation_id)
-        for horizon in (1, 3, 5):
+        for horizon in HORIZONS:
             record = outcomes.get((observation_id, horizon))
             outcome = record.get("outcome") if record is not None else None
-            value = _safe_number(
-                outcome.get("direction_adjusted_return")
-                if isinstance(outcome, dict) else None
-            )
-            if (not isinstance(outcome, dict)
-                    or outcome.get("status") != "RECORDED"
+            value = _finite_number(outcome.get("direction_adjusted_return")
+                                   if isinstance(outcome, dict) else None)
+            if (not isinstance(outcome, dict) or outcome.get("status") != "RECORDED"
                     or value is None):
                 missing_outcome_count += 1
                 continue
             returns_by_horizon[horizon].append(value)
+            if candidate.get("branch") in by_branch:
+                by_branch[candidate["branch"]][horizon].append(value)
+            if direction in by_direction:
+                by_direction[direction][horizon].append(value)
             if horizon == 5:
-                branch = candidate.get("branch")
-                if branch in five_day_by_branch:
-                    five_day_by_branch[branch].append(value)
                 if signal_date is not None and signal_date.year == 2021:
                     five_day_2021.append(value)
-                if value > 0 and code:
+                if value > 0 and isinstance(code, str):
                     positive_by_etf[code] += value
-
+    formal_keys = {(record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
+                   for record in candidate_records if record.get("event") == "resonance_decision"
+                   and record.get("accepted") is True and record.get("reason") == "COMPLETE_RESONANCE"}
+    relative_keys = {(record.get("code"), record.get("direction"), str(record.get("signal_date"))[:10])
+                     for record in candidates}
+    formal_overlap_count = len(formal_keys & relative_keys)
     total_positive = sum(positive_by_etf.values())
-    max_positive_contribution = (
-        max(positive_by_etf.values()) / total_positive
-        if total_positive > 0 else None
-    )
-    formal_horizon_5 = summarize_returns(_formal_five_day_returns(baseline_records))
-    horizon_5 = summarize_returns(returns_by_horizon[5])
-    year_2021 = summarize_returns(five_day_2021)
+    max_positive_contribution = (max(positive_by_etf.values()) / total_positive
+                                 if total_positive > 0 else None)
     candidate_path = extract_filled_order_path(candidate_records)
     baseline_path = extract_filled_order_path(baseline_records)
     candidate_asset = extract_final_asset(candidate_records)
     baseline_asset = extract_final_asset(baseline_records)
-    formal_order_path_exact = (
-        len(candidate_path) == BASELINE_FILLED_COUNT
-        and len(baseline_path) == BASELINE_FILLED_COUNT
-        and candidate_path == baseline_path
-    )
-    final_asset_exact = (
-        candidate_asset is not None and baseline_asset is not None
-        and math.isclose(candidate_asset, BASELINE_FINAL_ASSET, abs_tol=0.01)
-        and math.isclose(baseline_asset, BASELINE_FINAL_ASSET, abs_tol=0.01)
-        and math.isclose(candidate_asset, baseline_asset, abs_tol=0.01)
-    )
-    errors = sorted(errors)
-    data_quality_complete = (
-        not errors and formal_overlap_count == 0 and missing_outcome_count == 0
-    )
+    horizon_5 = summarize_returns(returns_by_horizon[5])
+    year_2021 = summarize_returns(five_day_2021)
+    formal_horizon_5 = summarize_returns(_formal_five_day_returns(formal_registrations, formal_outcomes))
+    formal_order_path_exact = (len(candidate_path) == BASELINE_FILLED_COUNT
+                               and len(baseline_path) == BASELINE_FILLED_COUNT
+                               and candidate_path == baseline_path)
+    final_asset_exact = (candidate_asset is not None and baseline_asset is not None
+                         and math.isclose(candidate_asset, BASELINE_FINAL_ASSET, abs_tol=0.01)
+                         and math.isclose(baseline_asset, BASELINE_FINAL_ASSET, abs_tol=0.01)
+                         and math.isclose(candidate_asset, baseline_asset, abs_tol=0.01))
+    errors = sorted(set(errors))
+    data_quality_complete = not errors and formal_overlap_count == 0 and missing_outcome_count == 0
     gates = {
         "candidate_count_at_least_30": len(candidates) >= 30,
-        "each_training_year_at_least_5": all(
-            year_counts[str(year)] >= 5 for year in (2019, 2020, 2021)
-        ),
-        "horizon_5_median_positive": (
-            horizon_5["median"] is not None and horizon_5["median"] > 0
-        ),
-        "horizon_5_hit_rate_above_half": (
-            horizon_5["hit_rate"] is not None and horizon_5["hit_rate"] > 0.5
-        ),
-        "year_2021_median_nonnegative": (
-            year_2021["median"] is not None and year_2021["median"] >= 0
-        ),
-        "horizon_5_q1_not_worse_than_formal": (
-            horizon_5["q1"] is not None and formal_horizon_5["q1"] is not None
-            and horizon_5["q1"] >= formal_horizon_5["q1"]
-        ),
-        "single_etf_positive_contribution_at_most_half": (
-            max_positive_contribution is not None
-            and max_positive_contribution <= 0.5
-        ),
+        "each_training_year_at_least_5": all(year_counts[str(year)] >= 5 for year in (2019, 2020, 2021)),
+        "horizon_5_median_positive": horizon_5["median"] is not None and horizon_5["median"] > 0,
+        "horizon_5_hit_rate_above_half": horizon_5["hit_rate"] is not None and horizon_5["hit_rate"] > 0.5,
+        "year_2021_median_nonnegative": year_2021["median"] is not None and year_2021["median"] >= 0,
+        "horizon_5_q1_not_worse_than_formal": (horizon_5["q1"] is not None
+                                                  and formal_horizon_5["q1"] is not None
+                                                  and horizon_5["q1"] >= formal_horizon_5["q1"]),
+        "single_etf_positive_contribution_at_most_half": (max_positive_contribution is not None
+                                                             and max_positive_contribution <= 0.5),
         "formal_order_path_exact": formal_order_path_exact,
         "final_asset_exact": final_asset_exact,
         "data_quality_complete": data_quality_complete,
     }
     return {
-        "data_quality": {
-            "errors": errors,
-            "relative_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
-            "formal_overlap_count": formal_overlap_count,
-            "missing_outcome_count": missing_outcome_count,
-            "ignored_record_counts": ignored_record_counts,
-        },
-        "metrics": {
-            "candidate_count": len(candidates),
-            "year_counts": year_counts,
-            "direction_counts": direction_counts,
-            "etf_counts": dict(sorted(etf_counts.items())),
-            "by_branch": {
-                branch: summarize_returns(five_day_by_branch[branch])
-                for branch in ("HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE")
-            },
-            "horizon_1": summarize_returns(returns_by_horizon[1]),
-            "horizon_3": summarize_returns(returns_by_horizon[3]),
-            "horizon_5": horizon_5,
-            "year_2021_horizon_5": year_2021,
-            "formal_horizon_5": formal_horizon_5,
-            "max_positive_contribution_by_etf": max_positive_contribution,
-            "filled_path_count": len(candidate_path),
-            "final_asset": candidate_asset,
-        },
-        "gates": gates,
-        "continue_candidate": all(gates.values()),
+        "data_quality": {"errors": errors, "relative_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
+                         "formal_overlap_count": formal_overlap_count,
+                         "missing_outcome_count": missing_outcome_count,
+                         "ignored_record_counts": ignored_record_counts},
+        "metrics": {"candidate_count": len(candidates), "year_counts": year_counts,
+                    "direction_counts": direction_counts, "etf_counts": dict(sorted(etf_counts.items())),
+                    "by_branch": _grouped_summaries(by_branch),
+                    "by_direction": _grouped_summaries(by_direction),
+                    "horizon_1": summarize_returns(returns_by_horizon[1]),
+                    "horizon_3": summarize_returns(returns_by_horizon[3]),
+                    "horizon_5": horizon_5, "year_2021_horizon_5": year_2021,
+                    "formal_horizon_5": formal_horizon_5,
+                    "max_positive_contribution_by_etf": max_positive_contribution,
+                    "filled_path_count": len(candidate_path), "final_asset": candidate_asset},
+        "gates": gates, "continue_candidate": all(gates.values()),
     }
+
+
+def _normalized_input_paths(paths):
+    normalized = []
+    for path_value in paths:
+        path = pathlib.Path(path_value).expanduser().resolve(strict=True)
+        if not path.is_file():
+            raise ValueError("input log must be a file: %s" % path)
+        normalized.append(path)
+    return normalized
+
+
+def _output_conflicts_with_input(output_path, input_paths):
+    for input_path in input_paths:
+        if output_path == input_path:
+            return True
+        if output_path.exists() and os.path.samefile(output_path, input_path):
+            return True
+    return False
 
 
 def main(argv=None):
@@ -449,16 +579,14 @@ def main(argv=None):
     parser.add_argument("--baseline-log", action="append", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
-    report = analyze_records(
-        load_log_records(args.candidate_log),
-        load_log_records(args.baseline_log),
-    )
-    output_path = pathlib.Path(args.output)
+    candidate_paths = _normalized_input_paths(args.candidate_log)
+    baseline_paths = _normalized_input_paths(args.baseline_log)
+    output_path = pathlib.Path(args.output).expanduser().resolve(strict=False)
+    if _output_conflicts_with_input(output_path, candidate_paths + baseline_paths):
+        raise ValueError("output path must not match an input log")
+    report = analyze_records(load_log_records(candidate_paths), load_log_records(baseline_paths))
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     return 0
 
 

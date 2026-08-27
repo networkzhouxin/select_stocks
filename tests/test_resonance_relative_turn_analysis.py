@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import pathlib
 
 import pytest
@@ -49,6 +50,12 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
     )
     code = code or ("510300.XSHG", "159915.XSHE", "518880.XSHG")[index % 3]
     signal_date = "%04d-01-%02d" % (year, index % 10 + 2)
+    if branch == "HARD_BOLL_SOFT_OSC":
+        supporters = ["BOLL", "RSI"]
+        source_map = {"BOLL": "HARD", "RSI": "RELATIVE"}
+    else:
+        supporters = ["BOLL", "KDJ", "RSI"]
+        source_map = {indicator: "RELATIVE" for indicator in supporters}
     return {
         "event": "relative_resonance_observation",
         "relative_observation_id": "RELATIVE:%02d" % index,
@@ -58,9 +65,14 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         "direction": direction,
         "signal_date": signal_date,
         "expires_date": signal_date,
-        "supporters": ["BOLL", "RSI"],
+        "supporters": supporters,
+        "supporter_event_dates": {
+            indicator: signal_date for indicator in supporters
+        },
+        "hard_or_relative_source_by_indicator": source_map,
         "build": BUILD,
         "relative_observation_fingerprint": FINGERPRINT,
+        "event_close": 10.0,
     }
 
 
@@ -73,6 +85,11 @@ def make_outcome(record, horizon, value):
         "code": record["code"], "event_date": record["signal_date"],
         "horizon": horizon, "build": BUILD,
         "relative_observation_fingerprint": FINGERPRINT,
+        "supporters": record["supporters"],
+        "supporter_event_dates": record["supporter_event_dates"],
+        "hard_or_relative_source_by_indicator": (
+            record["hard_or_relative_source_by_indicator"]
+        ),
         "outcome": {
             "status": "RECORDED", "closing_date": record["signal_date"],
             "return": value, "direction_adjusted_return": value,
@@ -97,7 +114,13 @@ def make_candidate_records():
 
 
 def make_baseline_records():
-    records = make_order_path()
+    records = [{
+        "event": "strategy_initialized", "build": "20260827.3",
+        "parameter_fingerprint": "e1227fbd8b4a884e",
+        "pool_fingerprint": "9123995edeb1ed84",
+        "event_logic_fingerprint": "1c0b8a22f48c97c3",
+    }]
+    records.extend(make_order_path())
     records.append({
         "event": "portfolio_summary", "closing_date": "2021-12-31",
         "total_value": 23856.40,
@@ -114,7 +137,10 @@ def make_baseline_records():
             "event": "observation_outcome", "resonance_id": resonance_id,
             "code": "510300.XSHG", "event_date": "2021-01-05",
             "horizon": 5,
-            "outcome": {"status": "RECORDED", "return": 0.01},
+            "outcome": {
+                "status": "RECORDED", "closing_date": "2021-01-05",
+                "return": 0.01,
+            },
         })
     return records
 
@@ -153,7 +179,7 @@ def test_load_records_skips_bad_lines_and_preserves_source_file(tmp_path):
     assert log_path.read_text(encoding="utf-8") == content
 
 
-def test_analyzer_rejects_validation_period_qualified_observation():
+def test_analyzer_reports_validation_period_qualified_observation_as_error():
     candidate = [make_initialized_record(), {
         "event": "relative_resonance_observation",
         "relative_observation_id": "RELATIVE:2022",
@@ -161,8 +187,11 @@ def test_analyzer_rejects_validation_period_qualified_observation():
         "build": BUILD, "relative_observation_fingerprint": FINGERPRINT,
     }]
 
-    with pytest.raises(ValueError, match="2022"):
-        analyzer.analyze_records(candidate, [])
+    report = analyzer.analyze_records(candidate, [])
+
+    assert any("outside 2019-2021: 2022-01-04" in error
+               for error in report["data_quality"]["errors"])
+    assert report["continue_candidate"] is False
 
 
 def test_empty_input_is_reported_as_incomplete_without_writing_state():
@@ -170,7 +199,8 @@ def test_empty_input_is_reported_as_incomplete_without_writing_state():
 
     assert report["metrics"]["candidate_count"] == 0
     assert report["data_quality"]["errors"] == [
-        "missing matching strategy_initialized record",
+        "missing baseline strategy_initialized record",
+        "missing candidate strategy_initialized record",
     ]
     assert report["continue_candidate"] is False
 
@@ -228,8 +258,8 @@ def test_analysis_keeps_branches_directions_and_horizons_separate():
     assert report["metrics"]["direction_counts"] == {
         "BUY_TURN": 1, "SELL_TURN": 1,
     }
-    assert report["metrics"]["by_branch"]["SOFT_ALL_THREE"]["median"] == pytest.approx(0.03)
-    assert report["metrics"]["by_branch"]["HARD_BOLL_SOFT_OSC"]["median"] == pytest.approx(-0.04)
+    assert report["metrics"]["by_branch"]["SOFT_ALL_THREE"]["horizon_5"]["median"] == pytest.approx(0.03)
+    assert report["metrics"]["by_branch"]["HARD_BOLL_SOFT_OSC"]["horizon_5"]["median"] == pytest.approx(-0.04)
     assert report["metrics"]["horizon_1"]["median"] == pytest.approx(0.0)
     assert report["metrics"]["horizon_3"]["median"] == pytest.approx(0.0)
 
@@ -282,7 +312,8 @@ def test_foreign_relative_and_formal_observation_logs_are_ignored_and_reported()
         "relative_build_mismatch": 2,
         "relative_fingerprint_mismatch": 2,
     }
-    assert report["data_quality"]["errors"] == []
+    assert any("build mismatch" in error for error in report["data_quality"]["errors"])
+    assert any("fingerprint mismatch" in error for error in report["data_quality"]["errors"])
 
 
 def test_report_is_deterministic_with_unordered_relative_input():
@@ -332,3 +363,141 @@ def test_cli_writes_only_explicit_output_file_and_keeps_inputs_unchanged(tmp_pat
     assert json.loads(output_path.read_text(encoding="utf-8"))["continue_candidate"] is True
     assert candidate_path.read_bytes() == candidate_before
     assert baseline_path.read_bytes() == baseline_before
+
+
+def test_foreign_relative_contract_is_an_error_before_build_filtering():
+    foreign = make_relative_record(99)
+    foreign["build"] = "20260827.5"
+    foreign["relative_observation_fingerprint"] = "foreign-contract"
+    foreign["signal_date"] = "2022-01-04"
+    foreign["expires_date"] = "2022-01-04"
+
+    report = analyzer.analyze_records(
+        make_candidate_records() + [foreign], make_baseline_records(),
+    )
+
+    errors = report["data_quality"]["errors"]
+    assert any("outside 2019-2021: 2022-01-04" in error for error in errors)
+    assert any("build mismatch" in error for error in errors)
+    assert any("fingerprint mismatch" in error for error in errors)
+    assert report["continue_candidate"] is False
+
+
+def test_relative_outcomes_require_exact_registration_identity_and_horizons():
+    registration = make_relative_record(0)
+    orphan = make_outcome(make_relative_record(1), 1, 0.01)
+    mismatch = make_outcome(registration, 3, 0.01)
+    mismatch["code"] = "518880.XSHG"
+    mismatch["supporter_event_dates"] = {"BOLL": "2021-01-03"}
+    invalid_horizon = make_outcome(registration, 1, 0.01)
+    invalid_horizon["horizon"] = 1.9
+    boolean_horizon = make_outcome(registration, 1, 0.01)
+    boolean_horizon["horizon"] = True
+    duplicate_conflict = make_outcome(registration, 5, 0.01)
+    duplicate_conflict["outcome"]["direction_adjusted_return"] = 0.02
+    candidate = [make_initialized_record(), registration, orphan, mismatch,
+                 invalid_horizon, boolean_horizon, duplicate_conflict,
+                 dict(duplicate_conflict)]
+
+    report = analyzer.analyze_records(candidate, [])
+
+    errors = report["data_quality"]["errors"]
+    assert any("orphan relative outcome" in error for error in errors)
+    assert any("relative outcome code mismatch" in error for error in errors)
+    assert any("relative outcome supporter_event_dates mismatch" in error for error in errors)
+    assert any("invalid relative horizon: 1.9" in error for error in errors)
+    assert any("invalid relative horizon: True" in error for error in errors)
+    assert any("duplicate relative outcome" in error for error in errors)
+
+
+def test_baseline_requires_frozen_initialization_and_linked_formal_records():
+    baseline = make_baseline_records()
+    baseline[0]["build"] = "20260827.4"
+    formal = next(record for record in baseline if record.get("event") == "resonance_decision")
+    formal["direction"] = "NEUTRAL"
+    baseline.append(dict(formal))
+    mismatched = next(
+        record for record in baseline
+        if record.get("resonance_id") == "FORMAL:01"
+        and record.get("event") == "observation_outcome"
+    )
+    mismatched["event_date"] = "2021-01-06"
+    mismatched["direction"] = "SELL_TURN"
+    orphan = {
+        "event": "observation_outcome", "resonance_id": "FORMAL:orphan",
+        "code": "510300.XSHG", "event_date": "2022-01-04", "horizon": 5,
+        "outcome": {"status": "RECORDED", "return": 0.01},
+    }
+
+    report = analyzer.analyze_records(make_candidate_records(), baseline + [orphan])
+
+    errors = report["data_quality"]["errors"]
+    assert any("baseline initialization build mismatch" in error for error in errors)
+    assert any("invalid formal direction" in error for error in errors)
+    assert any("duplicate formal registration" in error for error in errors)
+    assert any("formal outcome event_date mismatch" in error for error in errors)
+    assert any("formal outcome direction mismatch" in error for error in errors)
+    assert any("orphan formal outcome" in error for error in errors)
+    assert any("outside 2019-2021: 2022-01-04" in error for error in errors)
+
+
+def test_parser_rejects_nonfinite_json_constants_and_records_reject_bad_fields():
+    assert analyzer.parse_joinquant_log_line(
+        '2021-01-05 - {"event":"x","value":NaN}', 1,
+    ) is None
+    broken = make_relative_record(0)
+    broken["direction"] = "NEUTRAL"
+    broken["event_close"] = float("inf")
+    broken.pop("supporters")
+    invalid_order = {
+        "event": "order_transition", "outcome": "FILLED", "side": "BUY",
+        "code": "510300.XSHG", "before_amount": -1, "after_amount": float("nan"),
+    }
+
+    report = analyzer.analyze_records(
+        [make_initialized_record(), broken, invalid_order], [],
+    )
+
+    errors = report["data_quality"]["errors"]
+    assert any("invalid candidate direction" in error for error in errors)
+    assert any("event_close" in error for error in errors)
+    assert any("supporters" in error for error in errors)
+    assert any("invalid filled order" in error for error in errors)
+
+
+def test_cli_rejects_output_alias_of_an_input_without_overwriting(tmp_path):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    candidate_path.write_text("noise", encoding="utf-8")
+    baseline_path.write_text("noise", encoding="utf-8")
+    before = candidate_path.read_bytes()
+    alias_path = tmp_path / "candidate-alias.log"
+    os.link(candidate_path, alias_path)
+
+    with pytest.raises(ValueError, match="output path must not match an input log"):
+        analyzer.main([
+            "--candidate-log", str(candidate_path),
+            "--baseline-log", str(baseline_path),
+            "--output", str(alias_path),
+        ])
+
+    assert candidate_path.read_bytes() == before
+    assert alias_path.read_bytes() == before
+
+
+def test_grouped_return_schema_is_complete_and_deterministic():
+    report = analyzer.analyze_records(
+        make_candidate_records(), make_baseline_records(),
+    )
+
+    assert set(report["metrics"]["by_branch"]) == {
+        "HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE",
+    }
+    assert set(report["metrics"]["by_direction"]) == {
+        "BUY_TURN", "SELL_TURN",
+    }
+    for group in (
+            *report["metrics"]["by_branch"].values(),
+            *report["metrics"]["by_direction"].values()):
+        assert set(group) == {"horizon_1", "horizon_3", "horizon_5"}
+        assert group["horizon_5"]["count"] >= 0
