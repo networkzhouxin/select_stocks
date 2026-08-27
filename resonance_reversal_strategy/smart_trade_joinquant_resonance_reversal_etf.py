@@ -1,5 +1,6 @@
 from jqdata import *
 
+import builtins as _builtins
 import hashlib
 import json
 import math
@@ -8,7 +9,7 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.2"
+DEPLOYMENT_BUILD_ID = "20260827.3"
 BENCHMARK = "000300.XSHG"
 
 
@@ -386,7 +387,7 @@ def _normalize_observation_record(record):
 
 def _observation_record_is_terminal(record):
     horizons = record["horizons"]
-    return bool(horizons) and all(
+    return bool(horizons) and _builtins.all(
         _is_terminal_observation_outcome(record["outcomes"].get(horizon))
         for horizon in horizons
     )
@@ -413,7 +414,7 @@ def _is_future_data_error(error):
     if (isinstance(future_error_type, type)
             and isinstance(error, future_error_type)):
         return True
-    return any(
+    return _builtins.any(
         error_type.__name__ == "FutureDataError"
         for error_type in type(error).__mro__
     )
@@ -1035,7 +1036,8 @@ def detect_rsi_direction(previous, current, params):
 
 def detect_kdj_direction(previous, current, params):
     required = ("k", "d", "j", "kd_diff")
-    if any(pd.isna(previous[name]) or pd.isna(current[name]) for name in required):
+    if _builtins.any(pd.isna(previous[name]) or pd.isna(current[name])
+                     for name in required):
         return TurnDirection.NEUTRAL
     buy_extreme = (min(previous["k"], previous["d"]) <= params["kdj_low"] or
                    previous["j"] <= params["j_low"])
@@ -1066,7 +1068,7 @@ def detect_boll_direction(previous, current):
     fields = ("low", "high", "close", "boll_lower", "boll_upper")
     values = [previous.get(name) for name in fields]
     values += [current.get(name) for name in fields]
-    if any(pd.isna(value) for value in values):
+    if _builtins.any(pd.isna(value) for value in values):
         return TurnDirection.NEUTRAL
     touched_lower = (previous["low"] <= previous["boll_lower"] or
                      previous["close"] <= previous["boll_lower"] or
@@ -1088,7 +1090,7 @@ def detect_boll_direction(previous, current):
 def _has_complete_values(previous, current, names):
     values = [previous.get(name) for name in names]
     values += [current.get(name) for name in names]
-    return not any(pd.isna(value) for value in values)
+    return not _builtins.any(pd.isna(value) for value in values)
 
 
 def build_event_detection_trace(indicator_frame, params):
@@ -1276,7 +1278,7 @@ def run_event_logic_self_check(params):
     )
     return {
         "cases": cases,
-        "passed": all(case["passed"] for case in cases.values()),
+        "passed": _builtins.all(case["passed"] for case in cases.values()),
     }
 
 
@@ -1458,8 +1460,9 @@ def build_resonance_decision(code, direction, event_book, signal_date):
         event_book["active"].get("RSI"),
         event_book["active"].get("KDJ"),
     ]
-    if any(event is not None and event["direction"] is OPPOSITE[direction]
-           for event in oscillators):
+    if _builtins.any(event is not None
+                     and event["direction"] is OPPOSITE[direction]
+                     for event in oscillators):
         return None
 
     supporters = [boll] + [
@@ -1468,7 +1471,7 @@ def build_resonance_decision(code, direction, event_book, signal_date):
     ]
     if len(supporters) < 2:
         return None
-    if not any(
+    if not _builtins.any(
             _calendar_date(event["event_date"]) == signal_date
             for event in supporters):
         return None
@@ -1499,7 +1502,7 @@ def resonance_rejection_reason(direction, event_book, signal_date):
         event_book["active"].get("RSI"),
         event_book["active"].get("KDJ"),
     ]
-    if any(
+    if _builtins.any(
             event is not None and event["direction"] is OPPOSITE[direction]
             for event in oscillators):
         return "THIRD_INDICATOR_CONFLICT"
@@ -1509,7 +1512,7 @@ def resonance_rejection_reason(direction, event_book, signal_date):
     ]
     if len(supporters) < 2:
         return "INSUFFICIENT_SUPPORT"
-    if not any(
+    if not _builtins.any(
             _calendar_date(event["event_date"]) == signal_date
             for event in supporters):
         return "NO_FRESH_SUPPORTER"

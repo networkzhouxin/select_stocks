@@ -3183,7 +3183,7 @@ def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
 
 
 def test_diagnostic_build_id_is_bumped():
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.2"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.3"
 
 
 def test_logged_kdj_values_flow_through_snapshot_trace_and_event_book(
@@ -3559,3 +3559,168 @@ def test_event_detection_trace_cannot_change_resonance_or_submitted_orders(
 
     assert observations[0][0] == observations[1][0]
     assert observations[0][1] == observations[1][1] == [code]
+
+
+def _poison_strategy_reducers(monkeypatch):
+    def joinquant_like_reducer(values):
+        return (value for value in values)
+
+    monkeypatch.setattr(strategy, "all", joinquant_like_reducer, raising=False)
+    monkeypatch.setattr(strategy, "any", joinquant_like_reducer, raising=False)
+
+
+def _install_initialize_platform_stubs(monkeypatch, messages, scheduled):
+    monkeypatch.setattr(strategy, "set_option", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "set_benchmark", lambda *args: None, raising=False)
+    monkeypatch.setattr(strategy, "PriceRelatedSlippage", lambda value: value, raising=False)
+    monkeypatch.setattr(strategy, "set_slippage", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(strategy, "OrderCost", lambda **kwargs: kwargs, raising=False)
+    monkeypatch.setattr(strategy, "set_order_cost", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        strategy, "run_daily",
+        lambda function, **kwargs: scheduled.append(function.__name__),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda message, *args: messages.append(
+            message % args if args else message
+        )),
+        raising=False,
+    )
+    monkeypatch.setattr(strategy, "g", types.SimpleNamespace(), raising=False)
+
+
+def test_poisoned_reducers_keep_initialize_self_check_boolean_and_serializable(
+        monkeypatch):
+    messages = []
+    scheduled = []
+    _poison_strategy_reducers(monkeypatch)
+    _install_initialize_platform_stubs(monkeypatch, messages, scheduled)
+
+    strategy.initialize(types.SimpleNamespace())
+
+    payload = json.loads(messages[-1])
+    assert scheduled == ["do_trading", "after_close"]
+    assert payload["event_logic_self_check"]["passed"] is True
+    assert isinstance(payload["event_logic_self_check"]["passed"], bool)
+    assert isinstance(payload["event_logic_fingerprint"], str)
+
+
+def test_poisoned_any_preserves_logged_kdj_sell_trace_and_active_event(
+        monkeypatch):
+    _poison_strategy_reducers(monkeypatch)
+    params = strategy.get_default_params()
+    frame = _event_diagnostic_frame(
+        {"k": 92.72, "d": 91.23, "j": 95.70, "kd_diff": 1.49},
+        {"k": 87.34, "d": 89.93, "j": 82.15, "kd_diff": -2.59},
+    )
+
+    trace = strategy.build_event_detection_trace(frame, params)
+    event_book = strategy.collect_latest_events(
+        frame, frame.index[-1], frame.index[-1] + pd.offsets.BDay(1),
+    )
+
+    assert trace["kdj"]["direction"] is strategy.TurnDirection.SELL_TURN
+    assert event_book["active"]["KDJ"]["direction"] is (
+        strategy.TurnDirection.SELL_TURN
+    )
+
+
+def test_poisoned_any_preserves_boll_buy_trace_and_active_event(monkeypatch):
+    _poison_strategy_reducers(monkeypatch)
+    params = strategy.get_default_params()
+    frame = _event_diagnostic_frame(
+        {"low": 8.8, "close": 9.0, "boll_lower": 9.0},
+        {"low": 9.2, "close": 9.5, "boll_lower": 9.1},
+    )
+
+    trace = strategy.build_event_detection_trace(frame, params)
+    event_book = strategy.collect_latest_events(
+        frame, frame.index[-1], frame.index[-1] + pd.offsets.BDay(1),
+    )
+
+    assert trace["boll"]["direction"] is strategy.TurnDirection.BUY_TURN
+    assert event_book["active"]["BOLL"]["direction"] is (
+        strategy.TurnDirection.BUY_TURN
+    )
+
+
+def test_poisoned_any_preserves_resonance_conflict_and_freshness(monkeypatch):
+    _poison_strategy_reducers(monkeypatch)
+    direction = strategy.TurnDirection.BUY_TURN
+    accepted = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-05",
+    )
+    conflicted = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "SELL_TURN", "2021-01-05",
+    )
+    stale = event_book_for_directions(
+        "BUY_TURN", "BUY_TURN", "NEUTRAL", "2021-01-04",
+    )
+
+    assert strategy.build_resonance_decision(
+        "510300.XSHG", direction, accepted, "2021-01-05",
+    ) is not None
+    assert strategy.resonance_rejection_reason(
+        direction, accepted, "2021-01-05",
+    ) == "RESONANCE_REJECTED"
+    assert strategy.build_resonance_decision(
+        "510300.XSHG", direction, conflicted, "2021-01-05",
+    ) is None
+    assert strategy.resonance_rejection_reason(
+        direction, conflicted, "2021-01-05",
+    ) == "THIRD_INDICATOR_CONFLICT"
+    assert strategy.build_resonance_decision(
+        "510300.XSHG", direction, stale, "2021-01-05",
+    ) is None
+    assert strategy.resonance_rejection_reason(
+        direction, stale, "2021-01-05",
+    ) == "NO_FRESH_SUPPORTER"
+
+
+def test_poisoned_all_preserves_observation_terminal_booleans(monkeypatch):
+    _poison_strategy_reducers(monkeypatch)
+    terminal = {
+        "horizons": (1, 3, 5),
+        "outcomes": {
+            1: {"status": "RECORDED", "return": 0.1},
+            3: {"status": "HORIZON_MISSED", "return": None},
+            5: {"status": "PRICE_UNAVAILABLE", "return": None},
+        },
+    }
+    pending = copy.deepcopy(terminal)
+    pending["outcomes"][3] = {"status": "PENDING"}
+
+    assert strategy._observation_record_is_terminal(terminal) is True
+    assert strategy._observation_record_is_terminal(pending) is False
+
+
+def test_poisoned_any_preserves_future_data_error_classification(monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    _poison_strategy_reducers(monkeypatch)
+
+    assert strategy._is_future_data_error(FutureDataError("future")) is True
+    assert strategy._is_future_data_error(RuntimeError("ordinary")) is False
+
+
+def test_failed_self_check_stays_diagnostic_under_poisoned_reducers(
+        monkeypatch):
+    messages = []
+    scheduled = []
+    _poison_strategy_reducers(monkeypatch)
+    _install_initialize_platform_stubs(monkeypatch, messages, scheduled)
+    monkeypatch.setattr(
+        strategy, "detect_kdj_direction",
+        lambda *args: strategy.TurnDirection.NEUTRAL,
+    )
+
+    strategy.initialize(types.SimpleNamespace())
+
+    payload = json.loads(messages[-1])
+    assert scheduled == ["do_trading", "after_close"]
+    assert payload["event_logic_self_check"]["passed"] is False
+    assert isinstance(payload["event_logic_self_check"]["passed"], bool)
+    assert isinstance(payload["event_logic_fingerprint"], str)
