@@ -96,3 +96,102 @@ def test_after_close_initializes_runtime_state(monkeypatch):
 
     assert runtime.etf_pool == EXPECTED_POOL
     assert runtime.observation_events == {}
+
+
+import numpy as np
+import pandas as pd
+
+
+def make_ohlcv_frame(rows):
+    index = pd.bdate_range("2020-01-01", periods=rows)
+    close = pd.Series(np.linspace(10.0, 20.0, rows), index=index)
+    return pd.DataFrame({
+        "open": close - 0.1,
+        "high": close + 0.5,
+        "low": close - 0.5,
+        "close": close,
+        "volume": np.arange(1, rows + 1, dtype=float) * 1000.0,
+    }, index=index)
+
+
+def test_rsi_wilder_edges_and_turn_values():
+    rising = pd.Series(range(1, 40), dtype=float)
+    falling = pd.Series(range(40, 1, -1), dtype=float)
+    flat = pd.Series([10.0] * 40)
+    assert strategy.calc_rsi(rising, 14).iloc[-1] == pytest.approx(100.0)
+    assert strategy.calc_rsi(falling, 14).iloc[-1] == pytest.approx(0.0)
+    assert strategy.calc_rsi(flat, 14).iloc[-1] == pytest.approx(50.0)
+    assert strategy.calc_rsi(pd.Series([np.nan] * 20), 14).isna().all()
+
+
+def test_boll_uses_population_std_and_atr_uses_simple_mean():
+    close = pd.Series(np.arange(1.0, 31.0))
+    mid, upper, lower = strategy.calc_bollinger(close, 20, 2.0)
+    window = close.iloc[-20:]
+    assert mid.iloc[-1] == pytest.approx(window.mean())
+    assert upper.iloc[-1] == pytest.approx(window.mean() + 2 * window.std(ddof=0))
+    assert lower.iloc[-1] == pytest.approx(window.mean() - 2 * window.std(ddof=0))
+
+    high = pd.Series([11, 13, 12, 15, 16, 16, 18, 19, 18, 20, 21, 22, 23, 24, 25], dtype=float)
+    low = high - 2
+    close2 = high - 1
+    atr = strategy.calc_atr(high, low, close2, 14)
+    prev_close = close2.shift(1)
+    tr = pd.concat([(high-low), (high-prev_close).abs(), (low-prev_close).abs()], axis=1).max(axis=1)
+    assert atr.iloc[-1] == pytest.approx(tr.iloc[-14:].mean())
+
+
+def test_kdj_uses_rolling_rsv_and_flat_range_defaults_to_neutral():
+    high = pd.Series([10, 12, 13, 14], dtype=float)
+    low = pd.Series([8, 9, 10, 11], dtype=float)
+    close = pd.Series([9, 11, 11, 13], dtype=float)
+    k, d, j = strategy.calc_kdj(high, low, close, n=3, m1=2, m2=2)
+    assert k.iloc[2] == pytest.approx(60.0)
+    assert d.iloc[2] == pytest.approx(60.0)
+    assert j.iloc[2] == pytest.approx(60.0)
+    assert k.iloc[3] == pytest.approx(70.0)
+    assert d.iloc[3] == pytest.approx(65.0)
+    assert j.iloc[3] == pytest.approx(80.0)
+
+    flat = pd.Series([10.0] * 5)
+    flat_k, flat_d, flat_j = strategy.calc_kdj(flat, flat, flat, n=3)
+    assert flat_k.iloc[-1] == pytest.approx(50.0)
+    assert flat_d.iloc[-1] == pytest.approx(50.0)
+    assert flat_j.iloc[-1] == pytest.approx(50.0)
+
+
+def test_true_range_uses_high_low_and_previous_close_gaps():
+    high = pd.Series([10.0, 13.0, 12.0])
+    low = pd.Series([8.0, 9.0, 7.0])
+    close = pd.Series([9.0, 10.0, 8.0])
+    assert strategy.true_range(high, low, close).tolist() == pytest.approx([2.0, 4.0, 5.0])
+
+
+def test_dmi_adx_rising_series_is_directional_and_flat_series_is_undefined():
+    close = pd.Series(np.arange(1.0, 40.0))
+    high = close + 1.0
+    low = close - 1.0
+    plus_di, minus_di, adx = strategy.calc_dmi_adx(high, low, close, period=14)
+    assert plus_di.iloc[-1] == pytest.approx(47.00806581288051)
+    assert minus_di.iloc[-1] == pytest.approx(0.0)
+    assert adx.iloc[-1] == pytest.approx(100.0)
+
+    flat = pd.Series([10.0] * 40)
+    flat_plus, flat_minus, flat_adx = strategy.calc_dmi_adx(flat, flat, flat, period=14)
+    assert flat_plus.iloc[14:].isna().all()
+    assert flat_minus.iloc[14:].isna().all()
+    assert flat_adx.iloc[14:].isna().all()
+
+
+def test_indicator_frame_separates_trade_and_observation_columns():
+    frame = strategy.build_indicator_frame(make_ohlcv_frame(140), strategy.get_default_params())
+    assert set(strategy.TRADE_INDICATOR_COLUMNS) == {
+        "rsi14", "k", "d", "j", "kd_diff", "boll_mid",
+        "boll_upper", "boll_lower", "atr14",
+    }
+    assert set(strategy.OBSERVATION_COLUMNS) == {
+        "rsi6", "rsi12", "rsi24", "plus_di", "minus_di", "adx14",
+        "volume", "volume_ma5", "volume_ma20", "volume_ratio",
+        "boll_width", "boll_mid_slope",
+    }
+    assert set(strategy.TRADE_INDICATOR_COLUMNS).isdisjoint(strategy.OBSERVATION_COLUMNS)

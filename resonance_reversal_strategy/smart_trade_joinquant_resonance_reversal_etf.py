@@ -124,3 +124,116 @@ def initialize(context):
     log.info("version=%s build=%s fingerprint=%s pool=%s",
              STRATEGY_VERSION, DEPLOYMENT_BUILD_ID,
              business_config_fingerprint(), get_default_etf_pool())
+
+
+import numpy as np
+import pandas as pd
+
+
+TRADE_INDICATOR_COLUMNS = (
+    "rsi14", "k", "d", "j", "kd_diff", "boll_mid",
+    "boll_upper", "boll_lower", "atr14",
+)
+OBSERVATION_COLUMNS = (
+    "rsi6", "rsi12", "rsi24", "plus_di", "minus_di", "adx14",
+    "volume", "volume_ma5", "volume_ma20", "volume_ratio",
+    "boll_width", "boll_mid_slope",
+)
+
+
+def calc_rsi(close, period):
+    close = pd.Series(close, dtype=float)
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False,
+                        min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False,
+                        min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    result = 100.0 - 100.0 / (1.0 + rs)
+    result = result.mask((avg_loss == 0) & (avg_gain > 0), 100.0)
+    result = result.mask((avg_gain == 0) & (avg_loss > 0), 0.0)
+    result = result.mask((avg_gain == 0) & (avg_loss == 0), 50.0)
+    return result
+
+
+def calc_kdj(high, low, close, n=9, m1=3, m2=3):
+    rolling_high = high.rolling(n, min_periods=n).max()
+    rolling_low = low.rolling(n, min_periods=n).min()
+    spread = rolling_high - rolling_low
+    rsv = 100.0 * (close - rolling_low) / spread.replace(0, np.nan)
+    rsv = rsv.mask(spread == 0, 50.0)
+    k = rsv.ewm(alpha=1.0 / m1, adjust=False, min_periods=1).mean()
+    d = k.ewm(alpha=1.0 / m2, adjust=False, min_periods=1).mean()
+    j = 3.0 * k - 2.0 * d
+    return k, d, j
+
+
+def calc_bollinger(close, period=20, std_mult=2.0):
+    mid = close.rolling(period, min_periods=period).mean()
+    std = close.rolling(period, min_periods=period).std(ddof=0)
+    return mid, mid + std_mult * std, mid - std_mult * std
+
+
+def true_range(high, low, close):
+    prev_close = close.shift(1)
+    return pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+
+def calc_atr(high, low, close, period=14):
+    return true_range(high, low, close).rolling(period, min_periods=period).mean()
+
+
+def calc_dmi_adx(high, low, close, period=14):
+    tr = true_range(high, low, close)
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where(
+        (up_move > down_move) & (up_move > 0), up_move, 0.0,
+    ), index=high.index)
+    minus_dm = pd.Series(np.where(
+        (down_move > up_move) & (down_move > 0), down_move, 0.0,
+    ), index=high.index)
+    atr_rma = tr.ewm(alpha=1.0 / period, adjust=False,
+                     min_periods=period).mean()
+    plus_di = 100.0 * plus_dm.ewm(
+        alpha=1.0 / period, adjust=False, min_periods=period,
+    ).mean() / atr_rma
+    minus_di = 100.0 * minus_dm.ewm(
+        alpha=1.0 / period, adjust=False, min_periods=period,
+    ).mean() / atr_rma
+    denominator = (plus_di + minus_di).replace(0, np.nan)
+    dx = 100.0 * (plus_di - minus_di).abs() / denominator
+    adx = dx.ewm(alpha=1.0 / period, adjust=False,
+                min_periods=period).mean()
+    return plus_di, minus_di, adx
+
+
+def build_indicator_frame(price_frame, params):
+    frame = price_frame.loc[:, ["open", "high", "low", "close", "volume"]].copy()
+    frame["rsi14"] = calc_rsi(frame["close"], params["rsi_period"])
+    for period in params["observation_rsi_periods"]:
+        frame["rsi%s" % period] = calc_rsi(frame["close"], period)
+    k, d, j = calc_kdj(frame["high"], frame["low"], frame["close"], *params["kdj"])
+    frame["k"], frame["d"], frame["j"] = k, d, j
+    frame["kd_diff"] = k - d
+    mid, upper, lower = calc_bollinger(frame["close"], *params["boll"])
+    frame["boll_mid"], frame["boll_upper"], frame["boll_lower"] = mid, upper, lower
+    frame["atr14"] = calc_atr(
+        frame["high"], frame["low"], frame["close"], params["atr_period"],
+    )
+    plus_di, minus_di, adx = calc_dmi_adx(
+        frame["high"], frame["low"], frame["close"], 14,
+    )
+    frame["plus_di"], frame["minus_di"], frame["adx14"] = plus_di, minus_di, adx
+    frame["volume_ma5"] = frame["volume"].rolling(5, min_periods=5).mean()
+    frame["volume_ma20"] = frame["volume"].rolling(20, min_periods=20).mean()
+    frame["volume_ratio"] = frame["volume"] / frame["volume_ma20"].replace(0, np.nan)
+    frame["boll_width"] = (upper - lower) / mid.replace(0, np.nan)
+    frame["boll_mid_slope"] = mid.diff()
+    return frame
