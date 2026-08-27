@@ -950,6 +950,62 @@ def test_candidate_formal_terminal_outcomes_always_audit_closing_date():
                for error in report["data_quality"]["errors"])
 
 
+@pytest.mark.parametrize("role,payload", [
+    ("candidate", 1), ("candidate", True), ("candidate", "not-a-payload"),
+    ("baseline", 1), ("baseline", True), ("baseline", "not-a-payload"),
+])
+def test_cli_non_dict_formal_outcome_payload_is_isolated_as_data_quality(
+        tmp_path, role, payload):
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    target = candidate if role == "candidate" else baseline
+    target.append({
+        "event": "observation_outcome", "resonance_id": "FORMAL:payload-%s" % role,
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 5,
+        "outcome": payload,
+    })
+    candidate_path = tmp_path / (role + "-candidate.log")
+    baseline_path = tmp_path / (role + "-baseline.log")
+    output_path = tmp_path / (role + "-report.json")
+    _write_log(candidate_path, candidate)
+    _write_log(baseline_path, baseline)
+
+    completed = subprocess.run([
+        sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path), "--output", str(output_path),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0
+    assert "Traceback" not in completed.stderr
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["continue_candidate"] is False
+    assert any("invalid outcome payload" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_cli_surrogate_code_is_safely_isolated_as_data_quality(tmp_path):
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    registration["code"] = "\ud800"
+    candidate_path = tmp_path / "surrogate-candidate.log"
+    baseline_path = tmp_path / "surrogate-baseline.log"
+    output_path = tmp_path / "surrogate-report.json"
+    _write_log(candidate_path, candidate)
+    _write_log(baseline_path, make_baseline_records())
+
+    completed = subprocess.run([
+        sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path), "--output", str(output_path),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0
+    assert "Traceback" not in completed.stderr
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["continue_candidate"] is False
+    assert any("candidate code" in error for error in report["data_quality"]["errors"])
+
+
 @pytest.mark.parametrize("field,value,fragment", [
     ("direction", ["BUY_TURN"], "candidate direction"),
     ("branch", ["SOFT_ALL_THREE"], "branch"),

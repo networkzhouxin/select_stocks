@@ -112,14 +112,28 @@ def _is_training_date(value, label, errors):
     return parsed
 
 
+def _valid_text(value):
+    """Accept only non-empty Unicode scalar strings for contract text fields."""
+    if type(value) is not str or not value.strip():
+        return False
+    try:
+        value.encode("utf-8", "strict")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _classify_record_namespace(record, errors):
     """Classify one record once; conflicting records enter neither contract."""
+    if (record.get("event") == "observation_outcome"
+            and record.get("_outcome_payload_valid") is False):
+        return "invalid"
     relative_id = record.get("relative_observation_id")
     kind = record.get("observation_kind")
     resonance_id = record.get("resonance_id")
     event = record.get("event")
-    relative_id_valid = isinstance(relative_id, str) and relative_id.startswith("RELATIVE:")
-    relative_resonance = isinstance(resonance_id, str) and resonance_id.startswith("RELATIVE:")
+    relative_id_valid = _valid_text(relative_id) and relative_id.startswith("RELATIVE:")
+    relative_resonance = _valid_text(resonance_id) and resonance_id.startswith("RELATIVE:")
     relative_marker = relative_id is not None or kind == "RELATIVE_RESONANCE" or relative_resonance
     if relative_marker:
         valid = relative_id_valid and kind == "RELATIVE_RESONANCE"
@@ -137,12 +151,12 @@ def _classify_record_namespace(record, errors):
             return "invalid"
         return "relative"
     if event == "resonance_decision" and record.get("accepted") is True and record.get("reason") == "COMPLETE_RESONANCE":
-        if isinstance(resonance_id, str) and resonance_id.strip() and not resonance_id.startswith("RELATIVE:"):
+        if _valid_text(resonance_id) and not resonance_id.startswith("RELATIVE:"):
             return "formal"
         errors.append("invalid formal record namespace")
         return "invalid"
     if event == "observation_outcome":
-        if isinstance(resonance_id, str) and resonance_id.strip() and not resonance_id.startswith("RELATIVE:"):
+        if _valid_text(resonance_id) and not resonance_id.startswith("RELATIVE:"):
             return "formal"
         errors.append("invalid formal outcome namespace")
         return "invalid"
@@ -163,7 +177,7 @@ def _matching_relative_record(record):
 
 def _text(record, field, label, errors):
     value = record.get(field)
-    if not isinstance(value, str) or not value.strip():
+    if not _valid_text(value):
         errors.append("missing or invalid %s: %r" % (label, value))
         return None
     return value
@@ -182,7 +196,7 @@ def _finite_number(value):
 def _validate_support_contract(record, prefix, signal_date, errors):
     supporters = record.get("supporters")
     if (not isinstance(supporters, (list, tuple)) or not supporters
-            or any(not isinstance(item, str) for item in supporters)
+            or any(not _valid_text(item) for item in supporters)
             or len(set(supporters)) != len(supporters)
             or not set(supporters).issubset(INDICATORS)):
         errors.append("invalid %s supporters" % prefix)
@@ -201,7 +215,7 @@ def _validate_support_contract(record, prefix, signal_date, errors):
                     and supported_date > signal_date):
                 errors.append("%s supporter date after signal date" % prefix)
     if (not isinstance(sources, dict) or set(sources) != support_set
-            or any(type(value) is not str or value not in SOURCES
+            or any(not _valid_text(value) or value not in SOURCES
                    for value in sources.values())):
         errors.append("invalid %s hard_or_relative_source_by_indicator" % prefix)
         return
@@ -220,7 +234,7 @@ def _validate_support_contract(record, prefix, signal_date, errors):
             }),
         ),
     }
-    if isinstance(branch, str) and branch in valid and not any(support_set == expected_set and sources == expected_sources
+    if _valid_text(branch) and branch in valid and not any(support_set == expected_set and sources == expected_sources
                                    for expected_set, expected_sources in valid[branch]):
         errors.append("impossible %s branch/supporters/source contract" % prefix)
 
@@ -253,7 +267,9 @@ def _validate_relative_common(record, errors):
         errors.append("relative build mismatch: %r" % record.get("build"))
     if record.get("relative_observation_fingerprint") != RELATIVE_OBSERVATION_FINGERPRINT:
         errors.append("relative fingerprint mismatch: %r" % record.get("relative_observation_fingerprint"))
-    if record.get("observation_kind") != "RELATIVE_RESONANCE":
+    if not _valid_text(record.get("observation_kind")):
+        errors.append("invalid relative observation_kind: %r" % record.get("observation_kind"))
+    elif record.get("observation_kind") != "RELATIVE_RESONANCE":
         errors.append("invalid relative observation_kind: %r" % record.get("observation_kind"))
     return observation_id
 
@@ -302,7 +318,7 @@ def _validate_relative_outcome_shape(record, errors):
     _is_training_date(record.get("event_date"), "relative outcome event", errors)
     supporters = record.get("supporters")
     if (not isinstance(supporters, (list, tuple)) or not supporters
-            or any(not isinstance(item, str) for item in supporters)
+            or any(not _valid_text(item) for item in supporters)
             or len(set(supporters)) != len(supporters)):
         errors.append("invalid relative outcome supporters")
     outcome = record.get("outcome")
@@ -371,7 +387,7 @@ def _validate_filled_orders(records, role, errors):
         if not valid_timestamp or not (TRAIN_START <= datetime.fromisoformat(timestamp).date() <= TRAIN_END):
             errors.append("invalid filled order log timestamp in %s" % role)
         if (record.get("side") not in ("BUY", "SELL")
-                or not isinstance(record.get("code"), str) or not record.get("code").strip()):
+                or not _valid_text(record.get("code"))):
             errors.append("invalid filled order identity in %s" % role)
         for field in ("before_amount", "after_amount"):
             value = record.get(field)
@@ -565,7 +581,9 @@ def _formal_five_day_returns(registrations, outcomes):
     for (resonance_id, horizon), record in outcomes.items():
         if horizon != 5:
             continue
-        outcome = record.get("outcome") or {}
+        outcome = record.get("outcome")
+        if type(outcome) is not dict:
+            continue
         value = _finite_number(outcome.get("return"))
         if outcome.get("status") == "RECORDED" and value is not None:
             values.append(value if registrations[resonance_id].get("direction") == "BUY_TURN" else -value)
@@ -604,7 +622,7 @@ def _has_cross_file_filled_timestamp(records, role, errors):
 def _overlap_key(record, label, errors):
     code = record.get("code")
     direction = record.get("direction")
-    if not isinstance(code, str) or not code.strip():
+    if not _valid_text(code):
         errors.append("invalid %s code" % label)
         return None
     if direction not in DIRECTIONS:
@@ -624,11 +642,11 @@ def _overlap_key(record, label, errors):
 def _relative_identity_is_scalar(record):
     supporters = record.get("supporters")
     return (
-        isinstance(record.get("code"), str) and bool(record.get("code").strip())
-        and isinstance(record.get("direction"), str) and record.get("direction") in DIRECTIONS
-        and isinstance(record.get("branch"), str) and record.get("branch") in BRANCHES
+        _valid_text(record.get("code"))
+        and _valid_text(record.get("direction")) and record.get("direction") in DIRECTIONS
+        and _valid_text(record.get("branch")) and record.get("branch") in BRANCHES
         and isinstance(supporters, (list, tuple))
-        and all(isinstance(item, str) for item in supporters)
+        and all(_valid_text(item) for item in supporters)
     )
 
 
@@ -636,8 +654,12 @@ def _audit_outcome_closing_date(record, errors):
     if record.get("event") != "observation_outcome":
         return
     payload = record.get("outcome")
-    if isinstance(payload, dict):
-        _is_training_date(payload.get("closing_date"), "outcome closing", errors)
+    if type(payload) is not dict:
+        record["_outcome_payload_valid"] = False
+        errors.append("invalid outcome payload")
+        return
+    record["_outcome_payload_valid"] = True
+    _is_training_date(payload.get("closing_date"), "outcome closing", errors)
 
 
 def analyze_records(candidate_records, baseline_records):
@@ -881,11 +903,11 @@ def main(argv=None):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, output_path)
-    except OSError as exc:
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
         if temporary_path is not None:
             try:
                 temporary_path.unlink(missing_ok=True)
-            except OSError:
+            except (OSError, UnicodeError):
                 pass
         print("output error: %s" % exc, file=sys.stderr)
         return 2
