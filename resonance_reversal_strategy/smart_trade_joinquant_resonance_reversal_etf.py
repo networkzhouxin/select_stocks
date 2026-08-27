@@ -247,42 +247,134 @@ def make_observation_event(resonance_id, code, event_date, event_close,
     }
 
 
+OBSERVATION_HORIZONS = frozenset((1, 3, 5))
+TERMINAL_OBSERVATION_STATUSES = frozenset((
+    "RECORDED", "HORIZON_MISSED", "PRICE_UNAVAILABLE",
+))
+
+
+def _normalize_observation_horizon_key(value):
+    if isinstance(value, bool):
+        raise ValueError("observation horizon must be 1, 3, or 5")
+    if isinstance(value, int):
+        horizon = value
+    elif isinstance(value, str) and value in ("1", "3", "5"):
+        horizon = int(value)
+    else:
+        raise ValueError("observation horizon must be 1, 3, or 5")
+    if horizon not in OBSERVATION_HORIZONS:
+        raise ValueError("observation horizon must be 1, 3, or 5")
+    return horizon
+
+
+def _normalize_observation_horizon_keys(values, field_name):
+    normalized = []
+    seen = set()
+    for value in values:
+        horizon = _normalize_observation_horizon_key(value)
+        if horizon in seen:
+            raise ValueError(
+                "duplicate normalized observation horizon in %s" % field_name
+            )
+        seen.add(horizon)
+        normalized.append(horizon)
+    return tuple(sorted(normalized))
+
+
+def _normalize_observation_outcome(outcome):
+    if isinstance(outcome, Real) and not isinstance(outcome, bool):
+        return {
+            "status": "RECORDED",
+            "closing_date": None,
+            "closing_price": None,
+            "return": outcome,
+        }
+    if isinstance(outcome, dict):
+        normalized = dict(outcome)
+        if "status" not in normalized and "return" in normalized:
+            normalized["status"] = "RECORDED"
+        return normalized
+    return outcome
+
+
+def _is_terminal_observation_outcome(outcome):
+    return (
+        isinstance(outcome, dict)
+        and outcome.get("status") in TERMINAL_OBSERVATION_STATUSES
+    )
+
+
 def due_observation_horizons(record, elapsed_sessions):
+    _normalize_observation_record(record)
     return sorted(
         horizon
         for horizon in record["horizons"]
-        if horizon <= elapsed_sessions and horizon not in record["outcomes"]
+        if (horizon <= elapsed_sessions
+            and not _is_terminal_observation_outcome(
+                record["outcomes"].get(horizon)
+            ))
     )
 
 
 def _normalize_observation_record(record):
-    if "horizons" not in record:
-        due_dates = record.pop("due_dates", {})
-        record["horizons"] = tuple(sorted(due_dates))
+    has_due_dates = "due_dates" in record
+    if has_due_dates:
+        due_dates = record["due_dates"]
+        if not isinstance(due_dates, dict):
+            raise ValueError("legacy observation due_dates must be a mapping")
+        due_horizons = _normalize_observation_horizon_keys(
+            due_dates.keys(), "due_dates",
+        )
     else:
-        record["horizons"] = tuple(record["horizons"])
-    outcomes = record.setdefault("outcomes", {})
-    for horizon, outcome in list(outcomes.items()):
-        if isinstance(outcome, Real) and not isinstance(outcome, bool):
-            outcomes[horizon] = {
-                "status": "RECORDED",
-                "closing_date": None,
-                "closing_price": None,
-                "return": outcome,
-            }
-        elif (isinstance(outcome, dict) and "status" not in outcome
-                and "return" in outcome):
-            normalized = dict(outcome)
-            normalized["status"] = "RECORDED"
-            outcomes[horizon] = normalized
+        due_horizons = None
+
+    if "horizons" in record:
+        horizons = record["horizons"]
+        if not isinstance(horizons, (list, tuple, set, frozenset)):
+            raise ValueError("observation horizons must be a collection")
+        normalized_horizons = _normalize_observation_horizon_keys(
+            horizons, "horizons",
+        )
+        if (due_horizons is not None
+                and set(due_horizons) != set(normalized_horizons)):
+            raise ValueError("observation horizon sources disagree")
+    elif due_horizons is not None:
+        normalized_horizons = due_horizons
+    else:
+        raise ValueError("observation record has no horizons")
+
+    outcomes = record.get("outcomes", {})
+    if not isinstance(outcomes, dict):
+        raise ValueError("observation outcomes must be a mapping")
+    normalized_outcomes = {}
+    for key, outcome in outcomes.items():
+        horizon = _normalize_observation_horizon_key(key)
+        if horizon in normalized_outcomes:
+            raise ValueError(
+                "duplicate normalized observation horizon in outcomes"
+            )
+        normalized_outcomes[horizon] = _normalize_observation_outcome(outcome)
+
+    record["horizons"] = normalized_horizons
+    record["outcomes"] = normalized_outcomes
+    if has_due_dates:
+        record.pop("due_dates")
     return record
 
 
 def _observation_record_is_terminal(record):
-    return all(
-        horizon in record["outcomes"]
-        for horizon in record["horizons"]
+    horizons = record["horizons"]
+    return bool(horizons) and all(
+        _is_terminal_observation_outcome(record["outcomes"].get(horizon))
+        for horizon in horizons
     )
+
+
+def _prune_terminal_observation_records():
+    for resonance_id, record in list(g.observation_events.items()):
+        _normalize_observation_record(record)
+        if _observation_record_is_terminal(record):
+            g.observation_events.pop(resonance_id, None)
 
 
 def _calendar_date(value):
@@ -337,11 +429,8 @@ def try_register_observation_event(decision, event_date, event_close):
 
 def record_due_observation_outcomes(context, current_data):
     closing_date = _calendar_date(context.current_dt)
+    _prune_terminal_observation_records()
     for resonance_id, record in list(g.observation_events.items()):
-        _normalize_observation_record(record)
-        if _observation_record_is_terminal(record):
-            g.observation_events.pop(resonance_id, None)
-            continue
         event_date = _calendar_date(record["event_date"])
         if event_date is None or closing_date <= event_date:
             continue
@@ -443,6 +532,7 @@ def do_trading(context):
 
 def after_close(context):
     ensure_runtime_state()
+    _prune_terminal_observation_records()
     current_data = get_current_data()
     for code, state in list(g.position_states.items()):
         actual_amount = get_actual_amount(context, code)

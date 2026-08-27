@@ -1,4 +1,5 @@
 import ast
+import copy
 import importlib.util
 import inspect
 import json
@@ -2161,6 +2162,44 @@ def test_fully_terminal_observation_is_cleaned_when_no_horizon_is_newly_due(
     assert runtime.observation_events == {}
 
 
+def test_after_close_prunes_terminal_observations_before_market_access(
+        monkeypatch):
+    record = strategy.make_observation_event(
+        "terminal-first", "510300.XSHG", date(2021, 1, 5), 10.0,
+        horizons=(1, 3, 5),
+    )
+    record["outcomes"] = {
+        1: {"status": "RECORDED", "return": 0.01},
+        3: {"status": "HORIZON_MISSED", "return": None},
+        5: {"status": "PRICE_UNAVAILABLE", "return": None},
+    }
+    runtime = runtime_state()
+    runtime.observation_events = {"terminal-first": record}
+    expected = RuntimeError("market access after terminal prune")
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    def market_access_after_prune():
+        assert runtime.observation_events == {}
+        raise expected
+
+    monkeypatch.setattr(
+        strategy, "get_current_data", market_access_after_prune, raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: pytest.fail(
+            "terminal observation must not reach calendar access"
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        strategy.after_close(fake_context(current_date="2021-01-12"))
+
+    assert raised.value is expected
+    assert runtime.observation_events == {}
+
+
 def test_legacy_due_dates_migrate_without_reading_values_and_stay_cleanable(
         monkeypatch):
     code = "510300.XSHG"
@@ -2214,6 +2253,159 @@ def test_legacy_due_dates_migrate_without_reading_values_and_stay_cleanable(
         {"start_date": date(2021, 1, 5), "end_date": date(2021, 1, 8)},
         {"start_date": date(2021, 1, 5), "end_date": date(2021, 1, 12)},
     ]
+
+
+def test_legacy_string_horizon_keys_migrate_without_reading_due_date_values():
+    class KeysOnlyDueDates(dict):
+        def __getitem__(self, key):
+            pytest.fail("migration must not read a legacy due-date value")
+
+        def items(self):
+            pytest.fail("migration must not iterate legacy due-date values")
+
+        def values(self):
+            pytest.fail("migration must not iterate legacy due-date values")
+
+    due_dates = KeysOnlyDueDates({
+        "5": object(), "1": object(), "3": object(),
+    })
+    record = {
+        "due_dates": due_dates,
+        "outcomes": {
+            "1": 0.1,
+            "3": {"return": 0.2},
+            "5": {"status": "PRICE_UNAVAILABLE", "return": None},
+        },
+    }
+
+    strategy._normalize_observation_record(record)
+
+    assert record["horizons"] == (1, 3, 5)
+    assert "due_dates" not in record
+    assert set(record["outcomes"]) == {1, 3, 5}
+    assert record["outcomes"][1]["status"] == "RECORDED"
+    assert record["outcomes"][1]["return"] == pytest.approx(0.1)
+    assert record["outcomes"][3] == {
+        "status": "RECORDED", "return": 0.2,
+    }
+    assert strategy._observation_record_is_terminal(record)
+
+
+def test_mixed_horizon_keys_synchronize_outcomes_without_completing_pending():
+    record = {
+        "due_dates": {
+            1: date(2099, 1, 6),
+            "3": date(2099, 1, 8),
+            5: date(2099, 1, 12),
+        },
+        "outcomes": {
+            "1": {"status": "PENDING"},
+            3: {"status": "RECORDED", "return": 0.2},
+        },
+    }
+
+    strategy._normalize_observation_record(record)
+
+    assert record["horizons"] == (1, 3, 5)
+    assert set(record["outcomes"]) == {1, 3}
+    assert record["outcomes"][1] == {"status": "PENDING"}
+    assert strategy.due_observation_horizons(record, 3) == [1]
+    assert not strategy._observation_record_is_terminal(record)
+
+
+@pytest.mark.parametrize("record", [
+    {
+        "due_dates": {
+            1: date(2099, 1, 6),
+            "1": date(2099, 1, 7),
+            3: date(2099, 1, 8),
+        },
+        "outcomes": {},
+    },
+    {
+        "horizons": (1, "1", 3),
+        "outcomes": {},
+    },
+    {
+        "horizons": (1, 3, 5),
+        "outcomes": {1: 0.1, "1": 0.2},
+    },
+    {
+        "due_dates": {"2": date(2099, 1, 7)},
+        "outcomes": {},
+    },
+    {
+        "horizons": (1, 3, 5),
+        "outcomes": {"2": 0.2},
+    },
+])
+def test_invalid_or_duplicate_horizon_keys_leave_record_unchanged(record):
+    before = copy.deepcopy(record)
+
+    with pytest.raises(ValueError):
+        strategy._normalize_observation_record(record)
+
+    assert record == before
+
+
+def test_duplicate_horizon_migration_failure_is_retryable_without_data_loss():
+    due_dates = {
+        1: date(2099, 1, 6),
+        "1": date(2099, 1, 7),
+        "3": date(2099, 1, 8),
+    }
+    record = {"due_dates": due_dates, "outcomes": {"1": 0.1}}
+    before = copy.deepcopy(record)
+
+    with pytest.raises(ValueError):
+        strategy._normalize_observation_record(record)
+
+    assert record == before
+    due_dates.pop("1")
+    strategy._normalize_observation_record(record)
+
+    assert "due_dates" not in record
+    assert record["horizons"] == (1, 3)
+    assert record["outcomes"][1]["status"] == "RECORDED"
+    assert record["outcomes"][1]["return"] == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("existing_outcome", [
+    {"status": "PENDING"},
+    {"status": "UNKNOWN"},
+    {},
+    True,
+    "UNRECOGNIZED",
+    {"status": "PENDING", "return": 0.5},
+])
+def test_elapsed_nonterminal_outcome_is_replaced_by_retrospective_result(
+        monkeypatch, existing_outcome):
+    code = "510300.XSHG"
+    record = strategy.make_observation_event(
+        "unfinished", code, date(2021, 1, 5), 10.0, horizons=(1,),
+    )
+    record["outcomes"] = {1: existing_outcome}
+    runtime = runtime_state()
+    runtime.observation_events = {"unfinished": record}
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: pd.DatetimeIndex(["2021-01-05", "2021-01-06"]),
+        raising=False,
+    )
+
+    strategy.record_due_observation_outcomes(
+        fake_context(current_date="2021-01-06"),
+        {code: current_record(11.0)},
+    )
+
+    assert record["outcomes"][1] == {
+        "status": "RECORDED",
+        "closing_date": date(2021, 1, 6),
+        "closing_price": 11.0,
+        "return": pytest.approx(0.1),
+    }
+    assert runtime.observation_events == {}
 
 
 def test_overdue_observation_is_missed_without_using_later_price(monkeypatch):
