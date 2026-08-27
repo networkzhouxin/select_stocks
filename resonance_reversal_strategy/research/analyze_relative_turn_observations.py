@@ -1,6 +1,7 @@
 """Read-only validation and descriptive analysis for relative observation logs."""
 
 import argparse
+import hashlib
 import html
 import json
 import math
@@ -32,6 +33,11 @@ DIRECTIONS = ("BUY_TURN", "SELL_TURN")
 HORIZONS = (1, 3, 5)
 INDICATORS = frozenset(("BOLL", "KDJ", "RSI"))
 SOURCES = frozenset(("HARD", "RELATIVE"))
+STRUCTURED_EVENT_TOKENS = frozenset((
+    "relative_resonance_observation", "observation_outcome",
+    "strategy_initialized", "resonance_decision", "order_transition",
+    "portfolio_summary",
+))
 
 
 def _reject_json_constant(value):
@@ -44,15 +50,18 @@ def parse_joinquant_log_line(line, ordinal):
     payload_start = text.find("{")
     if payload_start < 0:
         return None
+    match = LOG_TIMESTAMP_RE.match(text)
     try:
         payload = json.loads(text[payload_start:], parse_constant=_reject_json_constant)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        if match and any(token in text for token in STRUCTURED_EVENT_TOKENS):
+            payload = {"_parse_error": "invalid structured JSON: %s" % exc.msg}
+        else:
+            return None
     except ValueError as exc:
         payload = {"_parse_error": str(exc)}
     if not isinstance(payload, dict):
         return None
-    match = LOG_TIMESTAMP_RE.match(text)
     result = dict(payload)
     result["_log_date"] = match.group("date") if match else None
     result["_log_timestamp"] = (
@@ -121,6 +130,47 @@ def _valid_text(value):
     except UnicodeEncodeError:
         return False
     return True
+
+
+def build_relative_observation_id(record):
+    """Reproduce the frozen Task4 relative-observation ID without strategy imports."""
+    parts = [
+        "RELATIVE", record["branch"], record["direction"], record["code"],
+    ]
+    source_map = record["hard_or_relative_source_by_indicator"]
+    date_map = record["supporter_event_dates"]
+    for indicator in sorted(record["supporters"]):
+        parts.append("%s:%s:%s" % (
+            indicator, source_map[indicator], _calendar_date(date_map[indicator]),
+        ))
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:20]
+    return "RELATIVE:" + digest
+
+
+def _expected_relative_observation_id(record):
+    supporters = record.get("supporters")
+    sources = record.get("hard_or_relative_source_by_indicator")
+    dates = record.get("supporter_event_dates")
+    if (not _valid_text(record.get("code"))
+            or record.get("direction") not in DIRECTIONS
+            or record.get("branch") not in BRANCHES
+            or not isinstance(supporters, (list, tuple))
+            or not supporters
+            or any(not _valid_text(item) for item in supporters)
+            or len(set(supporters)) != len(supporters)
+            or not isinstance(sources, dict)
+            or not isinstance(dates, dict)
+            or set(sources) != set(supporters)
+            or set(dates) != set(supporters)
+            or any(not _valid_text(value) or value not in SOURCES
+                   for value in sources.values())):
+        return None
+    try:
+        if any(_calendar_date(dates[indicator]) is None for indicator in supporters):
+            return None
+        return build_relative_observation_id(record)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _classify_record_namespace(record, errors):
@@ -207,6 +257,7 @@ def _validate_support_contract(record, prefix, signal_date, errors):
     if not isinstance(dates, dict) or set(dates) != support_set:
         errors.append("invalid %s supporter_event_dates" % prefix)
     else:
+        has_signal_date_evidence = False
         for indicator in sorted(dates):
             supported_date = _is_training_date(
                 dates[indicator], "%s supporter_event_dates" % prefix, errors,
@@ -214,6 +265,10 @@ def _validate_support_contract(record, prefix, signal_date, errors):
             if (supported_date is not None and signal_date is not None
                     and supported_date > signal_date):
                 errors.append("%s supporter date after signal date" % prefix)
+            if supported_date is not None and supported_date == signal_date:
+                has_signal_date_evidence = True
+        if signal_date is not None and not has_signal_date_evidence:
+            errors.append("%s supporters lack signal-date evidence" % prefix)
     if (not isinstance(sources, dict) or set(sources) != support_set
             or any(not _valid_text(value) or value not in SOURCES
                    for value in sources.values())):
@@ -297,6 +352,10 @@ def _validate_relative_registration(record, errors):
     event_close = _finite_number(record.get("event_close"))
     if event_close is None or event_close <= 0:
         errors.append("invalid candidate event_close")
+    expected_id = _expected_relative_observation_id(record)
+    if (observation_id is not None and expected_id is not None
+            and observation_id != expected_id):
+        errors.append("relative observation id digest mismatch: %s" % observation_id)
     return observation_id
 
 
@@ -373,6 +432,25 @@ def _validate_relative_identity(registration, outcome, errors):
         if adjusted is not None and expected is not None and not math.isclose(
                 adjusted, expected, rel_tol=0.0, abs_tol=1e-12):
             errors.append("relative outcome direction_adjusted_return mismatch: %s" % observation_id)
+
+
+def _validate_relative_recorded_closing_order(registrations, outcomes, errors):
+    for observation_id, registration in registrations.items():
+        records = [outcomes.get((observation_id, horizon)) for horizon in HORIZONS]
+        if not all(record is not None for record in records):
+            continue
+        payloads = [record.get("outcome") for record in records]
+        if not all(type(payload) is dict and payload.get("status") == "RECORDED"
+                   for payload in payloads):
+            continue
+        try:
+            signal_date = _calendar_date(registration.get("signal_date"))
+            closing_dates = [_calendar_date(payload["closing_date"]) for payload in payloads]
+        except (KeyError, ValueError):
+            continue
+        if (signal_date is not None and all(value is not None for value in closing_dates)
+                and not (signal_date < closing_dates[0] < closing_dates[1] < closing_dates[2])):
+            errors.append("relative RECORDED closing dates are not strictly ordered: %s" % observation_id)
 
 
 def _validate_filled_orders(records, role, errors):
@@ -460,6 +538,15 @@ def _validate_baseline(records, errors):
             errors.append("formal outcome event_date mismatch: %s" % resonance_id)
         if "direction" in record and record.get("direction") != registration.get("direction"):
             errors.append("formal outcome direction mismatch: %s" % resonance_id)
+        if horizon == 5 and type(outcome) is dict:
+            try:
+                closing_date = _calendar_date(outcome.get("closing_date"))
+                signal_date = _calendar_date(registration.get("signal_date"))
+            except ValueError:
+                closing_date = signal_date = None
+            if (closing_date is not None and signal_date is not None
+                    and closing_date <= signal_date):
+                errors.append("formal horizon 5 closing must follow signal date: %s" % resonance_id)
         key = (resonance_id, horizon)
         if key in outcomes:
             errors.append("duplicate formal outcome: %s/%s" % key)
@@ -669,7 +756,10 @@ def analyze_records(candidate_records, baseline_records):
     errors = []
     for record in candidate_records + baseline_records:
         if record.get("_parse_error"):
-            errors.append("parse error: %s" % record["_parse_error"])
+            source = record.get("_source_path")
+            line = record.get("_source_line")
+            location = "%s:%s" % (source, line) if source and line else "input record"
+            errors.append("parse error at %s: %s" % (location, record["_parse_error"]))
         _audit_outcome_closing_date(record, errors)
         record["_record_namespace"] = _classify_record_namespace(record, errors)
     candidate_order_ambiguous = _has_cross_file_filled_timestamp(
@@ -724,6 +814,7 @@ def analyze_records(candidate_records, baseline_records):
             errors.append("duplicate relative outcome: %s/%s" % key)
             continue
         outcomes[key] = record
+    _validate_relative_recorded_closing_order(registrations, outcomes, errors)
     year_counts = {"2019": 0, "2020": 0, "2021": 0}
     direction_counts = {direction: 0 for direction in DIRECTIONS}
     etf_counts = Counter()

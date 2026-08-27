@@ -1,11 +1,12 @@
 import importlib.util
+import hashlib
 import json
 import os
 import pathlib
 import subprocess
 import sys
 import types
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from unittest import mock
 
 import pytest
@@ -55,6 +56,17 @@ def make_initialized_record():
     }
 
 
+def _relative_observation_id(code, direction, branch, supporters, source_map, date_map):
+    parts = ["RELATIVE", branch, direction, code]
+    for indicator in sorted(supporters):
+        parts.append("%s:%s:%s" % (
+            indicator, source_map[indicator], date_map[indicator],
+        ))
+    return "RELATIVE:" + hashlib.sha256(
+        "|".join(parts).encode("utf-8")
+    ).hexdigest()[:20]
+
+
 def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
     year = 2019 + index // 10
     branch = branch or (
@@ -68,9 +80,12 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
     else:
         supporters = ["BOLL", "KDJ", "RSI"]
         source_map = {indicator: "RELATIVE" for indicator in supporters}
+    date_map = {indicator: signal_date for indicator in supporters}
     return {
         "event": "relative_resonance_observation",
-        "relative_observation_id": "RELATIVE:%02d" % index,
+        "relative_observation_id": _relative_observation_id(
+            code, direction, branch, supporters, source_map, date_map,
+        ),
         "observation_kind": "RELATIVE_RESONANCE",
         "branch": branch,
         "code": code,
@@ -78,9 +93,7 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
         "signal_date": signal_date,
         "expires_date": signal_date,
         "supporters": supporters,
-        "supporter_event_dates": {
-            indicator: signal_date for indicator in supporters
-        },
+        "supporter_event_dates": date_map,
         "hard_or_relative_source_by_indicator": source_map,
         "build": BUILD,
         "relative_observation_fingerprint": FINGERPRINT,
@@ -93,6 +106,7 @@ def make_relative_record(index, direction="BUY_TURN", branch=None, code=None):
 
 def make_outcome(record, horizon, value):
     adjusted = value if record["direction"] == "BUY_TURN" else -value
+    closing_date = (date.fromisoformat(record["signal_date"]) + timedelta(days=horizon)).isoformat()
     return {
         "event": "observation_outcome",
         "resonance_id": record["relative_observation_id"],
@@ -108,7 +122,7 @@ def make_outcome(record, horizon, value):
             record["hard_or_relative_source_by_indicator"]
         ),
         "outcome": {
-            "status": "RECORDED", "closing_date": record["signal_date"],
+            "status": "RECORDED", "closing_date": closing_date,
             "closing_price": record["event_close"] * (1.0 + value),
             "return": value, "direction_adjusted_return": adjusted,
         },
@@ -129,6 +143,18 @@ def make_candidate_records():
         "total_value": 23856.40, "_log_timestamp": "2021-12-31T15:30:00",
     })
     return records
+
+
+def _replace_relative_identity(registration, outcomes):
+    observation_id = _relative_observation_id(
+        registration["code"], registration["direction"], registration["branch"],
+        registration["supporters"], registration["hard_or_relative_source_by_indicator"],
+        registration["supporter_event_dates"],
+    )
+    registration["relative_observation_id"] = observation_id
+    for outcome in outcomes:
+        outcome["relative_observation_id"] = observation_id
+        outcome["resonance_id"] = observation_id
 
 
 def make_baseline_records():
@@ -156,7 +182,7 @@ def make_baseline_records():
             "code": "510300.XSHG", "event_date": "2021-01-05",
             "horizon": 5,
             "outcome": {
-                "status": "RECORDED", "closing_date": "2021-01-05",
+                "status": "RECORDED", "closing_date": "2021-01-06",
                 "return": 0.01,
             },
         })
@@ -195,6 +221,40 @@ def test_load_records_skips_bad_lines_and_preserves_source_file(tmp_path):
     assert [record["event"] for record in records] == ["one", "two"]
     assert [record["_ordinal"] for record in records] == [2, 4]
     assert log_path.read_text(encoding="utf-8") == content
+
+
+def test_parser_keeps_truncated_known_structured_event_as_quality_sentinel():
+    parsed = analyzer.parse_joinquant_log_line(
+        '2021-01-05 09:35:00 - INFO - {"event":"relative_resonance_observation",', 9,
+    )
+
+    assert parsed["_parse_error"].startswith("invalid structured JSON:")
+    assert parsed["_ordinal"] == 9
+
+
+def test_cli_reports_truncated_known_structured_line_without_mutating_input(tmp_path):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, make_candidate_records())
+    with candidate_path.open("a", encoding="utf-8") as stream:
+        stream.write('\n2021-01-05 09:35:00 - INFO - {"event":"observation_outcome",')
+    original = candidate_path.read_bytes()
+    _write_log(baseline_path, make_baseline_records())
+
+    completed = subprocess.run([
+        sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path), "--output", str(output_path),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0
+    assert "Traceback" not in completed.stderr
+    assert candidate_path.read_bytes() == original
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["continue_candidate"] is False
+    assert any(str(candidate_path.resolve()) in error and ":" in error
+               and "invalid structured JSON" in error
+               for error in report["data_quality"]["errors"])
 
 
 def test_analyzer_reports_validation_period_qualified_observation_as_error():
@@ -286,12 +346,12 @@ def test_duplicate_registration_and_outcome_are_reported_once():
     candidate = make_candidate_records()
     observation = next(
         record for record in candidate
-        if record.get("relative_observation_id") == "RELATIVE:00"
-        and record["event"] == "relative_resonance_observation"
+        if record["event"] == "relative_resonance_observation"
     )
+    observation_id = observation["relative_observation_id"]
     outcome = next(
         record for record in candidate
-        if record.get("relative_observation_id") == "RELATIVE:00"
+        if record.get("relative_observation_id") == observation_id
         and record.get("horizon") == 5
     )
     candidate.extend((dict(observation), dict(outcome)))
@@ -300,8 +360,8 @@ def test_duplicate_registration_and_outcome_are_reported_once():
 
     assert report["metrics"]["candidate_count"] == 30
     assert report["data_quality"]["errors"] == [
-        "duplicate relative candidate: RELATIVE:00",
-        "duplicate relative outcome: RELATIVE:00/5",
+        "duplicate relative candidate: %s" % observation_id,
+        "duplicate relative outcome: %s/5" % observation_id,
     ]
     assert report["gates"]["data_quality_complete"] is False
 
@@ -686,9 +746,87 @@ def test_real_builder_hard_boll_branch_with_both_relative_oscillators_is_accepte
 
     report = analyzer.analyze_records([make_initialized_record(), registration, outcome], [])
 
+    assert callable(getattr(analyzer, "build_relative_observation_id", None))
+    assert analyzer.build_relative_observation_id(registration) == registration["relative_observation_id"]
     assert registration["supporters"] == ["BOLL", "KDJ", "RSI"]
     assert not any("impossible candidate branch" in error
                    for error in report["data_quality"]["errors"])
+
+
+def test_relative_id_must_match_frozen_task4_digest_not_only_namespace_prefix():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = [record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]]
+    registration["relative_observation_id"] = "RELATIVE:00"
+    for outcome in outcomes:
+        outcome["relative_observation_id"] = "RELATIVE:00"
+        outcome["resonance_id"] = "RELATIVE:00"
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any("relative observation id digest mismatch" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_relative_supporters_require_one_same_day_evidence_item():
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = [record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]]
+    old_date = (date.fromisoformat(registration["signal_date"]) - timedelta(days=1)).isoformat()
+    registration["supporter_event_dates"] = {
+        indicator: old_date for indicator in registration["supporters"]
+    }
+    _replace_relative_identity(registration, outcomes)
+    for outcome in outcomes:
+        outcome["supporter_event_dates"] = dict(registration["supporter_event_dates"])
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any("candidate supporters lack signal-date evidence" in error
+               for error in report["data_quality"]["errors"])
+
+
+@pytest.mark.parametrize("closing_dates", [
+    ("same",), ("reverse",),
+])
+def test_relative_recorded_outcomes_require_strict_horizon_closing_order(closing_dates):
+    candidate = make_candidate_records()
+    registration = next(record for record in candidate
+                        if record.get("event") == "relative_resonance_observation")
+    outcomes = {record["horizon"]: record for record in candidate
+                if record.get("event") == "observation_outcome"
+                and record.get("relative_observation_id") == registration["relative_observation_id"]}
+    if closing_dates == ("same",):
+        outcomes[1]["outcome"]["closing_date"] = registration["signal_date"]
+    else:
+        outcomes[3]["outcome"]["closing_date"] = outcomes[1]["outcome"]["closing_date"]
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any("relative RECORDED closing dates are not strictly ordered" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_formal_horizon_five_must_close_after_its_signal_date():
+    baseline = make_baseline_records()
+    formal_outcome = next(record for record in baseline
+                          if record.get("event") == "observation_outcome")
+    formal_outcome["outcome"]["closing_date"] = formal_outcome["event_date"]
+
+    report = analyzer.analyze_records(make_candidate_records(), baseline)
+
+    assert report["continue_candidate"] is False
+    assert any("formal horizon 5 closing must follow signal date" in error
+               for error in report["data_quality"]["errors"])
 
 
 def test_outcome_return_must_be_recomputed_from_closing_price_and_event_close():
