@@ -246,6 +246,26 @@ def make_baseline_records():
     return records
 
 
+_RAW_ANALYZE_RECORDS = analyzer.analyze_records
+
+
+def _fixture_session_manifest():
+    raw = _session_manifest_bytes()
+    return analyzer.validate_session_calendar_manifest(
+        raw, hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def _analyze_fixture_records(candidate_records, baseline_records, session_manifest=None):
+    return _RAW_ANALYZE_RECORDS(
+        candidate_records, baseline_records,
+        session_manifest if session_manifest is not None else _fixture_session_manifest(),
+    )
+
+
+analyzer.analyze_records = _analyze_fixture_records
+
+
 def test_parser_accepts_plain_and_html_escaped_json_and_skips_noise():
     plain = (
         '2021-01-05 09:35:00 - INFO - '
@@ -318,6 +338,7 @@ def test_cli_reports_truncated_known_structured_line_without_mutating_input(tmp_
     completed = subprocess.run([
         sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path), "--output", str(output_path),
+        *_fixture_manifest_cli_args(tmp_path),
     ], capture_output=True, text=True, check=False)
 
     assert completed.returncode == 0
@@ -350,7 +371,9 @@ def test_empty_input_is_reported_as_incomplete_without_writing_state():
 
     assert report["metrics"]["candidate_count"] == 0
     assert report["data_quality"]["errors"] == [
+        "baseline portfolio_summary sessions differ from manifest",
         "baseline session calendar unavailable: invalid initialization",
+        "candidate portfolio_summary sessions differ from manifest",
         "candidate session calendar unavailable: invalid initialization",
         "missing baseline strategy_initialized record",
         "missing candidate strategy_initialized record",
@@ -500,7 +523,7 @@ def test_relative_support_window_requires_proven_previous_trading_session():
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
     assert report["continue_candidate"] is False
-    assert any("candidate supporter window unverifiable" in error
+    assert any("candidate supporter window unverifiable in session calendar" in error
                for error in report["data_quality"]["errors"])
 
 
@@ -559,7 +582,7 @@ def test_relative_support_window_uses_explicit_snapshot_decision_to_signal_mappi
 
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
-    assert any("candidate supporter window unverifiable" in error
+    assert any("candidate supporter window session evidence mismatch" in error
                for error in report["data_quality"]["errors"])
 
     registration["supporter_event_dates"] = {
@@ -620,7 +643,7 @@ def test_all_signal_date_supporters_do_not_require_predecessor_snapshot():
     _replace_relative_identity(registration, [])
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
-    assert any("candidate supporter window unverifiable" in error
+    assert any("candidate supporter window session evidence mismatch" in error
                for error in report["data_quality"]["errors"])
 
     candidate.append(_session_snapshot("2019-01-08", "2019-01-07"))
@@ -710,7 +733,9 @@ def test_overlap_invalidates_id_when_any_registration_replica_is_invalid():
     direct_errors = []
     for record in baseline:
         record["_record_namespace"] = analyzer._classify_record_namespace(record, direct_errors)
-    _, _, _, canonical = analyzer._validate_baseline(baseline, direct_errors)
+    _, _, _, canonical = analyzer._validate_baseline(
+        baseline, direct_errors, True, _fixture_session_manifest()["sessions"],
+    )
 
     assert any("formal registration log timestamp before 09:35" in error
                for error in direct_errors)
@@ -824,6 +849,7 @@ def test_cli_rejects_midnight_business_log_chronology(tmp_path):
     completed = subprocess.run([
         sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path), "--output", str(output_path),
+        *_fixture_manifest_cli_args(tmp_path),
     ], capture_output=True, text=True, check=False)
 
     assert completed.returncode == 0
@@ -985,7 +1011,7 @@ def test_cli_writes_only_explicit_output_file_and_keeps_inputs_unchanged(tmp_pat
     candidate_before = candidate_path.read_bytes()
     baseline_before = baseline_path.read_bytes()
 
-    status = analyzer.main([
+    status = _fixture_main([
         "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path),
         "--output", str(output_path),
@@ -1106,7 +1132,7 @@ def test_cli_rejects_output_alias_of_an_input_without_overwriting(tmp_path, caps
     alias_path = tmp_path / "candidate-alias.log"
     os.link(candidate_path, alias_path)
 
-    status = analyzer.main([
+    status = _fixture_main([
         "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path),
         "--output", str(alias_path),
@@ -1225,7 +1251,7 @@ def test_cli_atomic_write_keeps_existing_output_when_replace_fails(tmp_path, cap
     output_path.write_bytes(b"old output")
 
     with mock.patch.object(analyzer.os, "replace", side_effect=OSError("disk fault")):
-        status = analyzer.main([
+        status = _fixture_main([
             "--candidate-log", str(candidate_path),
             "--baseline-log", str(baseline_path), "--output", str(output_path),
         ])
@@ -1249,9 +1275,9 @@ def test_cli_normalizes_multi_file_order_and_uses_frozen_closing_summary(tmp_pat
     first_output = tmp_path / "first.json"
     second_output = tmp_path / "second.json"
 
-    analyzer.main(["--candidate-log", str(early), "--candidate-log", str(late),
+    _fixture_main(["--candidate-log", str(early), "--candidate-log", str(late),
                    "--baseline-log", str(baseline), "--output", str(first_output)])
-    analyzer.main(["--candidate-log", str(late), "--candidate-log", str(early),
+    _fixture_main(["--candidate-log", str(late), "--candidate-log", str(early),
                    "--baseline-log", str(baseline), "--output", str(second_output)])
 
     first = json.loads(first_output.read_text(encoding="utf-8"))
@@ -1486,7 +1512,7 @@ def test_horizon_calendar_requires_matching_bidirectional_summary_evidence():
     for report in (candidate_report, baseline_report, different_report,
                    invalid_initialization_report, conflicting_summary_report):
         assert report["continue_candidate"] is False
-        assert any("candidate/baseline session calendar dates differ" in error
+        assert any("portfolio_summary sessions differ from manifest" in error
                    for error in report["data_quality"]["errors"])
     assert any("baseline session calendar unavailable: invalid initialization" in error
                for error in invalid_initialization_report["data_quality"]["errors"])
@@ -1546,7 +1572,7 @@ def test_session_evidence_missing_summary_is_attributed_to_its_own_role():
                for error in errors)
     assert not any(error.startswith("baseline session evidence missing summary:")
                    for error in errors)
-    assert any("candidate/baseline session calendar dates differ" in error
+    assert any("candidate portfolio_summary sessions differ from manifest" in error
                for error in errors)
 
 
@@ -1695,7 +1721,7 @@ def test_cli_io_failures_return_stable_nonzero_without_traceback(tmp_path, capsy
     missing = tmp_path / "missing.log"
     output = tmp_path / "report.json"
 
-    status = analyzer.main([
+    status = _fixture_main([
         "--candidate-log", str(missing), "--baseline-log", str(missing), "--output", str(output),
     ])
 
@@ -1741,7 +1767,7 @@ def test_cli_code_container_is_quality_error_but_still_writes_report(tmp_path, c
     _write_log(candidate_path, candidate)
     _write_log(baseline_path, make_baseline_records())
 
-    status = analyzer.main(["--candidate-log", str(candidate_path),
+    status = _fixture_main(["--candidate-log", str(candidate_path),
                             "--baseline-log", str(baseline_path), "--output", str(output_path)])
 
     assert status == 0
@@ -1777,7 +1803,7 @@ def test_cli_replace_and_temporary_cleanup_failures_preserve_primary_io_error(tm
 
     with mock.patch.object(analyzer.os, "replace", side_effect=OSError("replace fault")), \
             mock.patch.object(pathlib.Path, "unlink", side_effect=OSError("cleanup fault")):
-        status = analyzer.main(["--candidate-log", str(candidate_path),
+        status = _fixture_main(["--candidate-log", str(candidate_path),
                                 "--baseline-log", str(baseline_path), "--output", str(output_path)])
 
     assert status == 2
@@ -1845,6 +1871,7 @@ def test_cli_non_dict_formal_outcome_payload_is_isolated_as_data_quality(
     completed = subprocess.run([
         sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path), "--output", str(output_path),
+        *_fixture_manifest_cli_args(tmp_path),
     ], capture_output=True, text=True, check=False)
 
     assert completed.returncode == 0
@@ -1869,6 +1896,7 @@ def test_cli_surrogate_code_is_safely_isolated_as_data_quality(tmp_path):
     completed = subprocess.run([
         sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path), "--output", str(output_path),
+        *_fixture_manifest_cli_args(tmp_path),
     ], capture_output=True, text=True, check=False)
 
     assert completed.returncode == 0
@@ -1876,6 +1904,243 @@ def test_cli_surrogate_code_is_safely_isolated_as_data_quality(tmp_path):
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert report["continue_candidate"] is False
     assert any("candidate code" in error for error in report["data_quality"]["errors"])
+
+
+def _session_manifest_bytes(sessions=None, **overrides):
+    default_sessions = {
+        session for dates in SESSION_DATES.values() for session in dates
+    }
+    default_sessions.add("2021-12-31")
+    payload = {
+        "schema_version": 1,
+        "market": "XSHG",
+        "coverage_start": "2019-01-01",
+        "coverage_end": "2021-12-31",
+        "source": "JoinQuant get_all_trade_days",
+        "sessions": list(sessions if sessions is not None else sorted(default_sessions)),
+    }
+    payload.update(overrides)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _fixture_manifest_cli_args(directory):
+    path = pathlib.Path(directory) / "session-calendar.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = _session_manifest_bytes()
+    path.write_bytes(raw)
+    return ["--session-calendar", str(path), "--session-calendar-sha256",
+            hashlib.sha256(raw).hexdigest()]
+
+
+_RAW_MAIN = analyzer.main
+
+
+def _fixture_main(argv=None):
+    args = list(argv or ())
+    if "--session-calendar" not in args:
+        output_index = args.index("--output")
+        args.extend(_fixture_manifest_cli_args(pathlib.Path(args[output_index + 1]).parent))
+    return _RAW_MAIN(args)
+
+
+def test_session_manifest_raw_hash_schema_and_explicit_analysis_contract():
+    raw = _session_manifest_bytes()
+    digest = hashlib.sha256(raw).hexdigest().upper()
+
+    manifest = analyzer.validate_session_calendar_manifest(raw, digest)
+    report = analyzer.analyze_records(
+        make_candidate_records(), make_baseline_records(), manifest,
+    )
+
+    assert manifest["sha256"] == digest.lower()
+    assert manifest["sessions"] == tuple(
+        date.fromisoformat(value) for value in json.loads(raw)["sessions"]
+    )
+    assert report["session_calendar"]["sha256"] == digest.lower()
+    with pytest.raises(TypeError):
+        _RAW_ANALYZE_RECORDS(make_candidate_records(), make_baseline_records())
+    with pytest.raises(TypeError):
+        _RAW_ANALYZE_RECORDS(
+            make_candidate_records(), make_baseline_records(),
+            {"_validated_session_manifest": True, "sessions": manifest["sessions"],
+             "sha256": manifest["sha256"], "metadata": manifest["metadata"]},
+        )
+
+
+@pytest.mark.parametrize("payload", [
+    {"schema_version": 2},
+    {"market": "XSHE"},
+    {"sessions": ["2019-01-03", "2019-01-02"]},
+    {"sessions": ["2019-01-02", "2019-01-02"]},
+    {"sessions": ["2018-12-31"]},
+])
+def test_session_manifest_rejects_frozen_schema_order_and_window(payload):
+    raw = _session_manifest_bytes(**payload)
+
+    with pytest.raises(ValueError):
+        analyzer.validate_session_calendar_manifest(
+            raw, hashlib.sha256(raw).hexdigest(),
+        )
+
+
+def test_independent_manifest_rejects_joint_summary_omission_and_sparse_horizons():
+    sessions = json.loads(_session_manifest_bytes())["sessions"]
+    manifest = analyzer.validate_session_calendar_manifest(
+        _session_manifest_bytes(), hashlib.sha256(_session_manifest_bytes()).hexdigest(),
+    )
+    candidate = [record for record in make_candidate_records() if not (
+        record.get("event") == "portfolio_summary"
+        and record.get("closing_date") == sessions[2]
+    )]
+    baseline = [record for record in make_baseline_records() if not (
+        record.get("event") == "portfolio_summary"
+        and record.get("closing_date") == sessions[2]
+    )]
+
+    report = analyzer.analyze_records(candidate, baseline, manifest)
+
+    assert report["continue_candidate"] is False
+    assert any("candidate portfolio_summary sessions differ from manifest" in error
+               for error in report["data_quality"]["errors"])
+    assert any("baseline portfolio_summary sessions differ from manifest" in error
+               for error in report["data_quality"]["errors"])
+
+
+def test_cli_requires_verified_manifest_before_log_read_or_output(tmp_path, capsys):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, make_candidate_records())
+    _write_log(baseline_path, make_baseline_records())
+    original_candidate = candidate_path.read_bytes()
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(candidate_path), "--baseline-log", str(baseline_path),
+        "--output", str(output_path),
+    ])
+
+    assert status == 2
+    assert capsys.readouterr().err == "input error: session calendar is required\n"
+    assert candidate_path.read_bytes() == original_candidate
+    assert not output_path.exists()
+
+
+def test_manifest_signal_snapshot_signal_date_must_be_a_manifest_session():
+    candidate = make_candidate_records()
+    snapshot = next(record for record in candidate if record.get("event") == "signal_snapshot")
+    snapshot["signal_date"] = "2019-01-01"
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert "candidate session evidence absent from manifest: 2019-01-01" in report[
+        "data_quality"
+    ]["errors"]
+
+
+def test_cli_verified_manifest_records_metadata_and_preserves_manifest_bytes(tmp_path):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    manifest_path = tmp_path / "calendar.json"
+    output_path = tmp_path / "report.json"
+    _write_log(candidate_path, make_candidate_records())
+    _write_log(baseline_path, make_baseline_records())
+    raw = _session_manifest_bytes()
+    manifest_path.write_bytes(raw)
+
+    completed = subprocess.run([
+        sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
+        "--baseline-log", str(baseline_path), "--session-calendar", str(manifest_path),
+        "--session-calendar-sha256", hashlib.sha256(raw).hexdigest().upper(),
+        "--output", str(output_path),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert manifest_path.read_bytes() == raw
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert report["session_calendar"] == {
+        "coverage_end": "2021-12-31", "coverage_start": "2019-01-01",
+        "market": "XSHG", "schema_version": 1, "session_count": 52,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "source": "JoinQuant get_all_trade_days",
+    }
+
+
+@pytest.mark.parametrize("mutator,use_actual_hash", [
+    (lambda raw: raw[:-1], False),
+    (lambda raw: _session_manifest_bytes(sessions=["2019-01-03", "2019-01-02"]), True),
+    (lambda raw: _session_manifest_bytes(sessions=["2019-01-02", "2019-01-02"]), True),
+    (lambda raw: _session_manifest_bytes(sessions=["2022-01-03"]), True),
+])
+def test_cli_manifest_preconditions_fail_without_output_or_input_mutation(
+        tmp_path, capsys, mutator, use_actual_hash):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    manifest_path = tmp_path / "calendar.json"
+    output_path = tmp_path / "report.json"
+    candidate_path.write_text("not a log", encoding="utf-8")
+    baseline_path.write_text("not a log", encoding="utf-8")
+    raw = _session_manifest_bytes()
+    supplied = mutator(raw)
+    manifest_path.write_bytes(supplied)
+    candidate_before = candidate_path.read_bytes()
+    baseline_before = baseline_path.read_bytes()
+    manifest_before = manifest_path.read_bytes()
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(candidate_path), "--baseline-log", str(baseline_path),
+        "--session-calendar", str(manifest_path),
+        "--session-calendar-sha256", hashlib.sha256(
+            supplied if use_actual_hash else raw
+        ).hexdigest(),
+        "--output", str(output_path),
+    ])
+
+    assert status == 2
+    assert capsys.readouterr().err.startswith("input error: ")
+    assert candidate_path.read_bytes() == candidate_before
+    assert baseline_path.read_bytes() == baseline_before
+    assert manifest_path.read_bytes() == manifest_before
+    assert not output_path.exists()
+
+
+def test_cli_rejects_hardlink_and_symlink_output_aliases_of_manifest(tmp_path, capsys):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    manifest_path = tmp_path / "calendar.json"
+    _write_log(candidate_path, make_candidate_records())
+    _write_log(baseline_path, make_baseline_records())
+    raw = _session_manifest_bytes()
+    manifest_path.write_bytes(raw)
+    manifest_before = manifest_path.read_bytes()
+    hardlink = tmp_path / "calendar-hardlink.json"
+    os.link(manifest_path, hardlink)
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(candidate_path), "--baseline-log", str(baseline_path),
+        "--session-calendar", str(manifest_path),
+        "--session-calendar-sha256", hashlib.sha256(raw).hexdigest(),
+        "--output", str(hardlink),
+    ])
+
+    assert status == 2
+    assert capsys.readouterr().err == "input error: output path must not match an input log\n"
+    assert manifest_path.read_bytes() == manifest_before
+    symlink = tmp_path / "calendar-symlink.json"
+    try:
+        os.symlink(manifest_path, symlink)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    status = _RAW_MAIN([
+        "--candidate-log", str(candidate_path), "--baseline-log", str(baseline_path),
+        "--session-calendar", str(manifest_path),
+        "--session-calendar-sha256", hashlib.sha256(raw).hexdigest(),
+        "--output", str(symlink),
+    ])
+    assert status == 2
+    assert capsys.readouterr().err == "input error: output path must not match an input log\n"
+    assert manifest_path.read_bytes() == manifest_before
 
 
 @pytest.mark.parametrize("field,value,fragment", [
@@ -1896,6 +2161,7 @@ def test_cli_identity_container_pollution_isolated_without_traceback(tmp_path, f
     completed = subprocess.run([
         sys.executable, str(ANALYZER_PATH), "--candidate-log", str(candidate_path),
         "--baseline-log", str(baseline_path), "--output", str(output_path),
+        *_fixture_manifest_cli_args(tmp_path),
     ], capture_output=True, text=True, check=False)
 
     assert completed.returncode == 0

@@ -17,6 +17,9 @@ from datetime import date, datetime, time
 
 TRAIN_START = date(2019, 1, 1)
 TRAIN_END = date(2021, 12, 31)
+SESSION_MANIFEST_SCHEMA_VERSION = 1
+SESSION_MANIFEST_MARKET = "XSHG"
+SESSION_MANIFEST_SOURCE = "JoinQuant get_all_trade_days"
 CANDIDATE_BUILD = "20260827.4"
 BASELINE_BUILD = "20260827.3"
 RELATIVE_OBSERVATION_FINGERPRINT = "f47d32b87be6d926"
@@ -46,6 +49,8 @@ STRUCTURED_EVENT_FIELD_RE = re.compile(
         re.escape(token) for token in sorted(STRUCTURED_EVENT_TOKENS)
     ),
 )
+SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_SESSION_MANIFEST_VALIDATION_TOKEN = object()
 
 
 def _reject_json_constant(value):
@@ -113,6 +118,75 @@ def _calendar_date(value):
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         raise ValueError("date must be complete ISO date")
     return date.fromisoformat(value)
+
+
+def validate_session_calendar_manifest(raw_bytes, expected_sha256):
+    """Validate one frozen manifest from its original UTF-8 bytes."""
+    if not isinstance(raw_bytes, bytes):
+        raise ValueError("session calendar manifest must be bytes")
+    if type(expected_sha256) is not str or not SHA256_RE.fullmatch(expected_sha256):
+        raise ValueError("session calendar sha256 must be 64 hexadecimal characters")
+    actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    if actual_sha256.lower() != expected_sha256.lower():
+        raise ValueError("session calendar sha256 mismatch")
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"), parse_constant=_reject_json_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("invalid session calendar manifest") from exc
+    required = {
+        "schema_version", "market", "coverage_start", "coverage_end", "source", "sessions",
+    }
+    if type(payload) is not dict or set(payload) != required:
+        raise ValueError("invalid session calendar manifest schema")
+    if (type(payload["schema_version"]) is not int
+            or payload["schema_version"] != SESSION_MANIFEST_SCHEMA_VERSION
+            or payload["market"] != SESSION_MANIFEST_MARKET
+            or payload["source"] != SESSION_MANIFEST_SOURCE
+            or payload["coverage_start"] != TRAIN_START.isoformat()
+            or payload["coverage_end"] != TRAIN_END.isoformat()):
+        raise ValueError("invalid session calendar manifest schema")
+    sessions = payload["sessions"]
+    if not isinstance(sessions, list) or not sessions:
+        raise ValueError("invalid session calendar manifest sessions")
+    normalized = []
+    previous = None
+    for value in sessions:
+        if not _valid_text(value):
+            raise ValueError("invalid session calendar manifest session")
+        try:
+            session = _calendar_date(value)
+        except ValueError as exc:
+            raise ValueError("invalid session calendar manifest session") from exc
+        if not TRAIN_START <= session <= TRAIN_END:
+            raise ValueError("session calendar manifest session outside coverage")
+        if previous is not None and session <= previous:
+            raise ValueError("session calendar manifest sessions must be strictly increasing")
+        normalized.append(session)
+        previous = session
+    return {
+        "_validated_session_manifest": True,
+        "_validation_token": _SESSION_MANIFEST_VALIDATION_TOKEN,
+        "sessions": tuple(normalized),
+        "sha256": actual_sha256,
+        "metadata": {
+            "schema_version": payload["schema_version"],
+            "market": payload["market"],
+            "coverage_start": payload["coverage_start"],
+            "coverage_end": payload["coverage_end"],
+            "source": payload["source"],
+            "session_count": len(normalized),
+        },
+    }
+
+
+def _require_validated_session_manifest(manifest):
+    if (type(manifest) is not dict
+            or manifest.get("_validated_session_manifest") is not True
+            or manifest.get("_validation_token") is not _SESSION_MANIFEST_VALIDATION_TOKEN
+            or not isinstance(manifest.get("sessions"), tuple)
+            or not SHA256_RE.fullmatch(manifest.get("sha256", ""))):
+        raise TypeError("validated session manifest is required")
+    return manifest
 
 
 def _is_training_date(value, label, errors):
@@ -301,7 +375,8 @@ def _finite_number(value):
     return numeric if math.isfinite(numeric) else None
 
 
-def _validate_support_contract(record, prefix, signal_date, session_evidence, errors):
+def _validate_support_contract(record, prefix, signal_date, session_evidence,
+                               session_calendar, errors):
     supporters = record.get("supporters")
     if (not isinstance(supporters, (list, tuple)) or not supporters
             or any(not _valid_text(item) for item in supporters)
@@ -332,10 +407,12 @@ def _validate_support_contract(record, prefix, signal_date, session_evidence, er
             errors.append("%s supporters lack signal-date evidence" % prefix)
         if (signal_date is not None and len(supported_dates) == len(dates)
                 and any(value < signal_date for value in supported_dates)):
-            previous_session = session_evidence.get(signal_date)
-            if previous_session is None:
-                errors.append("%s supporter window unverifiable: missing decision-to-signal session evidence" % prefix)
+            if signal_date not in session_calendar or session_calendar.index(signal_date) == 0:
+                errors.append("%s supporter window unverifiable in session calendar" % prefix)
             else:
+                previous_session = session_calendar[session_calendar.index(signal_date) - 1]
+                if session_evidence.get(signal_date) != previous_session:
+                    errors.append("%s supporter window session evidence mismatch" % prefix)
                 allowed_dates = {signal_date, previous_session}
                 if any(value not in allowed_dates for value in supported_dates):
                     errors.append("invalid %s supporter trading-session window" % prefix)
@@ -447,14 +524,7 @@ def _validated_session_calendar(records, role, initialization_valid, errors):
     return tuple(sorted(evidence))
 
 
-def _common_session_calendar(candidate_calendar, baseline_calendar, errors):
-    if candidate_calendar != baseline_calendar:
-        errors.append("candidate/baseline session calendar dates differ")
-        return ()
-    return candidate_calendar
-
-
-def _validate_session_evidence(records, role, calendar, errors):
+def _validate_session_evidence(records, role, summary_calendar, manifest_calendar, errors):
     """Evidence may expose a missing summary, but cannot create a session."""
     dates = set()
     for record in records:
@@ -462,10 +532,13 @@ def _validate_session_evidence(records, role, calendar, errors):
         if event == "signal_snapshot":
             try:
                 decision_date = _calendar_date(record.get("decision_date"))
+                signal_date = _calendar_date(record.get("signal_date"))
             except ValueError:
-                decision_date = None
+                decision_date = signal_date = None
             if decision_date is not None:
                 dates.add(decision_date)
+            if signal_date is not None:
+                dates.add(signal_date)
         if event == "order_transition" and record.get("outcome") == "FILLED":
             timestamp = _parse_strict_log_timestamp(record)
             if timestamp is not None:
@@ -481,7 +554,9 @@ def _validate_session_evidence(records, role, calendar, errors):
             if closing_date is not None:
                 dates.add(closing_date)
     for session_date in sorted(dates):
-        if session_date not in calendar:
+        if session_date not in manifest_calendar:
+            errors.append("%s session evidence absent from manifest: %s" % (role, session_date))
+        if session_date not in summary_calendar:
             errors.append("%s session evidence missing summary: %s" % (role, session_date))
 
 
@@ -610,7 +685,7 @@ def _validate_relative_common(record, errors):
     return observation_id
 
 
-def _validate_relative_registration(record, session_evidence, errors):
+def _validate_relative_registration(record, session_evidence, session_calendar, errors):
     observation_id = _validate_relative_common(record, errors)
     if record.get("branch") not in BRANCHES:
         errors.append("invalid branch: %r" % record.get("branch"))
@@ -632,7 +707,9 @@ def _validate_relative_registration(record, session_evidence, errors):
     if (signal_date is not None and expires_date is not None
             and expires_date < signal_date):
         errors.append("expired candidate: %s" % observation_id)
-    _validate_support_contract(record, "candidate", signal_date, session_evidence, errors)
+    _validate_support_contract(
+        record, "candidate", signal_date, session_evidence, session_calendar, errors,
+    )
     if (registration_timestamp is not None and signal_date is not None
             and session_evidence.get(registration_timestamp.date()) != signal_date):
         errors.append("relative registration session evidence mismatch")
@@ -814,13 +891,7 @@ def _valid_baseline_horizon_five(registration, outcome_record, session_calendar=
             and outcome_timestamp > registration_timestamp)
 
 
-def _validate_baseline(records, errors, initialization_valid=None, session_calendar=None):
-    if initialization_valid is None:
-        initialization_valid = _validate_baseline_initializations(records, errors)
-    if session_calendar is None:
-        session_calendar = _validated_session_calendar(
-            records, "baseline", initialization_valid, errors,
-        )
+def _validate_baseline(records, errors, initialization_valid, session_calendar):
     registrations = {}
     registration_replicas = {}
     outcomes = {}
@@ -1176,8 +1247,10 @@ def _audit_outcome_closing_date(record, errors):
     _is_training_date(payload.get("closing_date"), "outcome closing", errors)
 
 
-def analyze_records(candidate_records, baseline_records):
+def analyze_records(candidate_records, baseline_records, session_manifest):
     """Validate immutable log contracts and return a deterministic report."""
+    session_manifest = _require_validated_session_manifest(session_manifest)
+    session_calendar = session_manifest["sessions"]
     candidate_records = _normalized_timeline(candidate_records)
     baseline_records = _normalized_timeline(baseline_records)
     errors = []
@@ -1203,21 +1276,24 @@ def analyze_records(candidate_records, baseline_records):
     baseline_session_calendar = _validated_session_calendar(
         baseline_records, "baseline", baseline_initialization_valid, errors,
     )
-    session_calendar = _common_session_calendar(
-        candidate_session_calendar, baseline_session_calendar, errors,
+    if candidate_session_calendar != session_calendar:
+        errors.append("candidate portfolio_summary sessions differ from manifest")
+    if baseline_session_calendar != session_calendar:
+        errors.append("baseline portfolio_summary sessions differ from manifest")
+    _validate_session_evidence(
+        candidate_records, "candidate", candidate_session_calendar, session_calendar, errors,
     )
     _validate_session_evidence(
-        candidate_records, "candidate", candidate_session_calendar, errors,
-    )
-    _validate_session_evidence(
-        baseline_records, "baseline", baseline_session_calendar, errors,
+        baseline_records, "baseline", baseline_session_calendar, session_calendar, errors,
     )
     _validate_baseline_observation_namespaces(baseline_records, errors)
     candidate_session_evidence = _candidate_session_evidence(candidate_records, errors)
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
         if record.get("event") == "relative_resonance_observation":
-            _validate_relative_registration(record, candidate_session_evidence, errors)
+            _validate_relative_registration(
+                record, candidate_session_evidence, session_calendar, errors,
+            )
         elif (record.get("event") == "observation_outcome" and (
                 record.get("relative_observation_id") is not None
                 or record.get("observation_kind") == "RELATIVE_RESONANCE"
@@ -1391,6 +1467,7 @@ def analyze_records(candidate_records, baseline_records):
         "data_quality_complete": data_quality_complete,
     }
     return {
+        "session_calendar": dict(session_manifest["metadata"], sha256=session_manifest["sha256"]),
         "data_quality": {"errors": errors, "relative_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
                          "formal_overlap_count": formal_overlap_count,
                          "missing_outcome_count": missing_outcome_count,
@@ -1432,22 +1509,41 @@ def _output_conflicts_with_input(output_path, input_paths):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--candidate-log", action="append", required=True)
-    parser.add_argument("--baseline-log", action="append", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--candidate-log", action="append")
+    parser.add_argument("--baseline-log", action="append")
+    parser.add_argument("--session-calendar")
+    parser.add_argument("--session-calendar-sha256")
+    parser.add_argument("--output")
     args = parser.parse_args(argv)
     try:
+        if not args.session_calendar:
+            raise ValueError("session calendar is required")
+        if not args.session_calendar_sha256:
+            raise ValueError("session calendar sha256 is required")
+        manifest_path = pathlib.Path(args.session_calendar).expanduser().resolve(strict=False)
+        if not manifest_path.is_file():
+            raise ValueError("session calendar manifest must be a file: %s" % manifest_path)
+        session_manifest = validate_session_calendar_manifest(
+            manifest_path.read_bytes(), args.session_calendar_sha256,
+        )
+        if not args.candidate_log:
+            raise ValueError("candidate log is required")
+        if not args.baseline_log:
+            raise ValueError("baseline log is required")
+        if not args.output:
+            raise ValueError("output is required")
         candidate_paths = _normalized_input_paths(args.candidate_log)
         baseline_paths = _normalized_input_paths(args.baseline_log)
         output_path = pathlib.Path(args.output).expanduser().resolve(strict=False)
-        if _output_conflicts_with_input(output_path, candidate_paths + baseline_paths):
+        if _output_conflicts_with_input(
+                output_path, candidate_paths + baseline_paths + [manifest_path]):
             raise ValueError("output path must not match an input log")
         candidate_records = load_log_records(candidate_paths)
         baseline_records = load_log_records(baseline_paths)
     except (OSError, ValueError) as exc:
         print("input error: %s" % exc, file=sys.stderr)
         return 2
-    report = analyze_records(candidate_records, baseline_records)
+    report = analyze_records(candidate_records, baseline_records, session_manifest)
     temporary_path = None
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
