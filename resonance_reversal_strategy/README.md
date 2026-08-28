@@ -114,7 +114,8 @@ buy_target = min(standard_target, max(0, available_cash - cash_reserve))
 2. 冒烟通过后，只运行 2019-01-01 至 2021-12-31 的冻结训练回测；不得使用验证期
    调参。
 3. 冻结训练完成后，用户须在独立聚宽研究环境（不是策略回测代码）先导出并保存唯一的
-   交易日 manifest、冻结其原始 bytes 的小写 SHA-256；再导出完整 `20260827.3` 基线日志
+   2018--2021 交易日 manifest；其中 2018 只提供历史信号证据，收益评估仍严格限制为
+   2019--2021。保存后冻结原始 bytes 的小写 SHA-256，再导出完整 `20260827.3` 基线日志
    与 `20260827.4` 候选日志，才执行下列只读分析器命令。
 
 聚宽研究环境导出 manifest 的示例（schema 与分析器合同完全一致）：
@@ -123,22 +124,26 @@ buy_target = min(standard_target, max(0, available_cash - cash_reserve))
 import json
 import jqdata
 
-coverage_start = "2019-01-01"
-coverage_end = "2021-12-31"
+calendar_coverage_start = "2018-01-01"
+calendar_coverage_end = "2021-12-31"
+evaluation_start = "2019-01-01"
+evaluation_end = "2021-12-31"
 sessions = [
     session.isoformat()
     for session in jqdata.get_all_trade_days()
-    if coverage_start <= session.isoformat() <= coverage_end
+    if calendar_coverage_start <= session.isoformat() <= calendar_coverage_end
 ]
 manifest = {
-    "schema_version": 1,
+    "schema_version": 2,
     "market": "XSHG",
-    "coverage_start": coverage_start,
-    "coverage_end": coverage_end,
+    "calendar_coverage_start": calendar_coverage_start,
+    "calendar_coverage_end": calendar_coverage_end,
+    "evaluation_start": evaluation_start,
+    "evaluation_end": evaluation_end,
     "source": "JoinQuant get_all_trade_days",
     "sessions": sessions,
 }
-with open("joinquant_sessions_2019_2021.json", "w", encoding="utf-8", newline="\n") as stream:
+with open("joinquant_sessions_2018_2021.json", "w", encoding="utf-8", newline="\n") as stream:
     json.dump(manifest, stream, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     stream.write("\n")
 ```
@@ -146,7 +151,7 @@ with open("joinquant_sessions_2019_2021.json", "w", encoding="utf-8", newline="\
 先保存该文件，再在查看或分析 `.3/.4` 结果前运行并记录输出的小写值：
 
 ```powershell
-(Get-FileHash .\joinquant_sessions_2019_2021.json -Algorithm SHA256).Hash.ToLowerInvariant()
+(Get-FileHash .\joinquant_sessions_2018_2021.json -Algorithm SHA256).Hash.ToLowerInvariant()
 ```
 
 这就是预先冻结的 hash。之后 manifest 的任何 bytes 变化都需要重新授权；不得在现场
@@ -156,24 +161,31 @@ with open("joinquant_sessions_2019_2021.json", "w", encoding="utf-8", newline="\
 python resonance_reversal_strategy/research/analyze_relative_turn_observations.py `
   --baseline-log D:\logs\resonance-20260827.3.log `
   --candidate-log D:\logs\resonance-20260827.4.log `
-  --session-calendar .\joinquant_sessions_2019_2021.json `
+  --session-calendar .\joinquant_sessions_2018_2021.json `
   --session-calendar-sha256 <预先冻结的sha256> `
   --output D:\logs\relative-turn-report.json
 ```
 
 分析器只读取用户显式提供的日志，拒绝 2022 年及以后观察记录，也不会搜索阈值、窗口
 或 ETF。manifest 必须是只读、UTF-8 JSON，严格只含 `schema_version`、`market`、
-`coverage_start`、`coverage_end`、`source`、`sessions` 六个字段；其大小最多 256 KiB，
-会拒绝重复键、非 ISO 日期、不递增日期和不在 2019--2021 覆盖内的 session。manifest、
+`calendar_coverage_start`、`calendar_coverage_end`、`evaluation_start`、
+`evaluation_end`、`source`、`sessions` 八个字段；其大小最多 256 KiB，会拒绝重复键、
+非 ISO 日期、不递增日期和不在 2018--2021 日历证据覆盖内的 session。manifest、
 基线日志、候选日志与输出必须是四个不同的物理文件；分析器会拒绝同路径、符号/硬链接等
 别名以及输出覆盖任何输入。
 
 `--session-calendar-sha256` 接受 64 位十六进制的大小写形式并按大小写不敏感地比较，
 但预注册记录必须使用上一步冻结的小写值。报告的 `session_calendar` 元数据固定包含
-`schema_version`、`market`、`coverage_start`、`coverage_end`、`source`、`session_count`
-和原始 manifest bytes 计算出的 `sha256`（小写）。每个正式和相对观察的 1/3/5 日结果
-必须精确落在这个唯一 calendar 的对应交易日；缺少 session 证据、覆盖不完整或日期不一致
-均 fail closed，只能得到失败的数据质量/门槛结果。
+`schema_version`、`market`、`calendar_coverage_start/end`、`evaluation_start/end`、
+`source`、`session_count` 和原始 manifest bytes 计算出的 `sha256`（小写）。2018 的
+`signal_date`、支持事件和有效期可以作为 2019 决策的因果证据，但 2018 决策、订单和
+收益仍会失败；组合汇总只与 manifest 的 2019--2021 子集比较。
+
+每个正式和相对观察都先由 manifest 推导精确 H1/H3/H5。任一必需结果无法在
+`evaluation_end` 前形成时，整个观察标记为 `RIGHT_CENSORED`，不进入任何 horizon、
+年度、方向、分支或 ETF 收益统计。右截尾导致的不可达结果允许缺失，但已经存在的部分结果
+仍须严格匹配 closing session、日志时间、身份和收益；完整观察缺少任一结果继续 fail closed，
+任何 2022 结果都不能用于补齐。报告分别给出正式/相对的注册、完整和右截尾数量。
 
 全部预注册门槛通过只代表可以提出下一份交易候选规格，不代表可以自动下单或进入验证期。
 现在代码不包含真实 manifest、其冻结 hash 或聚宽平台结果，用户仍需按上述步骤导出。当前

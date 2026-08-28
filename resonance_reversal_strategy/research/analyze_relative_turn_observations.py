@@ -17,9 +17,11 @@ from datetime import date, datetime, time
 from typing import NamedTuple
 
 
-TRAIN_START = date(2019, 1, 1)
-TRAIN_END = date(2021, 12, 31)
-SESSION_MANIFEST_SCHEMA_VERSION = 1
+CALENDAR_COVERAGE_START = date(2018, 1, 1)
+CALENDAR_COVERAGE_END = date(2021, 12, 31)
+EVALUATION_START = date(2019, 1, 1)
+EVALUATION_END = date(2021, 12, 31)
+SESSION_MANIFEST_SCHEMA_VERSION = 2
 SESSION_MANIFEST_MARKET = "XSHG"
 SESSION_MANIFEST_SOURCE = "JoinQuant get_all_trade_days"
 CANDIDATE_BUILD = "20260827.4"
@@ -36,6 +38,8 @@ LOG_TIMESTAMP_RE = re.compile(
 BRANCHES = ("HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE")
 DIRECTIONS = ("BUY_TURN", "SELL_TURN")
 HORIZONS = (1, 3, 5)
+SAMPLE_COMPLETE = "COMPLETE"
+SAMPLE_RIGHT_CENSORED = "RIGHT_CENSORED"
 INDICATORS = frozenset(("BOLL", "KDJ", "RSI"))
 SOURCES = frozenset(("HARD", "RELATIVE"))
 TRADING_LOG_TIME = time(9, 35)
@@ -58,10 +62,17 @@ MAX_SESSION_MANIFEST_BYTES = 256 * 1024
 class SessionCalendarMetadata(NamedTuple):
     schema_version: int
     market: str
-    coverage_start: str
-    coverage_end: str
+    calendar_coverage_start: str
+    calendar_coverage_end: str
+    evaluation_start: str
+    evaluation_end: str
     source: str
     session_count: int
+
+
+class ObservationCalendarStatus(NamedTuple):
+    sample_status: str
+    expected_closing_dates: tuple
 
 
 def _build_session_manifest_api():
@@ -105,8 +116,10 @@ def _build_session_manifest_api():
                 or type(metadata) is not SessionCalendarMetadata
                 or type(metadata.schema_version) is not int
                 or type(metadata.market) is not str
-                or type(metadata.coverage_start) is not str
-                or type(metadata.coverage_end) is not str
+                or type(metadata.calendar_coverage_start) is not str
+                or type(metadata.calendar_coverage_end) is not str
+                or type(metadata.evaluation_start) is not str
+                or type(metadata.evaluation_end) is not str
                 or type(metadata.source) is not str
                 or type(metadata.session_count) is not int):
             return False
@@ -139,20 +152,26 @@ def _build_session_manifest_api():
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise ValueError("invalid session calendar manifest") from exc
         required = {
-            "schema_version", "market", "coverage_start", "coverage_end", "source", "sessions",
+            "schema_version", "market",
+            "calendar_coverage_start", "calendar_coverage_end",
+            "evaluation_start", "evaluation_end", "source", "sessions",
         }
         if type(payload) is not dict or set(payload) != required:
             raise ValueError("invalid session calendar manifest schema")
         if (type(payload["schema_version"]) is not int
                 or type(payload["market"]) is not str
-                or type(payload["coverage_start"]) is not str
-                or type(payload["coverage_end"]) is not str
+                or type(payload["calendar_coverage_start"]) is not str
+                or type(payload["calendar_coverage_end"]) is not str
+                or type(payload["evaluation_start"]) is not str
+                or type(payload["evaluation_end"]) is not str
                 or type(payload["source"]) is not str
                 or payload["schema_version"] != SESSION_MANIFEST_SCHEMA_VERSION
                 or payload["market"] != SESSION_MANIFEST_MARKET
                 or payload["source"] != SESSION_MANIFEST_SOURCE
-                or payload["coverage_start"] != TRAIN_START.isoformat()
-                or payload["coverage_end"] != TRAIN_END.isoformat()):
+                or payload["calendar_coverage_start"] != CALENDAR_COVERAGE_START.isoformat()
+                or payload["calendar_coverage_end"] != CALENDAR_COVERAGE_END.isoformat()
+                or payload["evaluation_start"] != EVALUATION_START.isoformat()
+                or payload["evaluation_end"] != EVALUATION_END.isoformat()):
             raise ValueError("invalid session calendar manifest schema")
         sessions = payload["sessions"]
         if type(sessions) is not list or not sessions:
@@ -166,7 +185,7 @@ def _build_session_manifest_api():
                 session = _calendar_date(value)
             except ValueError as exc:
                 raise ValueError("invalid session calendar manifest session") from exc
-            if not TRAIN_START <= session <= TRAIN_END:
+            if not CALENDAR_COVERAGE_START <= session <= CALENDAR_COVERAGE_END:
                 raise ValueError("session calendar manifest session outside coverage")
             if previous is not None and session <= previous:
                 raise ValueError("session calendar manifest sessions must be strictly increasing")
@@ -176,7 +195,9 @@ def _build_session_manifest_api():
             tuple(normalized), str(actual_sha256),
             SessionCalendarMetadata(
                 int(payload["schema_version"]), str(payload["market"]),
-                str(payload["coverage_start"]), str(payload["coverage_end"]),
+                str(payload["calendar_coverage_start"]),
+                str(payload["calendar_coverage_end"]),
+                str(payload["evaluation_start"]), str(payload["evaluation_end"]),
                 str(payload["source"]), int(len(normalized)),
             ),
         )
@@ -187,14 +208,18 @@ def _build_session_manifest_api():
             raise TypeError("validated session manifest is required")
         if (manifest.metadata.schema_version != SESSION_MANIFEST_SCHEMA_VERSION
                 or manifest.metadata.market != SESSION_MANIFEST_MARKET
-                or manifest.metadata.coverage_start != TRAIN_START.isoformat()
-                or manifest.metadata.coverage_end != TRAIN_END.isoformat()
+                or manifest.metadata.calendar_coverage_start
+                != CALENDAR_COVERAGE_START.isoformat()
+                or manifest.metadata.calendar_coverage_end
+                != CALENDAR_COVERAGE_END.isoformat()
+                or manifest.metadata.evaluation_start != EVALUATION_START.isoformat()
+                or manifest.metadata.evaluation_end != EVALUATION_END.isoformat()
                 or manifest.metadata.source != SESSION_MANIFEST_SOURCE
                 or manifest.metadata.session_count != len(manifest.sessions)):
             raise TypeError("validated session manifest is required")
         previous = None
         for session in manifest.sessions:
-            if not TRAIN_START <= session <= TRAIN_END:
+            if not CALENDAR_COVERAGE_START <= session <= CALENDAR_COVERAGE_END:
                 raise TypeError("validated session manifest is required")
             if previous is not None and session <= previous:
                 raise TypeError("validated session manifest is required")
@@ -299,7 +324,7 @@ def read_session_calendar_manifest_bytes(path_value):
     return raw_bytes
 
 
-def _is_training_date(value, label, errors):
+def _required_calendar_date(value, label, errors):
     try:
         parsed = _calendar_date(value)
     except ValueError:
@@ -308,7 +333,20 @@ def _is_training_date(value, label, errors):
     if parsed is None:
         errors.append("missing %s date" % label)
         return None
-    if not TRAIN_START <= parsed <= TRAIN_END:
+    return parsed
+
+
+def _is_calendar_coverage_date(value, label, errors):
+    parsed = _required_calendar_date(value, label, errors)
+    if parsed is not None and not (
+            CALENDAR_COVERAGE_START <= parsed <= CALENDAR_COVERAGE_END):
+        errors.append("%s outside 2018-2021 calendar coverage: %s" % (label, parsed))
+    return parsed
+
+
+def _is_evaluation_date(value, label, errors):
+    parsed = _required_calendar_date(value, label, errors)
+    if parsed is not None and not EVALUATION_START <= parsed <= EVALUATION_END:
         errors.append("%s outside 2019-2021: %s" % (label, parsed))
     return parsed
 
@@ -355,6 +393,30 @@ def _validate_outcome_log_timestamp(record, label, closing_date, errors):
     if timestamp.time() < AFTER_CLOSE_LOG_TIME:
         errors.append("%s log timestamp before 15:30" % label)
     return timestamp
+
+
+def _validate_previous_manifest_session(signal_date, decision_date, calendar,
+                                        label, errors):
+    if signal_date is None or decision_date is None:
+        return
+    if decision_date not in calendar:
+        errors.append("%s decision date absent from manifest" % label)
+        return
+    decision_index = calendar.index(decision_date)
+    if decision_index == 0 or calendar[decision_index - 1] != signal_date:
+        errors.append("%s signal date is not previous manifest session" % label)
+
+
+def _validate_formal_expiry(signal_date, expires_date, calendar, label, errors):
+    if signal_date is None or expires_date is None or signal_date not in calendar:
+        return
+    signal_index = calendar.index(signal_date)
+    next_session = (
+        calendar[signal_index + 1]
+        if signal_index + 1 < len(calendar) else None
+    )
+    if expires_date not in (signal_date, next_session):
+        errors.append("%s expires date violates two-session lifecycle" % label)
 
 
 def _valid_text(value):
@@ -512,7 +574,7 @@ def _validate_support_contract(record, prefix, signal_date, session_evidence,
         has_signal_date_evidence = False
         supported_dates = []
         for indicator in sorted(dates):
-            supported_date = _is_training_date(
+            supported_date = _is_calendar_coverage_date(
                 dates[indicator], "%s supporter_event_dates" % prefix, errors,
             )
             if supported_date is not None:
@@ -644,7 +706,7 @@ def _validated_session_calendar(records, role, initialization_valid, errors):
     for record in records:
         if record.get("event") != "portfolio_summary":
             continue
-        closing_date = _is_training_date(
+        closing_date = _is_evaluation_date(
             record.get("closing_date"), "%s session summary closing" % role, errors,
         )
         timestamp = _strict_log_timestamp(record, "%s session summary" % role, errors)
@@ -676,7 +738,8 @@ def _validated_session_calendar(records, role, initialization_valid, errors):
 
 def _validate_session_evidence(records, role, summary_calendar, manifest_calendar, errors):
     """Evidence may expose a missing summary, but cannot create a session."""
-    dates = set()
+    manifest_dates = set()
+    summary_dates = set()
     for record in records:
         event = record.get("event")
         if event == "signal_snapshot":
@@ -686,13 +749,15 @@ def _validate_session_evidence(records, role, summary_calendar, manifest_calenda
             except ValueError:
                 decision_date = signal_date = None
             if decision_date is not None:
-                dates.add(decision_date)
+                manifest_dates.add(decision_date)
+                summary_dates.add(decision_date)
             if signal_date is not None:
-                dates.add(signal_date)
+                manifest_dates.add(signal_date)
         if event == "order_transition":
             timestamp = _parse_strict_log_timestamp(record)
             if timestamp is not None:
-                dates.add(timestamp.date())
+                manifest_dates.add(timestamp.date())
+                summary_dates.add(timestamp.date())
         if event == "observation_outcome":
             payload = record.get("outcome")
             if type(payload) is not dict:
@@ -702,10 +767,12 @@ def _validate_session_evidence(records, role, summary_calendar, manifest_calenda
             except ValueError:
                 closing_date = None
             if closing_date is not None:
-                dates.add(closing_date)
-    for session_date in sorted(dates):
+                manifest_dates.add(closing_date)
+                summary_dates.add(closing_date)
+    for session_date in sorted(manifest_dates):
         if session_date not in manifest_calendar:
             errors.append("%s session evidence absent from manifest: %s" % (role, session_date))
+    for session_date in sorted(summary_dates):
         if session_date not in summary_calendar:
             errors.append("%s session evidence missing summary: %s" % (role, session_date))
 
@@ -729,20 +796,64 @@ def _expected_outcome_session(event_date, horizon, calendar):
     return calendar[index] if index < len(calendar) else None
 
 
-def _validate_outcome_sessions(registrations, outcomes, calendar, role, horizons, errors):
+def _observation_calendar_status(registration, calendar):
+    try:
+        signal_date = _calendar_date(registration.get("signal_date"))
+    except ValueError:
+        return None
+    if signal_date is None or signal_date not in calendar:
+        return None
+    expected = tuple(
+        (horizon, _expected_outcome_session(signal_date, horizon, calendar))
+        for horizon in HORIZONS
+    )
+    sample_status = (
+        SAMPLE_RIGHT_CENSORED
+        if any(closing_date is None or closing_date > EVALUATION_END
+               for _, closing_date in expected)
+        else SAMPLE_COMPLETE
+    )
+    return ObservationCalendarStatus(sample_status, expected)
+
+
+def _partition_registration_ids(registrations, calendar):
+    statuses = {}
+    complete_ids = set()
+    right_censored_ids = set()
     for resonance_id, registration in registrations.items():
-        try:
-            event_date = _calendar_date(registration.get("signal_date"))
-        except ValueError:
+        status = _observation_calendar_status(registration, calendar)
+        if status is None:
             continue
+        statuses[resonance_id] = status
+        if status.sample_status == SAMPLE_COMPLETE:
+            complete_ids.add(resonance_id)
+        else:
+            right_censored_ids.add(resonance_id)
+    return statuses, complete_ids, right_censored_ids
+
+
+def _validate_outcome_sessions(registrations, outcomes, calendar, role, horizons,
+                               calendar_statuses, errors):
+    for resonance_id, registration in registrations.items():
+        status = calendar_statuses.get(resonance_id)
+        if status is None:
+            continue
+        expected_by_horizon = dict(status.expected_closing_dates)
         for horizon in horizons:
-            expected = _expected_outcome_session(event_date, horizon, calendar)
-            if expected is None:
-                errors.append("%s session calendar missing horizon %s coverage: %s" % (
-                    role, horizon, resonance_id,
-                ))
-                continue
+            expected = expected_by_horizon.get(horizon)
             record = outcomes.get((resonance_id, horizon))
+            if expected is None:
+                if record is not None:
+                    errors.append(
+                        "%s outcome exists for unreachable horizon: %s/%s"
+                        % (role, resonance_id, horizon)
+                    )
+                elif status.sample_status != SAMPLE_RIGHT_CENSORED:
+                    errors.append(
+                        "%s session calendar missing horizon %s coverage: %s"
+                        % (role, horizon, resonance_id)
+                    )
+                continue
             payload = record.get("outcome") if record is not None else None
             if type(payload) is not dict:
                 continue
@@ -756,7 +867,7 @@ def _validate_outcome_sessions(registrations, outcomes, calendar, role, horizons
                 ))
 
 
-def _candidate_session_evidence(records, errors):
+def _candidate_session_evidence(records, session_calendar, errors):
     """Build explicit candidate decision-date to prior-signal-date evidence."""
     evidence = {}
     unusable_decisions = set()
@@ -769,10 +880,10 @@ def _candidate_session_evidence(records, errors):
     for record in records:
         if record.get("event") != "signal_snapshot":
             continue
-        decision_date = _is_training_date(
+        decision_date = _is_evaluation_date(
             record.get("decision_date"), "candidate signal_snapshot decision", errors,
         )
-        signal_date = _is_training_date(
+        signal_date = _is_calendar_coverage_date(
             record.get("signal_date"), "candidate signal_snapshot signal", errors,
         )
         timestamp = _strict_log_timestamp(record, "candidate signal_snapshot", errors)
@@ -794,6 +905,13 @@ def _candidate_session_evidence(records, errors):
             usable = False
         if decision_date is not None and signal_date is not None and decision_date <= signal_date:
             errors.append("candidate signal_snapshot signal date must precede decision date")
+            usable = False
+        before_previous_session_errors = len(errors)
+        _validate_previous_manifest_session(
+            signal_date, decision_date, session_calendar,
+            "candidate signal_snapshot", errors,
+        )
+        if len(errors) != before_previous_session_errors:
             usable = False
         if timestamp is not None and decision_date is not None and timestamp.date() != decision_date:
             errors.append("candidate signal_snapshot log date mismatch")
@@ -849,11 +967,11 @@ def _validate_relative_registration(record, session_evidence, session_calendar, 
         if record.get(field) != expected:
             errors.append("registration %s mismatch: %r" % (field, record.get(field)))
     _text(record, "code", "candidate code", errors)
-    signal_date = _is_training_date(record.get("signal_date"), "signal", errors)
+    signal_date = _is_calendar_coverage_date(record.get("signal_date"), "signal", errors)
     registration_timestamp = _validate_registration_log_timestamp(
         record, "relative registration", signal_date, errors,
     )
-    expires_date = _is_training_date(record.get("expires_date"), "expires", errors)
+    expires_date = _is_calendar_coverage_date(record.get("expires_date"), "expires", errors)
     if (signal_date is not None and expires_date is not None
             and expires_date < signal_date):
         errors.append("expired candidate: %s" % observation_id)
@@ -902,7 +1020,7 @@ def _validate_relative_outcome_shape(record, errors):
         errors.append("invalid relative outcome branch: %r" % record.get("branch"))
     if record.get("direction") not in DIRECTIONS:
         errors.append("invalid relative outcome direction: %r" % record.get("direction"))
-    _is_training_date(record.get("event_date"), "relative outcome event", errors)
+    _is_calendar_coverage_date(record.get("event_date"), "relative outcome event", errors)
     supporters = record.get("supporters")
     if (not isinstance(supporters, (list, tuple)) or not supporters
             or any(not _valid_text(item) for item in supporters)
@@ -913,7 +1031,7 @@ def _validate_relative_outcome_shape(record, errors):
         errors.append("invalid relative outcome payload")
         _strict_log_timestamp(record, "relative outcome", errors)
     else:
-        closing_date = _is_training_date(
+        closing_date = _is_evaluation_date(
             outcome.get("closing_date"), "relative outcome closing", errors,
         )
         if outcome.get("status") == "RECORDED":
@@ -999,7 +1117,8 @@ def _validate_filled_orders(records, role, errors):
         if not (record.get("event") == "order_transition" and record.get("outcome") == "FILLED"):
             continue
         timestamp = _strict_log_timestamp(record, "filled order", errors)
-        if timestamp is not None and not (TRAIN_START <= timestamp.date() <= TRAIN_END):
+        if timestamp is not None and not (
+                EVALUATION_START <= timestamp.date() <= EVALUATION_END):
             errors.append("invalid filled order log timestamp in %s" % role)
         if timestamp is not None and timestamp.time() != TRADING_LOG_TIME:
             errors.append("filled order log timestamp outside 09:35 in %s" % role)
@@ -1022,8 +1141,11 @@ def _valid_baseline_registration(record):
     except ValueError:
         return False
     timestamp = _parse_strict_log_timestamp(record)
-    return (signal_date is not None and TRAIN_START <= signal_date <= TRAIN_END
-            and timestamp is not None and timestamp.date() > signal_date
+    return (signal_date is not None
+            and CALENDAR_COVERAGE_START <= signal_date <= CALENDAR_COVERAGE_END
+            and timestamp is not None
+            and EVALUATION_START <= timestamp.date() <= EVALUATION_END
+            and timestamp.date() > signal_date
             and timestamp.time() >= TRADING_LOG_TIME)
 
 
@@ -1047,12 +1169,28 @@ def _valid_baseline_recorded_horizon(registration, outcome_record, horizon, sess
     registration_timestamp = _parse_strict_log_timestamp(registration)
     outcome_timestamp = _parse_strict_log_timestamp(outcome_record)
     return (signal_date is not None and event_date == signal_date
-            and closing_date is not None and TRAIN_START <= closing_date <= TRAIN_END
+            and closing_date is not None
+            and EVALUATION_START <= closing_date <= EVALUATION_END
             and closing_date == _expected_outcome_session(signal_date, horizon, session_calendar)
             and closing_date > signal_date and registration_timestamp is not None
             and outcome_timestamp is not None and outcome_timestamp.date() == closing_date
             and outcome_timestamp.time() >= AFTER_CLOSE_LOG_TIME
             and outcome_timestamp > registration_timestamp)
+
+
+def _valid_baseline_required_horizons(registration, outcomes, calendar_status,
+                                      session_calendar):
+    if calendar_status is None:
+        return False
+    expected_by_horizon = dict(calendar_status.expected_closing_dates)
+    return all(
+        expected_by_horizon.get(horizon) is None
+        or _valid_baseline_recorded_horizon(
+            registration, outcomes.get((registration["resonance_id"], horizon)),
+            horizon, session_calendar,
+        )
+        for horizon in HORIZONS
+    )
 
 
 def _validate_baseline(records, errors, initialization_valid, session_calendar):
@@ -1069,7 +1207,9 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
         _text(record, "code", "formal code", errors)
         if record.get("direction") not in DIRECTIONS:
             errors.append("invalid formal direction: %r" % record.get("direction"))
-        signal_date = _is_training_date(record.get("signal_date"), "formal signal", errors)
+        signal_date = _is_calendar_coverage_date(
+            record.get("signal_date"), "formal signal", errors,
+        )
         _validate_registration_log_timestamp(record, "formal registration", signal_date, errors)
         if resonance_id is not None:
             registration_replicas.setdefault(resonance_id, []).append(record)
@@ -1124,13 +1264,15 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
                 invalid_horizon_ids.add(resonance_id)
             continue
         _text(record, "code", "formal outcome code", errors)
-        _is_training_date(record.get("event_date"), "formal outcome event", errors)
+        _is_calendar_coverage_date(
+            record.get("event_date"), "formal outcome event", errors,
+        )
         outcome = record.get("outcome")
         if not isinstance(outcome, dict):
             errors.append("invalid formal outcome payload")
             _strict_log_timestamp(record, "formal outcome", errors)
         else:
-            closing_date = _is_training_date(
+            closing_date = _is_evaluation_date(
                 outcome.get("closing_date"), "formal outcome closing", errors,
             )
             _validate_outcome_log_timestamp(record, "formal outcome", closing_date, errors)
@@ -1167,9 +1309,20 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
             invalid_horizon_ids.add(resonance_id)
         else:
             outcomes[key] = record
+    calendar_statuses, complete_ids, _ = (
+        _partition_registration_ids(registrations, session_calendar)
+    )
     formal_missing_outcome_count = 0
     for resonance_id in registrations:
+        status = calendar_statuses.get(resonance_id)
+        expected_by_horizon = (
+            dict(status.expected_closing_dates) if status is not None else {}
+        )
         for horizon in HORIZONS:
+            if (status is not None
+                    and status.sample_status == SAMPLE_RIGHT_CENSORED
+                    and expected_by_horizon.get(horizon) is None):
+                continue
             record = outcomes.get((resonance_id, horizon))
             payload = record.get("outcome") if record is not None else None
             if record is None:
@@ -1180,11 +1333,12 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
         payload = five_day.get("outcome") if five_day is not None else None
         comparable = (isinstance(payload, dict) and payload.get("status") == "RECORDED"
                       and _finite_number(payload.get("return")) is not None)
-        if not comparable:
+        if resonance_id in complete_ids and not comparable:
             formal_missing_outcome_count += 1
             errors.append("formal comparison incomplete: %s" % resonance_id)
     _validate_outcome_sessions(
-        registrations, outcomes, session_calendar, "formal", HORIZONS, errors,
+        registrations, outcomes, session_calendar, "formal", HORIZONS,
+        calendar_statuses, errors,
     )
     canonical_registrations = {}
     if initialization_valid:
@@ -1192,10 +1346,10 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
             if (resonance_id not in invalid_registration_ids
                     and resonance_id not in invalid_horizon_ids
                     and _valid_baseline_registration(registration)
-                    and all(_valid_baseline_recorded_horizon(
-                        registration, outcomes.get((resonance_id, horizon)),
-                        horizon, session_calendar,
-                    ) for horizon in HORIZONS)):
+                    and _valid_baseline_required_horizons(
+                        registration, outcomes,
+                        calendar_statuses.get(resonance_id), session_calendar,
+                    )):
                 canonical_registrations[resonance_id] = registration
     _validate_filled_orders(records, "baseline", errors)
     return registrations, outcomes, formal_missing_outcome_count, canonical_registrations
@@ -1261,7 +1415,7 @@ def extract_filled_order_path(records):
 
 def _validated_final_asset(records, role, errors):
     frozen_summaries = [record for record in records if record.get("event") == "portfolio_summary"
-                        and record.get("closing_date") == TRAIN_END.isoformat()]
+                        and record.get("closing_date") == EVALUATION_END.isoformat()]
     if not frozen_summaries:
         return None
     canonical = None
@@ -1270,7 +1424,7 @@ def _validated_final_asset(records, role, errors):
         timestamp = _strict_log_timestamp(record, "%s frozen portfolio summary" % role, errors)
         if timestamp is None:
             timestamps_valid = False
-        elif timestamp.date() != TRAIN_END:
+        elif timestamp.date() != EVALUATION_END:
             errors.append("%s frozen portfolio summary log date mismatch" % role)
             timestamps_valid = False
         elif timestamp.time() < AFTER_CLOSE_LOG_TIME:
@@ -1308,22 +1462,25 @@ def _grouped_summaries(values_by_group, errors=None):
                     for horizon in HORIZONS} for group in values_by_group}
 
 
-def _scope_summary(registrations, outcomes, relative):
+def _scope_summary(registrations, outcomes, relative, included_ids):
     direction_counts = {direction: 0 for direction in DIRECTIONS}
     year_counts = {str(year): 0 for year in (2019, 2020, 2021)}
     etf_counts = Counter()
     returns_by_horizon = {horizon: [] for horizon in HORIZONS}
     for resonance_id in sorted(registrations):
+        if resonance_id not in included_ids:
+            continue
         registration = registrations[resonance_id]
         direction = registration.get("direction")
         if direction in direction_counts:
             direction_counts[direction] += 1
-        try:
-            signal_date = _calendar_date(registration.get("signal_date"))
-        except ValueError:
-            signal_date = None
-        if signal_date is not None and str(signal_date.year) in year_counts:
-            year_counts[str(signal_date.year)] += 1
+        registration_timestamp = _parse_strict_log_timestamp(registration)
+        registration_year = (
+            str(registration_timestamp.date().year)
+            if registration_timestamp is not None else None
+        )
+        if registration_year in year_counts:
+            year_counts[registration_year] += 1
         code = registration.get("code")
         if _valid_text(code):
             etf_counts[code] += 1
@@ -1341,7 +1498,9 @@ def _scope_summary(registrations, outcomes, relative):
             if value is not None:
                 returns_by_horizon[horizon].append(value)
     return {
-        "candidate_count": len(registrations),
+        "candidate_count": sum(
+            resonance_id in included_ids for resonance_id in registrations
+        ),
         "direction_counts": direction_counts,
         "year_counts": year_counts,
         "etf_counts": dict(sorted(etf_counts.items())),
@@ -1351,10 +1510,12 @@ def _scope_summary(registrations, outcomes, relative):
     }
 
 
-def _formal_five_day_returns(registrations, outcomes):
+def _formal_five_day_returns(registrations, outcomes, included_ids):
     values = []
     for (resonance_id, horizon), record in outcomes.items():
         if horizon != 5:
+            continue
+        if resonance_id not in included_ids:
             continue
         outcome = record.get("outcome")
         if type(outcome) is not dict:
@@ -1408,7 +1569,8 @@ def _overlap_key(record, label, errors):
     except ValueError:
         errors.append("invalid %s signal date" % label)
         return None
-    if signal_date is None or not TRAIN_START <= signal_date <= TRAIN_END:
+    if (signal_date is None
+            or not CALENDAR_COVERAGE_START <= signal_date <= CALENDAR_COVERAGE_END):
         errors.append("invalid %s signal date" % label)
         return None
     return code, direction, signal_date.isoformat()
@@ -1434,12 +1596,13 @@ def _audit_outcome_closing_date(record, errors):
         errors.append("invalid outcome payload")
         return
     record["_outcome_payload_valid"] = True
-    _is_training_date(payload.get("closing_date"), "outcome closing", errors)
+    _is_evaluation_date(payload.get("closing_date"), "outcome closing", errors)
 
 
 def _audit_log_timestamp_training_window(record, label, errors):
     timestamp = _strict_log_timestamp(record, label, errors)
-    if timestamp is not None and not TRAIN_START <= timestamp.date() <= TRAIN_END:
+    if (timestamp is not None
+            and not EVALUATION_START <= timestamp.date() <= EVALUATION_END):
         errors.append("%s log timestamp outside 2019-2021: %s" % (label, timestamp.date()))
 
 
@@ -1447,26 +1610,34 @@ def _has_relative_markers(record):
     return _declares_relative_namespace(record)
 
 
-def _audit_formal_observations(records, role, errors):
+def _audit_formal_observations(records, role, session_calendar, errors):
     for record in records:
         if record.get("event") == "resonance_decision":
             _audit_log_timestamp_training_window(
                 record, "%s formal decision" % role, errors,
             )
-            _is_training_date(
+            decision_date = _is_evaluation_date(
                 record.get("decision_date"), "%s formal decision" % role, errors,
             )
-            _is_training_date(
+            signal_date = _is_calendar_coverage_date(
                 record.get("signal_date"), "%s formal signal" % role, errors,
+            )
+            _validate_previous_manifest_session(
+                signal_date, decision_date, session_calendar,
+                "%s formal" % role, errors,
             )
             expires_date = record.get("expires_date")
             if _is_formal_registration_record(record) or expires_date not in (None, ""):
-                _is_training_date(
+                parsed_expiry = _is_calendar_coverage_date(
                     expires_date, "%s formal expires" % role, errors,
+                )
+                _validate_formal_expiry(
+                    signal_date, parsed_expiry, session_calendar,
+                    "%s formal" % role, errors,
                 )
         elif (record.get("event") == "observation_outcome"
               and not _has_relative_markers(record)):
-            _is_training_date(
+            _is_calendar_coverage_date(
                 record.get("event_date"),
                 "%s formal outcome event" % role, errors,
             )
@@ -1482,12 +1653,12 @@ def _audit_order_transitions(records, role, errors):
         timestamp = _strict_log_timestamp(
             record, "%s order transition" % role, errors,
         )
-        log_date = _is_training_date(
+        log_date = _is_evaluation_date(
             record.get("_log_date"),
             "%s order transition log date" % role, errors,
         )
         if timestamp is not None:
-            if not TRAIN_START <= timestamp.date() <= TRAIN_END:
+            if not EVALUATION_START <= timestamp.date() <= EVALUATION_END:
                 errors.append(
                     "%s order transition log timestamp outside 2019-2021: %s"
                     % (role, timestamp.date())
@@ -1504,6 +1675,10 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     """Validate immutable log contracts and return a deterministic report."""
     session_manifest = _require_validated_session_manifest(session_manifest)
     session_calendar = session_manifest.sessions
+    evaluation_calendar = tuple(
+        session for session in session_calendar
+        if EVALUATION_START <= session <= EVALUATION_END
+    )
     candidate_records = _normalized_timeline(candidate_records)
     baseline_records = _normalized_timeline(baseline_records)
     errors = []
@@ -1515,8 +1690,12 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
             errors.append("parse error at %s: %s" % (location, record["_parse_error"]))
         _audit_outcome_closing_date(record, errors)
         record["_record_namespace"] = _classify_record_namespace(record, errors)
-    _audit_formal_observations(candidate_records, "candidate", errors)
-    _audit_formal_observations(baseline_records, "baseline", errors)
+    _audit_formal_observations(
+        candidate_records, "candidate", session_calendar, errors,
+    )
+    _audit_formal_observations(
+        baseline_records, "baseline", session_calendar, errors,
+    )
     _audit_order_transitions(candidate_records, "candidate", errors)
     _audit_order_transitions(baseline_records, "baseline", errors)
     candidate_order_ambiguous = _has_cross_file_filled_timestamp(
@@ -1533,9 +1712,9 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     baseline_session_calendar = _validated_session_calendar(
         baseline_records, "baseline", baseline_initialization_valid, errors,
     )
-    if candidate_session_calendar != session_calendar:
+    if candidate_session_calendar != evaluation_calendar:
         errors.append("candidate portfolio_summary sessions differ from manifest")
-    if baseline_session_calendar != session_calendar:
+    if baseline_session_calendar != evaluation_calendar:
         errors.append("baseline portfolio_summary sessions differ from manifest")
     _validate_session_evidence(
         candidate_records, "candidate", candidate_session_calendar, session_calendar, errors,
@@ -1544,7 +1723,9 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
         baseline_records, "baseline", baseline_session_calendar, session_calendar, errors,
     )
     _validate_baseline_observation_namespaces(baseline_records, errors)
-    candidate_session_evidence = _candidate_session_evidence(candidate_records, errors)
+    candidate_session_evidence = _candidate_session_evidence(
+        candidate_records, session_calendar, errors,
+    )
     _validate_filled_orders(candidate_records, "candidate", errors)
     for record in candidate_records:
         if record.get("event") == "relative_resonance_observation":
@@ -1558,6 +1739,13 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
      canonical_formal_registrations) = _validate_baseline(
          baseline_records, errors, baseline_initialization_valid, session_calendar,
      )
+    (_, formal_complete_ids,
+     formal_right_censored_ids) = _partition_registration_ids(
+         formal_registrations, session_calendar,
+     )
+    canonical_formal_complete_ids = (
+        set(canonical_formal_registrations) & formal_complete_ids
+    )
     canonical_formal_outcomes = {
         key: record for key, record in formal_outcomes.items()
         if key[0] in canonical_formal_registrations
@@ -1594,8 +1782,13 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
             errors.append("duplicate relative outcome: %s/%s" % key)
             continue
         outcomes[key] = record
+    (relative_calendar_statuses, relative_complete_ids,
+     relative_right_censored_ids) = _partition_registration_ids(
+         registrations, session_calendar,
+     )
     _validate_outcome_sessions(
-        registrations, outcomes, session_calendar, "relative", HORIZONS, errors,
+        registrations, outcomes, session_calendar, "relative", HORIZONS,
+        relative_calendar_statuses, errors,
     )
     _validate_relative_recorded_closing_order(registrations, outcomes, errors)
     year_counts = {"2019": 0, "2020": 0, "2021": 0}
@@ -1609,19 +1802,29 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     missing_outcome_count = 0
     for candidate in candidates:
         observation_id = candidate["relative_observation_id"]
-        try:
-            signal_date = _calendar_date(candidate.get("signal_date"))
-        except ValueError:
-            signal_date = None
-        if signal_date is not None and str(signal_date.year) in year_counts:
-            year_counts[str(signal_date.year)] += 1
+        calendar_status = relative_calendar_statuses.get(observation_id)
+        expected_by_horizon = (
+            dict(calendar_status.expected_closing_dates)
+            if calendar_status is not None else {}
+        )
+        registration_timestamp = _parse_strict_log_timestamp(candidate)
+        registration_year = (
+            str(registration_timestamp.date().year)
+            if registration_timestamp is not None else None
+        )
+        if observation_id in relative_complete_ids and registration_year in year_counts:
+            year_counts[registration_year] += 1
         direction = candidate.get("direction")
-        if direction in direction_counts:
+        if observation_id in relative_complete_ids and direction in direction_counts:
             direction_counts[direction] += 1
         code = candidate.get("code")
-        if isinstance(code, str):
+        if observation_id in relative_complete_ids and isinstance(code, str):
             etf_counts[code] += 1
         for horizon in HORIZONS:
+            if (calendar_status is not None
+                    and calendar_status.sample_status == SAMPLE_RIGHT_CENSORED
+                    and expected_by_horizon.get(horizon) is None):
+                continue
             record = outcomes.get((observation_id, horizon))
             outcome = record.get("outcome") if record is not None else None
             value = _finite_number(outcome.get("direction_adjusted_return")
@@ -1630,13 +1833,15 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
                     or value is None):
                 missing_outcome_count += 1
                 continue
+            if observation_id not in relative_complete_ids:
+                continue
             returns_by_horizon[horizon].append(value)
             if candidate.get("branch") in by_branch:
                 by_branch[candidate["branch"]][horizon].append(value)
             if direction in by_direction:
                 by_direction[direction][horizon].append(value)
             if horizon == 5:
-                if signal_date is not None and signal_date.year == 2021:
+                if registration_year == "2021":
                     five_day_2021.append(value)
                 if value > 0 and isinstance(code, str):
                     previous = positive_by_etf.get(code, 0.0)
@@ -1679,6 +1884,7 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     formal_horizon_5 = summarize_returns(
         _formal_five_day_returns(
             canonical_formal_registrations, canonical_formal_outcomes,
+            canonical_formal_complete_ids,
         ),
         errors, "formal_horizon_5",
     )
@@ -1702,13 +1908,18 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     scope_summaries = {
         "formal_resonance": _scope_summary(
             canonical_formal_registrations, canonical_formal_outcomes, False,
+            canonical_formal_complete_ids,
         ),
-        "relative_total": _scope_summary(registrations, outcomes, True),
+        "relative_total": _scope_summary(
+            registrations, outcomes, True, relative_complete_ids,
+        ),
         "HARD_BOLL_SOFT_OSC": _scope_summary(
             branch_registrations["HARD_BOLL_SOFT_OSC"], outcomes, True,
+            relative_complete_ids,
         ),
         "SOFT_ALL_THREE": _scope_summary(
             branch_registrations["SOFT_ALL_THREE"], outcomes, True,
+            relative_complete_ids,
         ),
     }
     horizon_1 = summarize_returns(returns_by_horizon[1], errors, "horizon_1")
@@ -1716,7 +1927,7 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     errors = sorted(set(errors))
     data_quality_complete = not errors and formal_overlap_count == 0 and missing_outcome_count == 0
     gates = {
-        "candidate_count_at_least_30": len(candidates) >= 30,
+        "candidate_count_at_least_30": len(relative_complete_ids) >= 30,
         "each_training_year_at_least_5": all(year_counts[str(year)] >= 5 for year in (2019, 2020, 2021)),
         "horizon_5_median_positive": horizon_5["median"] is not None and horizon_5["median"] > 0,
         "horizon_5_hit_rate_above_half": horizon_5["hit_rate"] is not None and horizon_5["hit_rate"] > 0.5,
@@ -1735,11 +1946,17 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
             session_manifest.metadata._asdict(), sha256=session_manifest.sha256,
         ),
         "data_quality": {"errors": errors, "relative_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
-                         "formal_overlap_count": formal_overlap_count,
-                         "missing_outcome_count": missing_outcome_count,
-                         "formal_missing_outcome_count": formal_missing_outcome_count,
-                         "ignored_record_counts": ignored_record_counts},
-        "metrics": {"candidate_count": len(candidates), "year_counts": year_counts,
+                          "formal_overlap_count": formal_overlap_count,
+                          "missing_outcome_count": missing_outcome_count,
+                          "formal_missing_outcome_count": formal_missing_outcome_count,
+                          "relative_registration_count": len(registrations),
+                          "relative_complete_count": len(relative_complete_ids),
+                          "relative_right_censored_count": len(relative_right_censored_ids),
+                          "formal_registration_count": len(formal_registrations),
+                          "formal_complete_count": len(formal_complete_ids),
+                          "formal_right_censored_count": len(formal_right_censored_ids),
+                          "ignored_record_counts": ignored_record_counts},
+        "metrics": {"candidate_count": len(relative_complete_ids), "year_counts": year_counts,
                     "direction_counts": direction_counts, "etf_counts": dict(sorted(etf_counts.items())),
                     "by_branch": grouped_by_branch,
                     "by_direction": grouped_by_direction,
