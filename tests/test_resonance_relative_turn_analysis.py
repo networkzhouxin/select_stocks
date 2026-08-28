@@ -785,6 +785,22 @@ def test_overlap_excludes_incomplete_or_invalid_baseline_canonical_registrations
         assert report["data_quality"]["formal_overlap_count"] == 0
 
 
+def test_invalid_extra_baseline_horizon_invalidates_registered_overlap_identity():
+    baseline = _single_formal_baseline()
+    baseline.append({
+        "event": "observation_outcome", "resonance_id": "FORMAL:00",
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": "1",
+        "outcome": {"status": "RECORDED", "closing_date": "2021-01-06", "return": 0.01},
+        "_log_timestamp": "2021-01-06T15:30:00",
+    })
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert report["continue_candidate"] is False
+    assert "invalid formal horizon: '1'" in report["data_quality"]["errors"]
+    assert report["data_quality"]["formal_overlap_count"] == 0
+
+
 def test_overlap_invalidates_id_when_any_registration_replica_is_invalid():
     baseline = _single_formal_baseline()
     registration = next(record for record in baseline
@@ -1923,10 +1939,13 @@ def test_real_formal_decision_and_outcome_schema_do_not_enter_overlap_as_outcome
     candidate.extend((
         {"event": "resonance_decision", "accepted": True, "reason": "COMPLETE_RESONANCE",
          "resonance_id": "FORMAL:candidate", "code": "510300.XSHG",
-             "direction": "BUY_TURN", "signal_date": "2021-01-15"},
+             "direction": "BUY_TURN", "decision_date": "2021-01-15",
+             "signal_date": "2021-01-15", "expires_date": "2021-01-15",
+             "_log_timestamp": "2021-01-15T09:35:00"},
             {"event": "observation_outcome", "resonance_id": "FORMAL:candidate",
              "code": "510300.XSHG", "event_date": "2021-01-15", "horizon": 5,
-             "outcome": {"status": "RECORDED", "closing_date": "2021-01-15", "return": 0.01}},
+             "outcome": {"status": "RECORDED", "closing_date": "2021-01-15", "return": 0.01},
+             "_log_timestamp": "2021-01-15T15:30:00"},
     ))
 
     report = analyzer.analyze_records(candidate, make_baseline_records())
@@ -1934,6 +1953,69 @@ def test_real_formal_decision_and_outcome_schema_do_not_enter_overlap_as_outcome
     assert not any("formal overlap direction" in error or "formal overlap signal date" in error
                    for error in report["data_quality"]["errors"])
     assert report["continue_candidate"] is True
+
+
+@pytest.mark.parametrize("with_id", [True, False])
+@pytest.mark.parametrize("field,value,fragment", [
+    ("decision_date", "2022-01-04", "candidate formal decision outside 2019-2021"),
+    ("expires_date", "2022-01-04", "candidate formal expires outside 2019-2021"),
+    ("_log_timestamp", "2022-01-05T09:35:00", "candidate formal decision log timestamp outside 2019-2021"),
+])
+def test_candidate_formal_decision_dates_are_audited_without_namespace_identity(
+        with_id, field, value, fragment):
+    candidate = make_candidate_records()
+    decision = {
+        "event": "resonance_decision", "accepted": True,
+        "reason": "COMPLETE_RESONANCE", "code": "510300.XSHG",
+        "decision_date": "2021-01-05", "signal_date": "2021-01-04",
+        "expires_date": "2021-01-05", "_log_timestamp": "2021-01-05T09:35:00",
+    }
+    if with_id:
+        decision["resonance_id"] = "FORMAL:future"
+    decision[field] = value
+    candidate.append(decision)
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert any(error.startswith(fragment) for error in report["data_quality"]["errors"])
+
+
+def test_candidate_formal_outcome_timestamp_is_audited_without_relative_markers():
+    candidate = make_candidate_records()
+    candidate.append({
+        "event": "observation_outcome", "event_date": "2021-01-05", "horizon": 5,
+        "outcome": {"status": "RECORDED", "closing_date": "2021-01-12", "return": 0.01},
+        "_log_timestamp": "2022-01-12T15:30:00",
+    })
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert "candidate formal outcome log timestamp outside 2019-2021: 2022-01-12" in (
+        report["data_quality"]["errors"]
+    )
+
+
+def test_candidate_rejected_formal_diagnostic_may_omit_expiry_within_training_window():
+    candidate = make_candidate_records()
+    diagnostic = {
+        "event": "resonance_decision", "accepted": False,
+        "reason": "HELD_NO_ADD", "decision_date": "2021-01-05",
+        "signal_date": "2021-01-04", "_log_timestamp": "2021-01-05T09:35:00",
+    }
+    candidate.append(diagnostic)
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is True
+    diagnostic["expires_date"] = "2022-01-04"
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["continue_candidate"] is False
+    assert "candidate formal expires outside 2019-2021: 2022-01-04" in (
+        report["data_quality"]["errors"]
+    )
 
 
 def test_candidate_formal_terminal_outcomes_always_audit_closing_date():

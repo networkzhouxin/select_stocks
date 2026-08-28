@@ -1053,6 +1053,8 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
         if (isinstance(horizon, bool) or not isinstance(horizon, int)
                 or horizon not in HORIZONS):
             errors.append("invalid formal horizon: %r" % horizon)
+            if resonance_id in registrations:
+                invalid_horizon_ids.add(resonance_id)
             continue
         _text(record, "code", "formal outcome code", errors)
         _is_training_date(record.get("event_date"), "formal outcome event", errors)
@@ -1367,17 +1369,36 @@ def _audit_outcome_closing_date(record, errors):
     _is_training_date(payload.get("closing_date"), "outcome closing", errors)
 
 
+def _audit_log_timestamp_training_window(record, label, errors):
+    timestamp = _strict_log_timestamp(record, label, errors)
+    if timestamp is not None and not TRAIN_START <= timestamp.date() <= TRAIN_END:
+        errors.append("%s log timestamp outside 2019-2021: %s" % (label, timestamp.date()))
+
+
+def _has_relative_markers(record):
+    resonance_id = record.get("resonance_id")
+    return (record.get("relative_observation_id") is not None
+            or record.get("observation_kind") == "RELATIVE_RESONANCE"
+            or (_valid_text(resonance_id) and resonance_id.startswith("RELATIVE:")))
+
+
 def _audit_candidate_formal_observations(records, errors):
     for record in records:
-        resonance_id = record.get("resonance_id")
-        is_formal_id = _valid_text(resonance_id) and not resonance_id.startswith("RELATIVE:")
-        if record.get("event") == "resonance_decision" and is_formal_id:
+        if record.get("event") == "resonance_decision":
+            _audit_log_timestamp_training_window(record, "candidate formal decision", errors)
+            _is_training_date(
+                record.get("decision_date"), "candidate formal decision", errors,
+            )
             _is_training_date(record.get("signal_date"), "candidate formal signal", errors)
+            expires_date = record.get("expires_date")
+            if _is_formal_registration_record(record) or expires_date not in (None, ""):
+                _is_training_date(expires_date, "candidate formal expires", errors)
         elif (record.get("event") == "observation_outcome"
-              and record.get("_record_namespace") == "formal"):
+              and not _has_relative_markers(record)):
             _is_training_date(
                 record.get("event_date"), "candidate formal outcome event", errors,
             )
+            _audit_log_timestamp_training_window(record, "candidate formal outcome", errors)
 
 
 def analyze_records(candidate_records, baseline_records, session_manifest):
