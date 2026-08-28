@@ -1,8 +1,10 @@
 import importlib.util
+import copy
 import hashlib
 import json
 import os
 import pathlib
+import pickle
 import subprocess
 import sys
 import types
@@ -2166,6 +2168,52 @@ def test_validated_manifest_is_immutable_capability_not_a_mutable_mapping():
         )
     assert manifest.sessions == original_sessions
     assert manifest.sha256 == original_hash
+
+
+def test_manifest_capability_is_issuer_registered_and_detects_low_level_tampering():
+    raw = _session_manifest_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    legal = analyzer.validate_session_calendar_manifest(raw, digest)
+    manual = type(legal).__new__(type(legal))
+
+    assert not hasattr(legal, "_validation_token")
+    with pytest.raises(TypeError):
+        _RAW_ANALYZE_RECORDS(make_candidate_records(), make_baseline_records(), manual)
+
+    altered = analyzer.validate_session_calendar_manifest(raw, digest)
+    object.__setattr__(altered, "sha256", "0" * 64)
+    with pytest.raises(TypeError):
+        _RAW_ANALYZE_RECORDS(make_candidate_records(), make_baseline_records(), altered)
+
+    deleted = analyzer.validate_session_calendar_manifest(raw, digest)
+    object.__delattr__(deleted, "sessions")
+    with pytest.raises(TypeError):
+        _RAW_ANALYZE_RECORDS(make_candidate_records(), make_baseline_records(), deleted)
+
+    for clone_function in (copy.copy, copy.deepcopy, pickle.loads):
+        try:
+            clone = (clone_function(legal) if clone_function is not pickle.loads
+                     else clone_function(pickle.dumps(legal)))
+        except (AttributeError, TypeError, pickle.PickleError):
+            continue
+        with pytest.raises(TypeError):
+            _RAW_ANALYZE_RECORDS(make_candidate_records(), make_baseline_records(), clone)
+
+    assert _RAW_ANALYZE_RECORDS(
+        make_candidate_records(), make_baseline_records(), legal,
+    )["session_calendar"]["sha256"] == digest
+
+
+def test_manifest_validator_rejects_bytes_subclass_before_hash_or_decode():
+    class RewritingBytes(bytes):
+        def decode(self, *args, **kwargs):
+            return _session_manifest_bytes().decode("utf-8")
+
+    raw = _session_manifest_bytes()
+    with pytest.raises(ValueError, match="must be bytes"):
+        analyzer.validate_session_calendar_manifest(
+            RewritingBytes(raw), hashlib.sha256(raw).hexdigest(),
+        )
 
 
 def test_manifest_loader_rejects_duplicate_json_keys_at_every_object_depth():

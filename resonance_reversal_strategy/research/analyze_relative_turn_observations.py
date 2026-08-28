@@ -11,6 +11,7 @@ import re
 import statistics
 import sys
 import tempfile
+import weakref
 from collections import Counter
 from datetime import date, datetime, time
 from typing import NamedTuple
@@ -51,7 +52,6 @@ STRUCTURED_EVENT_FIELD_RE = re.compile(
     ),
 )
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
-_SESSION_MANIFEST_VALIDATION_TOKEN = object()
 MAX_SESSION_MANIFEST_BYTES = 256 * 1024
 
 
@@ -64,21 +64,49 @@ class SessionCalendarMetadata(NamedTuple):
     session_count: int
 
 
-class ValidatedSessionManifest:
-    """An immutable manifest capability that only this module can issue."""
+def _manifest_capability_factory():
+    issued_snapshots = weakref.WeakKeyDictionary()
 
-    __slots__ = ("sessions", "sha256", "metadata", "_validation_token")
+    class ValidatedSessionManifest:
+        """An immutable manifest capability that only this module can issue."""
 
-    def __init__(self, sessions, sha256, metadata, validation_token):
-        if validation_token is not _SESSION_MANIFEST_VALIDATION_TOKEN:
+        __slots__ = ("sessions", "sha256", "metadata", "__weakref__")
+
+        def __init__(self, *args, **kwargs):
             raise TypeError("validated session manifest is required")
-        object.__setattr__(self, "sessions", sessions)
-        object.__setattr__(self, "sha256", sha256)
-        object.__setattr__(self, "metadata", metadata)
-        object.__setattr__(self, "_validation_token", validation_token)
 
-    def __setattr__(self, name, value):
-        raise AttributeError("validated session manifest is immutable")
+        def __setattr__(self, name, value):
+            raise AttributeError("validated session manifest is immutable")
+
+        def __delattr__(self, name):
+            raise AttributeError("validated session manifest is immutable")
+
+    def issue(sessions, sha256, metadata):
+        capability = object.__new__(ValidatedSessionManifest)
+        object.__setattr__(capability, "sessions", sessions)
+        object.__setattr__(capability, "sha256", sha256)
+        object.__setattr__(capability, "metadata", metadata)
+        issued_snapshots[capability] = (sessions, sha256, metadata)
+        return capability
+
+    def is_issued_snapshot(capability):
+        if type(capability) is not ValidatedSessionManifest:
+            return False
+        snapshot = issued_snapshots.get(capability)
+        if snapshot is None:
+            return False
+        try:
+            return snapshot == (
+                capability.sessions, capability.sha256, capability.metadata,
+            )
+        except AttributeError:
+            return False
+
+    return ValidatedSessionManifest, issue, is_issued_snapshot
+
+
+(ValidatedSessionManifest, _issue_session_manifest_capability,
+ _is_issued_session_manifest_capability) = _manifest_capability_factory()
 
 
 def _reject_json_constant(value):
@@ -169,7 +197,7 @@ def read_session_calendar_manifest_bytes(path_value):
 
 def validate_session_calendar_manifest(raw_bytes, expected_sha256):
     """Validate one frozen manifest from its original UTF-8 bytes."""
-    if not isinstance(raw_bytes, bytes):
+    if type(raw_bytes) is not bytes:
         raise ValueError("session calendar manifest must be bytes")
     if type(expected_sha256) is not str or not SHA256_RE.fullmatch(expected_sha256):
         raise ValueError("session calendar sha256 must be 64 hexadecimal characters")
@@ -213,20 +241,18 @@ def validate_session_calendar_manifest(raw_bytes, expected_sha256):
             raise ValueError("session calendar manifest sessions must be strictly increasing")
         normalized.append(session)
         previous = session
-    return ValidatedSessionManifest(
+    return _issue_session_manifest_capability(
         tuple(normalized), actual_sha256,
         SessionCalendarMetadata(
             payload["schema_version"], payload["market"],
             payload["coverage_start"], payload["coverage_end"],
             payload["source"], len(normalized),
         ),
-        _SESSION_MANIFEST_VALIDATION_TOKEN,
     )
 
 
 def _require_validated_session_manifest(manifest):
-    if (type(manifest) is not ValidatedSessionManifest
-            or manifest._validation_token is not _SESSION_MANIFEST_VALIDATION_TOKEN
+    if (not _is_issued_session_manifest_capability(manifest)
             or type(manifest.sessions) is not tuple
             or type(manifest.metadata) is not SessionCalendarMetadata
             or not SHA256_RE.fullmatch(manifest.sha256)):
