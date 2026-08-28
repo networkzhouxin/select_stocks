@@ -853,6 +853,38 @@ def test_explicit_invalid_relative_marker_key_invalidates_formal_canonical_ident
     assert report["gates"]["horizon_5_q1_not_worse_than_formal"] is False
 
 
+@pytest.mark.parametrize("event", ["other_event", "relative_resonance_observation"])
+@pytest.mark.parametrize("marker", ["relative_observation_id", "observation_kind"])
+@pytest.mark.parametrize("value", [None, "", 0, [], {}, False, "RELATIVE malformed"])
+def test_invalid_relative_marker_record_of_any_event_invalidates_formal_canonical_identity(
+        event, marker, value):
+    baseline = _single_formal_baseline()
+    baseline.append({
+        "event": event, "resonance_id": "FORMAL:00", marker: value,
+    })
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert report["continue_candidate"] is False
+    assert report["data_quality"]["formal_overlap_count"] == 0
+    assert report["metrics"]["formal_horizon_5"]["count"] == 0
+    assert report["metrics"]["formal_horizon_5"]["q1"] is None
+    assert report["metrics"]["scope_summaries"]["formal_resonance"]["candidate_count"] == 0
+    assert report["gates"]["horizon_5_q1_not_worse_than_formal"] is False
+
+
+def test_unmarked_other_event_with_formal_id_does_not_pollute_formal_canonical_identity():
+    baseline = _single_formal_baseline()
+    baseline.append({"event": "other_event", "resonance_id": "FORMAL:00"})
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert report["data_quality"]["formal_overlap_count"] == 1
+    assert report["metrics"]["formal_horizon_5"]["count"] == 1
+    assert report["metrics"]["formal_horizon_5"]["q1"] == pytest.approx(0.01)
+    assert report["metrics"]["scope_summaries"]["formal_resonance"]["candidate_count"] == 1
+
+
 @pytest.mark.parametrize("variant", ["payload", "pseudo_relative", "namespace_conflict"])
 def test_invalid_associated_baseline_outcome_invalidates_formal_overlap_before_namespace_filter(
         variant):

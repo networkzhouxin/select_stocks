@@ -415,6 +415,15 @@ def _is_formal_registration_record(record):
             and record.get("reason") == "COMPLETE_RESONANCE")
 
 
+def _declares_relative_namespace(record):
+    resonance_id = record.get("resonance_id")
+    return (
+        "relative_observation_id" in record
+        or "observation_kind" in record
+        or (_valid_text(resonance_id) and resonance_id.startswith("RELATIVE:"))
+    )
+
+
 def _classify_record_namespace(record, errors):
     """Classify one record once; conflicting records enter neither contract."""
     if (record.get("event") == "observation_outcome"
@@ -426,11 +435,7 @@ def _classify_record_namespace(record, errors):
     event = record.get("event")
     relative_id_valid = _valid_text(relative_id) and relative_id.startswith("RELATIVE:")
     relative_resonance = _valid_text(resonance_id) and resonance_id.startswith("RELATIVE:")
-    relative_marker = (
-        "relative_observation_id" in record
-        or "observation_kind" in record
-        or relative_resonance
-    )
+    relative_marker = _declares_relative_namespace(record)
     if relative_marker:
         valid = relative_id_valid and kind == "RELATIVE_RESONANCE"
         if event == "observation_outcome":
@@ -1050,6 +1055,13 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
                 or not _valid_baseline_registration(record)):
             invalid_registration_ids.add(resonance_id)
     for record in records:
+        resonance_id = record.get("resonance_id")
+        if (record.get("_record_namespace") == "invalid"
+                and _declares_relative_namespace(record)
+                and type(resonance_id) is str
+                and resonance_id in registrations):
+            invalid_registration_ids.add(resonance_id)
+    for record in records:
         if record.get("event") != "observation_outcome":
             continue
         resonance_id = record.get("resonance_id")
@@ -1392,10 +1404,7 @@ def _audit_log_timestamp_training_window(record, label, errors):
 
 
 def _has_relative_markers(record):
-    resonance_id = record.get("resonance_id")
-    return (record.get("relative_observation_id") is not None
-            or record.get("observation_kind") == "RELATIVE_RESONANCE"
-            or (_valid_text(resonance_id) and resonance_id.startswith("RELATIVE:")))
+    return _declares_relative_namespace(record)
 
 
 def _audit_candidate_formal_observations(records, errors):
