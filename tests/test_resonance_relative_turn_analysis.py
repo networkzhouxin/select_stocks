@@ -327,6 +327,43 @@ def test_parser_matches_known_event_field_not_diagnostic_substrings():
     )
 
 
+@pytest.mark.parametrize("payload", [
+    '{"event":"signal_snapshot","event":"duplicate"}',
+    '{"event":"signal_snapshot","nested":{"key":1,"key":2}}',
+])
+def test_parser_rejects_duplicate_json_keys_at_any_object_depth(payload):
+    parsed = analyzer.parse_joinquant_log_line(
+        "2021-01-05 09:35:00 - INFO - " + payload, 13,
+    )
+
+    assert parsed["_parse_error"] == "duplicate JSON object key"
+    assert parsed["_ordinal"] == 13
+
+
+@pytest.mark.parametrize("role", ["candidate", "baseline"])
+def test_duplicate_json_key_sentinel_fails_complete_role_report(tmp_path, role):
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    _write_log(candidate_path, make_candidate_records())
+    _write_log(baseline_path, make_baseline_records())
+    target_path = candidate_path if role == "candidate" else baseline_path
+    with target_path.open("a", encoding="utf-8") as stream:
+        stream.write(
+            '\n2021-01-05 09:35:00 - INFO - '
+            '{"event":"signal_snapshot","nested":{"key":1,"key":2}}'
+        )
+
+    report = _RAW_ANALYZE_RECORDS(
+        analyzer.load_log_records([candidate_path]),
+        analyzer.load_log_records([baseline_path]),
+        _fixture_session_manifest(),
+    )
+
+    assert report["continue_candidate"] is False
+    assert any(str(target_path.resolve()) in error and "duplicate JSON object key" in error
+               for error in report["data_quality"]["errors"])
+
+
 def test_cli_reports_truncated_known_structured_line_without_mutating_input(tmp_path):
     candidate_path = tmp_path / "candidate.log"
     baseline_path = tmp_path / "baseline.log"
@@ -2384,6 +2421,96 @@ def test_cli_rejects_hardlinked_manifest_and_cross_role_input_aliases(tmp_path, 
     assert manifest_path.read_bytes() == raw
     assert candidate_path.read_text(encoding="utf-8") == "candidate"
     assert baseline_path.read_text(encoding="utf-8") == "baseline"
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("role,alias_kind", [
+    ("candidate", "same_path"),
+    ("candidate", "hardlink"),
+    ("baseline", "same_path"),
+    ("baseline", "hardlink"),
+])
+def test_cli_rejects_same_role_input_alias_before_log_load_or_output(
+        tmp_path, capsys, role, alias_kind):
+    manifest_path = tmp_path / "calendar.json"
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    raw = _session_manifest_bytes()
+    manifest_path.write_bytes(raw)
+    candidate_path.write_text("candidate", encoding="utf-8")
+    baseline_path.write_text("baseline", encoding="utf-8")
+    primary = candidate_path if role == "candidate" else baseline_path
+    alias = primary if alias_kind == "same_path" else tmp_path / (role + "-alias.log")
+    if alias_kind == "hardlink":
+        os.link(primary, alias)
+    common = ["--session-calendar", str(manifest_path),
+              "--session-calendar-sha256", hashlib.sha256(raw).hexdigest(),
+              "--output", str(output_path)]
+    candidate_args = [str(candidate_path)]
+    baseline_args = [str(baseline_path)]
+    (candidate_args if role == "candidate" else baseline_args).append(str(alias))
+    role_args = []
+    for candidate_arg in candidate_args:
+        role_args.extend(["--candidate-log", candidate_arg])
+    for baseline_arg in baseline_args:
+        role_args.extend(["--baseline-log", baseline_arg])
+
+    with mock.patch.object(
+            analyzer, "load_log_records",
+            side_effect=[make_candidate_records(), make_baseline_records()]) as loader:
+        status = _RAW_MAIN([*role_args, *common])
+
+    assert status == 2
+    assert loader.call_count == 0
+    assert capsys.readouterr().err == (
+        "input error: %s log paths must be distinct\n" % role
+    )
+    assert primary.read_text(encoding="utf-8") == role
+    assert alias.read_text(encoding="utf-8") == role
+    assert not output_path.exists()
+
+
+@pytest.mark.parametrize("role", ["candidate", "baseline"])
+def test_cli_rejects_same_role_symlink_alias_before_log_load_or_output(tmp_path, capsys, role):
+    manifest_path = tmp_path / "calendar.json"
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    raw = _session_manifest_bytes()
+    manifest_path.write_bytes(raw)
+    candidate_path.write_text("candidate", encoding="utf-8")
+    baseline_path.write_text("baseline", encoding="utf-8")
+    primary = candidate_path if role == "candidate" else baseline_path
+    alias = tmp_path / (role + "-alias.log")
+    try:
+        os.symlink(primary, alias)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    common = ["--session-calendar", str(manifest_path),
+              "--session-calendar-sha256", hashlib.sha256(raw).hexdigest(),
+              "--output", str(output_path)]
+    candidate_args = [str(candidate_path)]
+    baseline_args = [str(baseline_path)]
+    (candidate_args if role == "candidate" else baseline_args).append(str(alias))
+    role_args = []
+    for candidate_arg in candidate_args:
+        role_args.extend(["--candidate-log", candidate_arg])
+    for baseline_arg in baseline_args:
+        role_args.extend(["--baseline-log", baseline_arg])
+
+    with mock.patch.object(
+            analyzer, "load_log_records",
+            side_effect=[make_candidate_records(), make_baseline_records()]) as loader:
+        status = _RAW_MAIN([*role_args, *common])
+
+    assert status == 2
+    assert loader.call_count == 0
+    assert capsys.readouterr().err == (
+        "input error: %s log paths must be distinct\n" % role
+    )
+    assert primary.read_text(encoding="utf-8") == role
+    assert alias.read_text(encoding="utf-8") == role
     assert not output_path.exists()
 
 

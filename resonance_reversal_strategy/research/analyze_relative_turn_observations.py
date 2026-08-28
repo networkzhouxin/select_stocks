@@ -222,7 +222,10 @@ def parse_joinquant_log_line(line, ordinal):
         return None
     match = LOG_TIMESTAMP_RE.match(text)
     try:
-        payload = json.loads(text[payload_start:], parse_constant=_reject_json_constant)
+        payload = json.loads(
+            text[payload_start:], parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
     except json.JSONDecodeError as exc:
         if match and STRUCTURED_EVENT_FIELD_RE.search(text[payload_start:]):
             payload = {"_parse_error": "invalid structured JSON: %s" % exc.msg}
@@ -1614,6 +1617,14 @@ def _output_conflicts_with_input(output_path, input_paths):
     return False
 
 
+def _input_paths_have_alias(paths):
+    return any(
+        _paths_alias(left_path, right_path)
+        for index, left_path in enumerate(paths)
+        for right_path in paths[index + 1:]
+    )
+
+
 def _paths_alias(left_path, right_path):
     if left_path == right_path:
         return True
@@ -1653,6 +1664,10 @@ def main(argv=None):
         baseline_paths = _normalized_input_paths(args.baseline_log)
         if any(_paths_alias(manifest_path, path) for path in candidate_paths + baseline_paths):
             raise ValueError("session calendar must not match an input log")
+        if _input_paths_have_alias(candidate_paths):
+            raise ValueError("candidate log paths must be distinct")
+        if _input_paths_have_alias(baseline_paths):
+            raise ValueError("baseline log paths must be distinct")
         if any(_paths_alias(candidate_path, baseline_path)
                for candidate_path in candidate_paths for baseline_path in baseline_paths):
             raise ValueError("candidate and baseline logs must be distinct")
