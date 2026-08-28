@@ -1046,6 +1046,18 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
                 or not _valid_baseline_registration(record)):
             invalid_registration_ids.add(resonance_id)
     for record in records:
+        if record.get("event") != "observation_outcome":
+            continue
+        resonance_id = record.get("resonance_id")
+        if type(resonance_id) is not str or resonance_id not in registrations:
+            continue
+        horizon = record.get("horizon")
+        if (record.get("_record_namespace") != "formal"
+                or type(record.get("outcome")) is not dict
+                or isinstance(horizon, bool) or not isinstance(horizon, int)
+                or horizon not in HORIZONS):
+            invalid_horizon_ids.add(resonance_id)
+    for record in records:
         if record.get("_record_namespace") != "formal" or record.get("event") != "observation_outcome":
             continue
         resonance_id = _text(record, "resonance_id", "formal outcome resonance id", errors)
@@ -1459,6 +1471,10 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
      canonical_formal_registrations) = _validate_baseline(
          baseline_records, errors, baseline_initialization_valid, session_calendar,
      )
+    canonical_formal_outcomes = {
+        key: record for key, record in formal_outcomes.items()
+        if key[0] in canonical_formal_registrations
+    }
     selected, ignored_record_counts = _filter_candidate_records(candidate_records)
     registrations = {}
     candidates = []
@@ -1574,7 +1590,11 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
     horizon_5 = summarize_returns(returns_by_horizon[5], errors, "horizon_5")
     year_2021 = summarize_returns(five_day_2021, errors, "year_2021_horizon_5")
     formal_horizon_5 = summarize_returns(
-        _formal_five_day_returns(formal_registrations, formal_outcomes), errors, "formal_horizon_5")
+        _formal_five_day_returns(
+            canonical_formal_registrations, canonical_formal_outcomes,
+        ),
+        errors, "formal_horizon_5",
+    )
     formal_order_path_exact = (not candidate_order_ambiguous and not baseline_order_ambiguous
                                and len(candidate_path) == BASELINE_FILLED_COUNT
                                and len(baseline_path) == BASELINE_FILLED_COUNT
@@ -1593,7 +1613,9 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
         for branch in BRANCHES
     }
     scope_summaries = {
-        "formal_resonance": _scope_summary(formal_registrations, formal_outcomes, False),
+        "formal_resonance": _scope_summary(
+            canonical_formal_registrations, canonical_formal_outcomes, False,
+        ),
         "relative_total": _scope_summary(registrations, outcomes, True),
         "HARD_BOLL_SOFT_OSC": _scope_summary(
             branch_registrations["HARD_BOLL_SOFT_OSC"], outcomes, True,

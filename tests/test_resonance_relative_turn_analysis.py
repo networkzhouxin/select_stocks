@@ -801,6 +801,55 @@ def test_invalid_extra_baseline_horizon_invalidates_registered_overlap_identity(
     assert report["data_quality"]["formal_overlap_count"] == 0
 
 
+def test_polluted_baseline_identity_is_excluded_from_formal_metrics_and_scope_summary():
+    valid = analyzer.analyze_records(
+        _candidate_overlapping_baseline_formal(), _single_formal_baseline(),
+    )
+    assert valid["metrics"]["formal_horizon_5"]["count"] == 1
+    assert valid["metrics"]["formal_horizon_5"]["q1"] == pytest.approx(0.01)
+    assert valid["metrics"]["scope_summaries"]["formal_resonance"]["candidate_count"] == 1
+
+    polluted = _single_formal_baseline()
+    polluted.append({
+        "event": "observation_outcome", "resonance_id": "FORMAL:00",
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": "1",
+        "outcome": {"status": "RECORDED", "closing_date": "2021-01-06", "return": 0.01},
+        "_log_timestamp": "2021-01-06T15:30:00",
+    })
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), polluted)
+
+    assert report["metrics"]["formal_horizon_5"]["count"] == 0
+    assert report["metrics"]["formal_horizon_5"]["q1"] is None
+    assert report["metrics"]["scope_summaries"]["formal_resonance"]["candidate_count"] == 0
+    assert report["gates"]["horizon_5_q1_not_worse_than_formal"] is False
+
+
+@pytest.mark.parametrize("variant", ["payload", "pseudo_relative", "namespace_conflict"])
+def test_invalid_associated_baseline_outcome_invalidates_formal_overlap_before_namespace_filter(
+        variant):
+    baseline = _single_formal_baseline()
+    extra = {
+        "event": "observation_outcome", "resonance_id": "FORMAL:00",
+        "code": "510300.XSHG", "event_date": "2021-01-05", "horizon": 1,
+        "outcome": {"status": "RECORDED", "closing_date": "2021-01-06", "return": 0.01},
+        "_log_timestamp": "2021-01-06T15:30:00",
+    }
+    if variant == "payload":
+        extra["outcome"] = None
+    elif variant == "pseudo_relative":
+        extra["relative_observation_id"] = "RELATIVE:spoof"
+    else:
+        extra["relative_observation_id"] = "RELATIVE:spoof"
+        extra["observation_kind"] = "RELATIVE_RESONANCE"
+    baseline.append(extra)
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert report["continue_candidate"] is False
+    assert report["data_quality"]["formal_overlap_count"] == 0
+
+
 def test_overlap_invalidates_id_when_any_registration_replica_is_invalid():
     baseline = _single_formal_baseline()
     registration = next(record for record in baseline
