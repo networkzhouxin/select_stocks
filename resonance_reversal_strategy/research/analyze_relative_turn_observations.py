@@ -823,6 +823,12 @@ def _validate_relative_registration(record, session_evidence, session_calendar, 
     if (registration_timestamp is not None and signal_date is not None
             and session_evidence.get(registration_timestamp.date()) != signal_date):
         errors.append("relative registration session evidence mismatch")
+    if registration_timestamp is not None and expires_date is not None:
+        decision_date = registration_timestamp.date()
+        if expires_date not in session_calendar:
+            errors.append("relative registration expires date absent from manifest")
+        if expires_date != decision_date:
+            errors.append("relative registration expires_date must equal decision session")
     event_close = _finite_number(record.get("event_close"))
     if event_close is None or event_close <= 0:
         errors.append("invalid candidate event_close")
@@ -973,7 +979,7 @@ def _valid_baseline_registration(record):
             and timestamp.time() >= TRADING_LOG_TIME)
 
 
-def _valid_baseline_horizon_five(registration, outcome_record, session_calendar=()):
+def _valid_baseline_recorded_horizon(registration, outcome_record, horizon, session_calendar=()):
     if outcome_record is None or outcome_record.get("code") != registration.get("code"):
         return False
     if ("direction" in outcome_record
@@ -994,7 +1000,7 @@ def _valid_baseline_horizon_five(registration, outcome_record, session_calendar=
     outcome_timestamp = _parse_strict_log_timestamp(outcome_record)
     return (signal_date is not None and event_date == signal_date
             and closing_date is not None and TRAIN_START <= closing_date <= TRAIN_END
-            and closing_date == _expected_outcome_session(signal_date, 5, session_calendar)
+            and closing_date == _expected_outcome_session(signal_date, horizon, session_calendar)
             and closing_date > signal_date and registration_timestamp is not None
             and outcome_timestamp is not None and outcome_timestamp.date() == closing_date
             and outcome_timestamp.time() >= AFTER_CLOSE_LOG_TIME
@@ -1006,7 +1012,7 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
     registration_replicas = {}
     outcomes = {}
     invalid_registration_ids = set()
-    invalid_horizon_five_ids = set()
+    invalid_horizon_ids = set()
     for record in records:
         if (record.get("_record_namespace") != "formal"
                 or not _is_formal_registration_record(record)):
@@ -1089,34 +1095,38 @@ def _validate_baseline(records, errors, initialization_valid, session_calendar):
         key = (resonance_id, horizon)
         if key in outcomes:
             errors.append("duplicate formal outcome: %s/%s" % key)
-            if horizon == 5:
-                invalid_horizon_five_ids.add(resonance_id)
+            invalid_horizon_ids.add(resonance_id)
         else:
             outcomes[key] = record
     formal_missing_outcome_count = 0
     for resonance_id in registrations:
+        for horizon in HORIZONS:
+            record = outcomes.get((resonance_id, horizon))
+            payload = record.get("outcome") if record is not None else None
+            if record is None:
+                errors.append("missing formal horizon %s: %s" % (horizon, resonance_id))
+            elif type(payload) is not dict or payload.get("status") != "RECORDED":
+                errors.append("formal horizon %s is not RECORDED: %s" % (horizon, resonance_id))
         five_day = outcomes.get((resonance_id, 5))
         payload = five_day.get("outcome") if five_day is not None else None
         comparable = (isinstance(payload, dict) and payload.get("status") == "RECORDED"
                       and _finite_number(payload.get("return")) is not None)
-        if five_day is None:
-            errors.append("missing formal horizon 5: %s" % resonance_id)
         if not comparable:
             formal_missing_outcome_count += 1
             errors.append("formal comparison incomplete: %s" % resonance_id)
     _validate_outcome_sessions(
-        registrations, outcomes, session_calendar, "formal", (5,), errors,
+        registrations, outcomes, session_calendar, "formal", HORIZONS, errors,
     )
     canonical_registrations = {}
     if initialization_valid:
         for resonance_id, registration in registrations.items():
-            five_day = outcomes.get((resonance_id, 5))
             if (resonance_id not in invalid_registration_ids
-                    and resonance_id not in invalid_horizon_five_ids
+                    and resonance_id not in invalid_horizon_ids
                     and _valid_baseline_registration(registration)
-                    and _valid_baseline_horizon_five(
-                        registration, five_day, session_calendar,
-                    )):
+                    and all(_valid_baseline_recorded_horizon(
+                        registration, outcomes.get((resonance_id, horizon)),
+                        horizon, session_calendar,
+                    ) for horizon in HORIZONS)):
                 canonical_registrations[resonance_id] = registration
     _validate_filled_orders(records, "baseline", errors)
     return registrations, outcomes, formal_missing_outcome_count, canonical_registrations
@@ -1357,6 +1367,19 @@ def _audit_outcome_closing_date(record, errors):
     _is_training_date(payload.get("closing_date"), "outcome closing", errors)
 
 
+def _audit_candidate_formal_observations(records, errors):
+    for record in records:
+        resonance_id = record.get("resonance_id")
+        is_formal_id = _valid_text(resonance_id) and not resonance_id.startswith("RELATIVE:")
+        if record.get("event") == "resonance_decision" and is_formal_id:
+            _is_training_date(record.get("signal_date"), "candidate formal signal", errors)
+        elif (record.get("event") == "observation_outcome"
+              and record.get("_record_namespace") == "formal"):
+            _is_training_date(
+                record.get("event_date"), "candidate formal outcome event", errors,
+            )
+
+
 def analyze_records(candidate_records, baseline_records, session_manifest):
     """Validate immutable log contracts and return a deterministic report."""
     session_manifest = _require_validated_session_manifest(session_manifest)
@@ -1372,6 +1395,7 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
             errors.append("parse error at %s: %s" % (location, record["_parse_error"]))
         _audit_outcome_closing_date(record, errors)
         record["_record_namespace"] = _classify_record_namespace(record, errors)
+    _audit_candidate_formal_observations(candidate_records, errors)
     candidate_order_ambiguous = _has_cross_file_filled_timestamp(
         candidate_records, "candidate", errors,
     )
