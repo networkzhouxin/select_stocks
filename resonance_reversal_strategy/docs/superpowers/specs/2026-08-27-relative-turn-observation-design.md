@@ -361,3 +361,50 @@ tests/
 ## 14. 完成边界
 
 本轮“实施完成”仅表示：相对观察路径可在聚宽稳定记录，正式交易路径保持不变，分析工具能按冻结口径生成报告。它不表示相对路径有效、不表示现有策略通过训练硬门槛，也不表示可以查看验证期或准备实盘。
+
+## 15. 2026-08-28 批准补充：严格独立交易日 manifest
+
+本补充只为离线 `.3/.4` 日志分析提供唯一、可审计的交易日证据；它不是策略输入，绝不
+进入聚宽策略、T-1 信号、共振、ATR、排序、仓位、订单或回测撮合。它不产生未来函数：
+manifest 只在冻结训练完成后的离线分析中验证已经记录的日期，不参与当日或历史决策。
+
+### 15.1 唯一 manifest 与原始 bytes 冻结
+
+用户从独立聚宽研究环境保存一份唯一 manifest，并先冻结其原始文件 bytes 的 SHA-256。
+manifest 是只读输入，最大 256 KiB；候选日志、基线日志、manifest 和输出报告必须分别是
+不同物理文件，任何同路径或文件系统别名均必须被拒绝。分析前将 `Get-FileHash` 的小写
+hash 记入预注册记录；之后任何 bytes 变化均需新的用户授权，不能重新计算并替换既有值。
+
+分析器接收 64 位十六进制 hash 时按大小写不敏感比较，但报告记录的 `sha256` 必须是实际
+原始 bytes 计算的 canonical 小写摘要。
+
+### 15.2 固定 schema 与覆盖摘要
+
+manifest 必须为 UTF-8 JSON，禁止重复键，并且仅能包含下列字段：
+
+```json
+{
+  "schema_version": 1,
+  "market": "XSHG",
+  "coverage_start": "2019-01-01",
+  "coverage_end": "2021-12-31",
+  "source": "JoinQuant get_all_trade_days",
+  "sessions": ["2019-01-02"]
+}
+```
+
+`coverage_start` 与 `coverage_end` 必须精确等于冻结训练边界；`sessions` 必须是严格递增、
+无重复的 ISO 日期，并且每一个都在该覆盖内。报告固定写入 `session_calendar` 元数据：
+`schema_version`、`market`、`coverage_start`、`coverage_end`、`source`、`session_count` 和
+`sha256`，使实际覆盖与原始 bytes 证据可复核。
+
+### 15.3 全量 session 证据、精确 horizon 与 fail-closed
+
+所有正式和相对观察都必须以该 manifest 作为唯一日历证据：信号与决策日期的先后关系、
+观察注册、以及每个 1/3/5 日结果的 `closing_date` 都须与对应的精确交易 session 一致。
+若 manifest 覆盖不能推导某个 horizon、任一记录日期不在 calendar、日期关系不成立、或
+结果日期与精确 session 不一致，分析器必须 fail closed，将其写为数据质量错误并令相关
+门槛不能通过；不得猜测缺失交易日、替代日历或放宽 horizon。
+
+本补充不授权查看 2022 年及以后数据、调参、搜索阈值/窗口/ETF，或将任何离线结论传播为
+交易资格。真实 manifest、预先冻结 hash 和完整聚宽 `.3/.4` 日志仍由用户在平台侧提供。

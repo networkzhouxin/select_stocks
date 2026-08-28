@@ -2064,3 +2064,59 @@ git commit -m "docs(resonance): document relative observation workflow"
 最终交付只要求用户下一步：将 `.4` 策略复制到聚宽，先运行短区间冒烟，核对初始化中的四个指纹、无未来函数错误、相对候选/结果日志以及正式订单路径没有异常。短区间通过后再运行 2019—2021 冻结训练回测；只有用户提供 `.3/.4` 完整日志后，才执行 Task 5 分析器并按原样报告门槛。
 
 不得在本地验证完成时宣称聚宽订单路径、期末资产或观察收益已经通过。
+
+---
+
+### Task 7: 严格独立交易日 manifest 修复、验证与平台输入边界（已授权）
+
+**目的：** 为 Task 5 的只读 `.3/.4` 日志分析补充唯一、冻结的交易日证据；不改变任何
+策略行为、信号、订单、参数或回测路径。本节追加于历史计划之后，不修改 Task 1--6 的
+已完成语义。
+
+**实现合同：**
+
+- CLI 必须接收 `--session-calendar` 与 `--session-calendar-sha256`，缺任一项即以输入错误
+  fail closed；候选日志、基线日志和输出参数的既有合同保持不变。
+- manifest 只读原始 bytes，最大 `256 * 1024` bytes；其 SHA-256 与给定 64 位十六进制
+  值大小写不敏感比较，但报告必须记录实际 bytes 的小写摘要。
+- JSON schema 必须精确为 `schema_version=1`、`market=XSHG`、`coverage_start=2019-01-01`、
+  `coverage_end=2021-12-31`、`source=JoinQuant get_all_trade_days` 与 `sessions`；不允许
+  重复键、额外字段、缺失字段、非 ISO session、重复/逆序 session 或覆盖外 session。
+- manifest、candidate log、baseline log、output report 必须是不同物理文件；同路径、
+  符号链接/硬链接等别名，以及 output 覆盖任何输入均须在读日志前拒绝。
+- 分析器以这个唯一 calendar 核验全量 session 证据和精确 1/3/5 日 horizon；缺失覆盖、
+  非 session 日期或日期不一致必须写入数据质量错误，不能猜测或替换交易日。
+- 报告新增固定 `session_calendar` 元数据：`schema_version`、`market`、`coverage_start`、
+  `coverage_end`、`source`、`session_count`、`sha256`。
+
+**验证：**
+
+现行只读 CLI 必须同时提供下列五类输入；此命令取代历史 Task 5/6 中尚未包含 manifest
+合同的示例，历史段落仅保留为当时的实施记录：
+
+```powershell
+python resonance_reversal_strategy/research/analyze_relative_turn_observations.py `
+  --baseline-log D:\logs\resonance-20260827.3.log `
+  --candidate-log D:\logs\resonance-20260827.4.log `
+  --session-calendar .\joinquant_sessions_2019_2021.json `
+  --session-calendar-sha256 <预先冻结的sha256> `
+  --output D:\logs\relative-turn-report.json
+```
+
+```powershell
+python resonance_reversal_strategy/research/analyze_relative_turn_observations.py --help
+python -m pytest tests/test_resonance_relative_turn_analysis.py -v
+python -m py_compile resonance_reversal_strategy/research/analyze_relative_turn_observations.py
+git diff --check
+```
+
+至少覆盖：缺失 manifest/hash、256 KiB 上限、hash 错误与大小写比较、schema/重复键/覆盖/
+session 顺序、输入与输出 alias、完整 session 证据、horizon 精确性、报告 metadata，以及
+manifest 不被写入。`rg` 仍须证明分析器不读行情、不下单、不开验证期或参数搜索。
+
+**剩余平台输入边界：** 用户必须在独立聚宽研究环境（不是策略回测代码）以
+`JoinQuant get_all_trade_days` 导出并保存 manifest，然后通过 `Get-FileHash -Algorithm SHA256`
+冻结小写 hash，之后才查看/分析完整 `.3` baseline 与 `.4` candidate 日志。真实 manifest、
+冻结 hash 和平台日志目前不在仓库内；本任务不得生成、修改、替换或伪造它们，也不得用
+2022 年及以后数据补足任何证据。只有这三份输入和不同的输出报告文件齐备时，才允许执行
+只读 analyzer；结果仍不代表交易授权、验证期开放或实盘准备。
