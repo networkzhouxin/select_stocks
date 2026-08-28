@@ -14,7 +14,7 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **里程碑总结并提交**：当完成一个清晰里程碑（例如数据隔离、loader、broker、日循环、信号接入、训练期完整回放）且相关测试/校验通过后，应先总结当前版本的范围、验证结果、风险和下一步，再提交，形成可回滚的安全点。经过综合分析确认适合提交时，可以不再单独征求用户同意而自主提交，但必须向用户清楚总结提交内容、验证结果和剩余风险。不要把多个里程碑长期混在一个未提交工作区里。
 - **Cross-signal autonomous training iteration**: The user has authorized autonomous test-optimize-test cycles for `cross_signal_strategy` inside the 2019-2021 training protocol. This autonomy does not relax the rules on test-first changes, source-data immutability, no future functions, no validation-period tuning, and no overfitting. Each experiment must record the hypothesis, change, training result, interpretation, and next step; failed experiments must be documented instead of silently discarded.
 - **Root-cause accountability for unclear issues**: When an issue is ambiguous, contradictory, unexplained, or cannot be clearly attributed, do not hand-wave, gloss over it, or answer with unsupported speculation. Stop and investigate systematically until the root cause, evidence, and remaining uncertainty are clear. If the root cause cannot be proven from available evidence, state exactly what is known, what is unknown, what evidence is missing, and what test or diagnostic is needed next. Do not proceed as if the issue is solved.
-- **模型与推理强度提醒**：当任务进入高风险场景时，必须主动提醒用户检查模型和推理强度。高风险场景包括：策略结构设计、指标新增/删除、参数规则调整、训练期归因分析、复杂日志分析、聚宽/本地差异排查、未来函数/过拟合/数据口径/撮合口径审查、是否提升主线版本、是否进入验证期、是否准备实盘、阶段性总结、重大提交、最终决策。建议口径：日常执行/小改动使用 `GPT-5.5 或 GPT-5.6 + Medium/High`；策略研究/复杂排查使用 `GPT-5.5 或 GPT-5.6 + High`；主线决策/实盘前审查使用 `GPT-5.5 或 GPT-5.6 + Extra High`。普通问答、简单查看、已确定步骤的执行不需要频繁打断提醒。
+- **模型与推理强度跟随客户端**：不得主动提醒、建议或要求用户切换模型或推理强度；始终沿用当前客户端选择的模型和推理强度，不因任务类型自行调整。
 
 ## Key Files
 
