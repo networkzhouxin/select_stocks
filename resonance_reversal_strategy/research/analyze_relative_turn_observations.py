@@ -1174,7 +1174,8 @@ def _filter_candidate_records(records):
         elif _is_relative_record(record):
             ignored["relative_build_mismatch" if record.get("build") != CANDIDATE_BUILD
                     else "relative_fingerprint_mismatch"] += 1
-        elif record.get("event") == "observation_outcome":
+        elif (record.get("event") == "observation_outcome"
+              and not _declares_relative_namespace(record)):
             ignored["formal_observation_outcome"] += 1
         elif record.get("event") == "strategy_initialized":
             ignored["initialization_mismatch"] += 1
@@ -1474,11 +1475,8 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
             _validate_relative_registration(
                 record, candidate_session_evidence, session_calendar, errors,
             )
-        elif (record.get("event") == "observation_outcome" and (
-                record.get("relative_observation_id") is not None
-                or record.get("observation_kind") == "RELATIVE_RESONANCE"
-                or (isinstance(record.get("resonance_id"), str)
-                    and record.get("resonance_id").startswith("RELATIVE:")))):
+        elif (record.get("event") == "observation_outcome"
+              and _declares_relative_namespace(record)):
             _validate_relative_outcome_shape(record, errors)
     (formal_registrations, formal_outcomes, formal_missing_outcome_count,
      canonical_formal_registrations) = _validate_baseline(

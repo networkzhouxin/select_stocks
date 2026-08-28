@@ -1165,6 +1165,52 @@ def test_foreign_relative_and_formal_observation_logs_are_ignored_and_reported()
     assert any("fingerprint mismatch" in error for error in report["data_quality"]["errors"])
 
 
+@pytest.mark.parametrize(("marker", "value"), [
+    ("relative_observation_id", None),
+    ("observation_kind", False),
+    ("observation_kind", "RELATIVE"),
+])
+def test_explicit_candidate_relative_marker_audits_shape_and_dates_without_formal_count(
+        marker, value):
+    candidate = make_candidate_records()
+    candidate.append({
+        "event": "observation_outcome", "resonance_id": "FORMAL:foreign",
+        marker: value, "event_date": "2022-01-04", "horizon": "5",
+        "outcome": {
+            "status": "RECORDED", "closing_date": "2021-01-06",
+            "return": 0.01,
+        },
+        "_log_timestamp": "2022-01-05T15:30:00",
+    })
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    errors = report["data_quality"]["errors"]
+    assert "invalid relative horizon: '5'" in errors
+    assert "relative outcome event outside 2019-2021: 2022-01-04" in errors
+    assert "relative outcome log date mismatch" in errors
+    assert "formal_observation_outcome" not in report["data_quality"]["ignored_record_counts"]
+
+
+def test_unmarked_candidate_formal_outcome_keeps_formal_ignored_classification():
+    candidate = make_candidate_records()
+    candidate.append({
+        "event": "observation_outcome", "resonance_id": "FORMAL:foreign",
+        "event_date": "2021-01-05", "horizon": 5,
+        "outcome": {
+            "status": "RECORDED", "closing_date": "2021-01-12",
+            "return": 0.01,
+        },
+        "_log_timestamp": "2021-01-12T15:30:00",
+    })
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert report["data_quality"]["ignored_record_counts"] == {
+        "formal_observation_outcome": 1,
+    }
+
+
 def test_report_is_deterministic_with_unordered_relative_input():
     candidate = make_candidate_records()
     initialized = candidate[:1]
