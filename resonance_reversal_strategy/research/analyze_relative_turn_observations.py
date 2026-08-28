@@ -426,7 +426,11 @@ def _classify_record_namespace(record, errors):
     event = record.get("event")
     relative_id_valid = _valid_text(relative_id) and relative_id.startswith("RELATIVE:")
     relative_resonance = _valid_text(resonance_id) and resonance_id.startswith("RELATIVE:")
-    relative_marker = relative_id is not None or kind == "RELATIVE_RESONANCE" or relative_resonance
+    relative_marker = (
+        "relative_observation_id" in record
+        or "observation_kind" in record
+        or relative_resonance
+    )
     if relative_marker:
         valid = relative_id_valid and kind == "RELATIVE_RESONANCE"
         if event == "observation_outcome":

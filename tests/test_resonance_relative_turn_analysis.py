@@ -825,6 +825,34 @@ def test_polluted_baseline_identity_is_excluded_from_formal_metrics_and_scope_su
     assert report["gates"]["horizon_5_q1_not_worse_than_formal"] is False
 
 
+@pytest.mark.parametrize("record_type", ["registration", "outcome"])
+@pytest.mark.parametrize(("marker", "value"), [
+    ("relative_observation_id", None),
+    ("observation_kind", False),
+    ("observation_kind", "RELATIVE"),
+    ("observation_kind", "RELATIVE_RESONANCE "),
+])
+def test_explicit_invalid_relative_marker_key_invalidates_formal_canonical_identity(
+        record_type, marker, value):
+    baseline = _single_formal_baseline()
+    if record_type == "registration":
+        record = next(item for item in baseline if item.get("event") == "resonance_decision")
+    else:
+        record = next(item for item in baseline if (
+            item.get("event") == "observation_outcome" and item.get("horizon") == 1
+        ))
+    record[marker] = value
+
+    report = analyzer.analyze_records(_candidate_overlapping_baseline_formal(), baseline)
+
+    assert report["continue_candidate"] is False
+    assert report["data_quality"]["formal_overlap_count"] == 0
+    assert report["metrics"]["formal_horizon_5"]["count"] == 0
+    assert report["metrics"]["formal_horizon_5"]["q1"] is None
+    assert report["metrics"]["scope_summaries"]["formal_resonance"]["candidate_count"] == 0
+    assert report["gates"]["horizon_5_q1_not_worse_than_formal"] is False
+
+
 @pytest.mark.parametrize("variant", ["payload", "pseudo_relative", "namespace_conflict"])
 def test_invalid_associated_baseline_outcome_invalidates_formal_overlap_before_namespace_filter(
         variant):
