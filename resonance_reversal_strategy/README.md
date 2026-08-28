@@ -121,12 +121,13 @@ buy_target = min(standard_target, max(0, available_cash - cash_reserve))
 
 ```python
 import json
+import jqdata
 
 coverage_start = "2019-01-01"
 coverage_end = "2021-12-31"
 sessions = [
     session.isoformat()
-    for session in get_all_trade_days()
+    for session in jqdata.get_all_trade_days()
     if coverage_start <= session.isoformat() <= coverage_end
 ]
 manifest = {
