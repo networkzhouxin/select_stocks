@@ -4004,6 +4004,115 @@ def test_relative_snapshot_future_data_error_is_rethrown_unchanged(
     assert raised.value is expected
 
 
+@pytest.mark.parametrize(("relative_book", "error_type"), [
+    (object(), "TypeError"),
+    (None, "RuntimeError"),
+])
+def test_do_trading_normalizes_ordinary_malformed_relative_books_before_formal_flow(
+        monkeypatch, relative_book, error_type):
+    class HostileRelativeBook(dict):
+        def get(self, key, default=None):
+            raise RuntimeError("hostile relative access")
+
+    if relative_book is None:
+        relative_book = HostileRelativeBook({"active": {}})
+    code = "510300.XSHG"
+    calls = []
+    diagnostics = []
+    snapshot = dict(
+        resonance_snapshot(code),
+        event_book=strategy.empty_event_book(),
+        event_detection_trace={},
+        relative_event_book=relative_book,
+    )
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshots", lambda *args: {code: snapshot},
+    )
+    monkeypatch.setattr(strategy, "log_signal_snapshot", lambda *args: None)
+
+    def capture_relative(snapshots):
+        calls.append("relative")
+        assert snapshots[code]["relative_event_book"] == strategy.empty_event_book()
+
+    monkeypatch.setattr(strategy, "run_relative_observation_stage", capture_relative)
+    monkeypatch.setattr(
+        strategy, "run_signal_exits", lambda *args: calls.append("exits"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_buys", lambda *args: calls.append("buys"),
+    )
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: diagnostics.append((event, payload)),
+    )
+
+    strategy.do_trading(fake_context())
+
+    assert calls == ["retry", "atr", "relative", "exits", "buys"]
+    assert diagnostics == [("relative_observation_snapshot", {
+        "code": code,
+        "reason": "RELATIVE_EVENT_BOOK_INVALID",
+        "error_type": error_type,
+    })]
+
+
+def test_do_trading_rethrows_relative_book_future_data_error_before_formal_flow(
+        monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future relative book access")
+
+    class HostileRelativeBook(dict):
+        def get(self, key, default=None):
+            raise expected
+
+    code = "510300.XSHG"
+    calls = []
+    snapshot = dict(
+        resonance_snapshot(code),
+        event_book=strategy.empty_event_book(),
+        event_detection_trace={},
+        relative_event_book=HostileRelativeBook({"active": {}}),
+    )
+    monkeypatch.setattr(strategy, "FutureDataError", FutureDataError, raising=False)
+    monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
+    monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+    )
+    monkeypatch.setattr(
+        strategy, "build_signal_snapshots", lambda *args: {code: snapshot},
+    )
+    monkeypatch.setattr(
+        strategy, "run_relative_observation_stage",
+        lambda *args: calls.append("relative"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_exits", lambda *args: calls.append("exits"),
+    )
+    monkeypatch.setattr(
+        strategy, "run_signal_buys", lambda *args: calls.append("buys"),
+    )
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.do_trading(fake_context())
+
+    assert raised.value is expected
+    assert calls == ["retry", "atr"]
+
+
 def test_relative_observation_log_runtime_error_keeps_formal_trading_pipeline(
         monkeypatch):
     code = "510300.XSHG"

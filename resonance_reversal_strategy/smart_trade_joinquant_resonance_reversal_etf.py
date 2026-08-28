@@ -724,6 +724,33 @@ def run_relative_observation_stage(snapshots):
     return None
 
 
+def _normalize_relative_event_book_for_snapshot(snapshot):
+    relative_book = snapshot.get("relative_event_book")
+    if relative_book is None:
+        relative_book = empty_event_book()
+        snapshot["relative_event_book"] = relative_book
+        return False, False
+    try:
+        if not isinstance(relative_book, dict):
+            raise TypeError("relative event book must be a mapping")
+        has_active = bool(relative_book.get("active"))
+        has_invalidated = bool(relative_book.get("invalidated"))
+        return has_active, has_invalidated
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        normalized = empty_event_book()
+        snapshot["relative_event_book"] = normalized
+        _safe_relative_observation_diagnostic(
+            "relative_observation_snapshot", {
+                "code": snapshot.get("code"),
+                "reason": "RELATIVE_EVENT_BOOK_INVALID",
+                "error_type": type(error).__name__,
+            },
+        )
+        return False, False
+
+
 def record_due_observation_outcomes(context, current_data):
     closing_date = _calendar_date(context.current_dt)
     _prune_terminal_observation_records()
@@ -777,12 +804,14 @@ def do_trading(context):
     held_codes = set(get_actual_positions(context))
     for snapshot in snapshots.values():
         event_book = snapshot.get("event_book") or {}
-        relative_book = snapshot.get("relative_event_book") or {}
+        relative_active, relative_invalidated = (
+            _normalize_relative_event_book_for_snapshot(snapshot)
+        )
         if (snapshot.get("code") in held_codes
                 or event_book.get("active")
                 or event_book.get("invalidated")
-                or relative_book.get("active")
-                or relative_book.get("invalidated")
+                or relative_active
+                or relative_invalidated
                 or snapshot.get("kdj_cross", "NONE") != "NONE"
                 or _event_detection_trace_requires_logging(
                     snapshot.get("event_detection_trace")

@@ -560,6 +560,37 @@ def _validate_support_contract(record, prefix, signal_date, session_evidence,
         errors.append("impossible %s branch/supporters/source contract" % prefix)
 
 
+def _expected_relative_registration_expiry(record, signal_date, session_calendar):
+    supporters = record.get("supporters")
+    dates = record.get("supporter_event_dates")
+    if (signal_date is None or signal_date not in session_calendar
+            or not isinstance(supporters, (list, tuple)) or not supporters
+            or not isinstance(dates, dict) or set(dates) != set(supporters)):
+        return None
+    try:
+        supporter_dates = tuple(_calendar_date(dates[item]) for item in supporters)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if any(value is None for value in supporter_dates):
+        return None
+    signal_index = session_calendar.index(signal_date)
+    if all(value == signal_date for value in supporter_dates):
+        next_index = signal_index + 1
+        return (
+            session_calendar[next_index]
+            if next_index < len(session_calendar) else None
+        )
+    if signal_index == 0:
+        return None
+    previous_session = session_calendar[signal_index - 1]
+    if (signal_date in supporter_dates
+            and all(value in (previous_session, signal_date)
+                    for value in supporter_dates)
+            and previous_session in supporter_dates):
+        return signal_date
+    return None
+
+
 def _validate_candidate_initializations(records, errors):
     initialized = [record for record in records if record.get("event") == "strategy_initialized"]
     if not initialized:
@@ -658,7 +689,7 @@ def _validate_session_evidence(records, role, summary_calendar, manifest_calenda
                 dates.add(decision_date)
             if signal_date is not None:
                 dates.add(signal_date)
-        if event == "order_transition" and record.get("outcome") == "FILLED":
+        if event == "order_transition":
             timestamp = _parse_strict_log_timestamp(record)
             if timestamp is not None:
                 dates.add(timestamp.date())
@@ -833,11 +864,19 @@ def _validate_relative_registration(record, session_evidence, session_calendar, 
             and session_evidence.get(registration_timestamp.date()) != signal_date):
         errors.append("relative registration session evidence mismatch")
     if registration_timestamp is not None and expires_date is not None:
-        decision_date = registration_timestamp.date()
+        expected_expiry = _expected_relative_registration_expiry(
+            record, signal_date, session_calendar,
+        )
         if expires_date not in session_calendar:
             errors.append("relative registration expires date absent from manifest")
-        if expires_date != decision_date:
-            errors.append("relative registration expires_date must equal decision session")
+        if expected_expiry is None:
+            errors.append(
+                "relative registration expiry cannot be derived from supporters"
+            )
+        elif expires_date != expected_expiry:
+            errors.append(
+                "relative registration expires_date does not match supporter-derived expiry"
+            )
     event_close = _finite_number(record.get("event_close"))
     if event_close is None or event_close <= 0:
         errors.append("invalid candidate event_close")
@@ -1408,23 +1447,57 @@ def _has_relative_markers(record):
     return _declares_relative_namespace(record)
 
 
-def _audit_candidate_formal_observations(records, errors):
+def _audit_formal_observations(records, role, errors):
     for record in records:
         if record.get("event") == "resonance_decision":
-            _audit_log_timestamp_training_window(record, "candidate formal decision", errors)
-            _is_training_date(
-                record.get("decision_date"), "candidate formal decision", errors,
+            _audit_log_timestamp_training_window(
+                record, "%s formal decision" % role, errors,
             )
-            _is_training_date(record.get("signal_date"), "candidate formal signal", errors)
+            _is_training_date(
+                record.get("decision_date"), "%s formal decision" % role, errors,
+            )
+            _is_training_date(
+                record.get("signal_date"), "%s formal signal" % role, errors,
+            )
             expires_date = record.get("expires_date")
             if _is_formal_registration_record(record) or expires_date not in (None, ""):
-                _is_training_date(expires_date, "candidate formal expires", errors)
+                _is_training_date(
+                    expires_date, "%s formal expires" % role, errors,
+                )
         elif (record.get("event") == "observation_outcome"
               and not _has_relative_markers(record)):
             _is_training_date(
-                record.get("event_date"), "candidate formal outcome event", errors,
+                record.get("event_date"),
+                "%s formal outcome event" % role, errors,
             )
-            _audit_log_timestamp_training_window(record, "candidate formal outcome", errors)
+            _audit_log_timestamp_training_window(
+                record, "%s formal outcome" % role, errors,
+            )
+
+
+def _audit_order_transitions(records, role, errors):
+    for record in records:
+        if record.get("event") != "order_transition":
+            continue
+        timestamp = _strict_log_timestamp(
+            record, "%s order transition" % role, errors,
+        )
+        log_date = _is_training_date(
+            record.get("_log_date"),
+            "%s order transition log date" % role, errors,
+        )
+        if timestamp is not None:
+            if not TRAIN_START <= timestamp.date() <= TRAIN_END:
+                errors.append(
+                    "%s order transition log timestamp outside 2019-2021: %s"
+                    % (role, timestamp.date())
+                )
+            if timestamp.time() != TRADING_LOG_TIME:
+                errors.append(
+                    "%s order transition log timestamp outside 09:35" % role
+                )
+            if log_date is not None and timestamp.date() != log_date:
+                errors.append("%s order transition log date mismatch" % role)
 
 
 def analyze_records(candidate_records, baseline_records, session_manifest):
@@ -1442,7 +1515,10 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
             errors.append("parse error at %s: %s" % (location, record["_parse_error"]))
         _audit_outcome_closing_date(record, errors)
         record["_record_namespace"] = _classify_record_namespace(record, errors)
-    _audit_candidate_formal_observations(candidate_records, errors)
+    _audit_formal_observations(candidate_records, "candidate", errors)
+    _audit_formal_observations(baseline_records, "baseline", errors)
+    _audit_order_transitions(candidate_records, "candidate", errors)
+    _audit_order_transitions(baseline_records, "baseline", errors)
     candidate_order_ambiguous = _has_cross_file_filled_timestamp(
         candidate_records, "candidate", errors,
     )

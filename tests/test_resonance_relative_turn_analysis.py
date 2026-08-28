@@ -232,7 +232,8 @@ def make_baseline_records():
             "event": "resonance_decision", "accepted": True,
             "reason": "COMPLETE_RESONANCE", "resonance_id": resonance_id,
             "code": "510300.XSHG", "direction": "BUY_TURN",
-            "signal_date": "2021-01-05",
+            "decision_date": "2021-01-06", "signal_date": "2021-01-05",
+            "expires_date": "2021-01-06",
             "_log_timestamp": "2021-01-06T09:35:00",
         })
         records.append({
@@ -551,7 +552,7 @@ def test_friday_signal_to_monday_registration_timestamp_is_legal():
 
 
 @pytest.mark.parametrize("expires_date", ["2019-01-04", "2019-01-08"])
-def test_relative_registration_expiry_must_equal_snapshot_decision_session(expires_date):
+def test_relative_registration_expiry_must_match_supporter_derived_session(expires_date):
     candidate = make_candidate_records()
     registration = next(record for record in candidate
                         if record.get("event") == "relative_resonance_observation")
@@ -562,7 +563,7 @@ def test_relative_registration_expiry_must_equal_snapshot_decision_session(expir
     report = analyzer.analyze_records(candidate, make_baseline_records())
 
     assert report["continue_candidate"] is False
-    assert "relative registration expires_date must equal decision session" in (
+    assert "relative registration expires_date does not match supporter-derived expiry" in (
         report["data_quality"]["errors"]
     )
 
@@ -602,7 +603,7 @@ def test_weekend_previous_trading_session_is_legal_with_snapshot_evidence():
                 if record.get("event") == "observation_outcome"
                 and record.get("relative_observation_id") == registration["relative_observation_id"]]
     registration["signal_date"] = "2021-01-11"
-    registration["expires_date"] = "2021-01-12"
+    registration["expires_date"] = "2021-01-11"
     registration["supporter_event_dates"] = {
         "BOLL": "2021-01-08", "KDJ": "2021-01-11", "RSI": "2021-01-11",
     }
@@ -1562,6 +1563,96 @@ def _builder_three_supporter_registration():
     return registration
 
 
+def _replace_with_production_expiry_registration(candidate, mixed_age):
+    signal_date = date(2021, 1, 8)
+    previous_session = date(2021, 1, 7)
+    decision_session = date(2021, 1, 11)
+    hard = strategy.empty_event_book()
+    hard["active"]["BOLL"] = strategy.make_turn_event(
+        "BOLL", strategy.TurnDirection.BUY_TURN,
+        previous_session if mixed_age else signal_date,
+        signal_date if mixed_age else decision_session,
+        {"fixture": "production-hard"},
+    )
+    relative = strategy.empty_event_book()
+    relative["active"]["RSI"] = strategy.make_relative_turn_event(
+        "RSI", strategy.TurnDirection.BUY_TURN,
+        signal_date, decision_session, {"fixture": "production-relative"},
+    )
+    observation = strategy.build_relative_resonance_observation(
+        "510300.XSHG", strategy.TurnDirection.BUY_TURN,
+        hard, relative, signal_date, 10.0,
+    )
+    assert observation is not None
+    registration = next(
+        record for record in candidate
+        if record.get("event") == "relative_resonance_observation"
+        and record.get("signal_date") == "2021-01-08"
+    )
+    old_id = registration["relative_observation_id"]
+    outcomes = [
+        record for record in candidate
+        if record.get("event") == "observation_outcome"
+        and record.get("relative_observation_id") == old_id
+    ]
+    registration.update({
+        "relative_observation_id": observation["relative_observation_id"],
+        "observation_kind": observation["observation_kind"],
+        "branch": observation["branch"],
+        "code": observation["code"],
+        "direction": observation["direction"].value,
+        "signal_date": observation["signal_date"].isoformat(),
+        "expires_date": observation["expires_date"].isoformat(),
+        "supporters": list(observation["supporters"]),
+        "supporter_event_dates": {
+            key: value.isoformat()
+            for key, value in observation["supporter_event_dates"].items()
+        },
+        "hard_or_relative_source_by_indicator": dict(
+            observation["hard_or_relative_source_by_indicator"]
+        ),
+        "event_close": observation["event_close"],
+        "_log_timestamp": "2021-01-11T09:35:00",
+    })
+    for outcome in outcomes:
+        outcome.update({
+            "relative_observation_id": registration["relative_observation_id"],
+            "resonance_id": registration["relative_observation_id"],
+            "branch": registration["branch"],
+            "direction": registration["direction"],
+            "code": registration["code"],
+            "event_date": registration["signal_date"],
+            "supporters": list(registration["supporters"]),
+            "supporter_event_dates": dict(registration["supporter_event_dates"]),
+            "hard_or_relative_source_by_indicator": dict(
+                registration["hard_or_relative_source_by_indicator"]
+            ),
+        })
+    return registration
+
+
+@pytest.mark.parametrize(("mixed_age", "expected_expiry", "expected_dates"), [
+    (False, "2021-01-11", {
+        "BOLL": "2021-01-08", "RSI": "2021-01-08",
+    }),
+    (True, "2021-01-08", {
+        "BOLL": "2021-01-07", "RSI": "2021-01-08",
+    }),
+])
+def test_analyzer_accepts_producer_expiry_for_all_current_and_mixed_age_supporters(
+        mixed_age, expected_expiry, expected_dates):
+    candidate = make_candidate_records()
+    registration = _replace_with_production_expiry_registration(
+        candidate, mixed_age,
+    )
+
+    report = analyzer.analyze_records(candidate, make_baseline_records())
+
+    assert registration["expires_date"] == expected_expiry
+    assert registration["supporter_event_dates"] == expected_dates
+    assert report["continue_candidate"] is True
+
+
 def test_real_builder_hard_boll_branch_with_both_relative_oscillators_is_accepted():
     registration = _builder_three_supporter_registration()
     outcome = make_outcome(registration, 5, 0.02)
@@ -2171,6 +2262,114 @@ def test_candidate_rejected_formal_diagnostic_may_omit_expiry_within_training_wi
     assert "candidate formal expires outside 2019-2021: 2022-01-04" in (
         report["data_quality"]["errors"]
     )
+
+
+@pytest.mark.parametrize("role", ["candidate", "baseline"])
+@pytest.mark.parametrize("outcome", ["NOT_FILLED", "PARTIAL"])
+def test_every_order_transition_role_and_status_is_audited_for_training_sessions(
+        role, outcome):
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    target = candidate if role == "candidate" else baseline
+    target.append({
+        "event": "order_transition",
+        "_log_date": "2022-01-04",
+        "_log_timestamp": "2022-01-04T09:35:00",
+        "side": "BUY",
+        "code": "510300.XSHG",
+        "outcome": outcome,
+        "before_amount": 0,
+        "after_amount": 0 if outcome == "NOT_FILLED" else 100,
+    })
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is False
+    assert "%s order transition log timestamp outside 2019-2021: 2022-01-04" % role in (
+        report["data_quality"]["errors"]
+    )
+
+
+def test_legal_non_filled_orders_are_audited_without_entering_filled_path():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    for records, outcome in ((candidate, "NOT_FILLED"), (baseline, "PARTIAL")):
+        records.append({
+            "event": "order_transition",
+            "_log_date": "2021-01-05",
+            "_log_timestamp": "2021-01-05T09:35:00",
+            "side": "not-a-filled-identity-contract",
+            "code": None,
+            "outcome": outcome,
+            "before_amount": "not-a-filled-amount-contract",
+            "after_amount": None,
+        })
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is True
+    assert len(analyzer.extract_filled_order_path(candidate)) == 138
+    assert len(analyzer.extract_filled_order_path(baseline)) == 138
+    assert report["gates"]["formal_order_path_exact"] is True
+
+
+@pytest.mark.parametrize("role", ["candidate", "baseline"])
+@pytest.mark.parametrize(("accepted", "reason"), [
+    (False, "HELD_NO_ADD"),
+    (True, "BUY_CANDIDATE_SORTED:1"),
+])
+def test_rejected_and_follow_up_formal_diagnostics_are_date_audited_by_role(
+        role, accepted, reason):
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    target = candidate if role == "candidate" else baseline
+    target.append({
+        "event": "resonance_decision",
+        "accepted": accepted,
+        "reason": reason,
+        "decision_date": "2022-01-04",
+        "signal_date": "2022-01-03",
+        "expires_date": "2022-01-04",
+        "_log_timestamp": "2022-01-04T09:35:00",
+    })
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    errors = report["data_quality"]["errors"]
+    assert report["continue_candidate"] is False
+    assert "%s formal decision outside 2019-2021: 2022-01-04" % role in errors
+    assert "%s formal signal outside 2019-2021: 2022-01-03" % role in errors
+    assert "%s formal expires outside 2019-2021: 2022-01-04" % role in errors
+    assert "%s formal decision log timestamp outside 2019-2021: 2022-01-04" % role in errors
+
+
+def test_legal_rejected_and_follow_up_diagnostics_are_role_symmetric_controls():
+    candidate = make_candidate_records()
+    baseline = make_baseline_records()
+    for records in (candidate, baseline):
+        records.extend((
+            {
+                "event": "resonance_decision",
+                "accepted": False,
+                "reason": "HELD_NO_ADD",
+                "decision_date": "2021-01-05",
+                "signal_date": "2021-01-04",
+                "_log_timestamp": "2021-01-05T09:35:00",
+            },
+            {
+                "event": "resonance_decision",
+                "accepted": True,
+                "reason": "BUY_CANDIDATE_SORTED:1",
+                "decision_date": "2021-01-05",
+                "signal_date": "2021-01-04",
+                "expires_date": "2021-01-05",
+                "_log_timestamp": "2021-01-05T09:35:00",
+            },
+        ))
+
+    report = analyzer.analyze_records(candidate, baseline)
+
+    assert report["continue_candidate"] is True
 
 
 def test_candidate_formal_terminal_outcomes_always_audit_closing_date():
