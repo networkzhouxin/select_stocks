@@ -207,3 +207,16 @@ python resonance_reversal_strategy/research/analyze_relative_turn_observations.p
 除冻结的收益、胜率、Wilson 下界、回撤、完整交易数、中位数、利润集中度和双摩擦门槛
 外，普通摩擦期末未平仓数不得超过基线的 2 只。完整合同见
 [`2026-08-28-atr-exit-observation-only-candidate-design.md`](docs/superpowers/specs/2026-08-28-atr-exit-observation-only-candidate-design.md)。
+
+## 相对 BUY 空位补位候选（build 20260828.5）
+
+该 build 在 `20260828.4` 无 ATR 实际退出基础上，只把已经完成训练观察的相对
+`BUY_TURN` 转为买入补位。正式 BUY 始终排在相对 BUY 之前；相对 BUY 仅在正式买入
+处理后仍有空余持仓槽时参与，不卖出现有持仓、不触发换仓。相对 `SELL_TURN` 继续只做
+观察，正式 `SIGNAL_EXIT` 和 ATR `OBSERVE_ONLY` 行为不变。
+
+两个既有相对分支均可生成补位候选；相对候选统一按支持数、BOLL 新鲜度和代码稳定
+排序，不按回测表现设置分支阈值或 ETF 特例。初始化日志增加
+`relative_buy_policy=EMPTY_SLOT_BACKFILL`；这是固定 build 身份，不是运行时开关。
+相对 BUY 队列在正式信号卖出和买入之前冻结，确保 `FutureDataError` 不会发生在二者之后。
+全部信号仍来自 T-1 及以前完整日线，T 日当前数据只用于可交易性、执行价格和订单提交。

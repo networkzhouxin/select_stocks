@@ -9,9 +9,10 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260828.4"
+DEPLOYMENT_BUILD_ID = "20260828.5"
 FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
 ATR_EXIT_POLICY = "OBSERVE_ONLY"
+RELATIVE_BUY_POLICY = "EMPTY_SLOT_BACKFILL"
 BENCHMARK = "000300.XSHG"
 
 
@@ -820,8 +821,11 @@ def do_trading(context):
                 )):
             log_signal_snapshot(dict(snapshot, decision_date=decision_date))
     run_relative_observation_stage(snapshots)
+    relative_buy_decisions = prepare_relative_buy_decisions(snapshots)
     run_signal_exits(context, current_data, snapshots)
-    run_signal_buys(context, current_data, snapshots)
+    run_signal_buys(
+        context, current_data, snapshots, relative_buy_decisions,
+    )
 
 
 def after_close(context):
@@ -867,6 +871,7 @@ def initialize(context):
         ),
         "relative_observation_fingerprint": relative_observation_fingerprint(),
         "atr_exit_policy": ATR_EXIT_POLICY,
+        "relative_buy_policy": RELATIVE_BUY_POLICY,
         "etf_pool": list(g.etf_pool),
     })
 
@@ -2081,6 +2086,54 @@ def collect_relative_resonance_observations(snapshots):
     return observations
 
 
+def make_relative_buy_decision(observation):
+    if observation.get("direction") is not TurnDirection.BUY_TURN:
+        return None
+    signal_date = _calendar_date(observation.get("signal_date"))
+    supporter_dates = observation.get("supporter_event_dates") or {}
+    boll_date = _calendar_date(supporter_dates.get("BOLL"))
+    return {
+        "code": observation.get("code"),
+        "direction": TurnDirection.BUY_TURN,
+        "signal_date": signal_date,
+        "supporters": tuple(observation.get("supporters") or ()),
+        "support_count": len(observation.get("supporters") or ()),
+        "boll_age": 0 if boll_date == signal_date else 1,
+        "resonance_id": observation.get("relative_observation_id"),
+        "expires_date": _calendar_date(observation.get("expires_date")),
+    }
+
+
+def collect_relative_buy_decisions(snapshots):
+    decisions = []
+    for observation in collect_relative_resonance_observations(snapshots):
+        decision = make_relative_buy_decision(observation)
+        if decision is None:
+            continue
+        code = decision["code"]
+        if not is_finite_positive(snapshots[code].get("entry_atr")):
+            log_resonance_decision(
+                decision, False, "RELATIVE_BUY_INVALID_ENTRY_ATR",
+            )
+            continue
+        decisions.append(decision)
+    return decisions
+
+
+def prepare_relative_buy_decisions(snapshots):
+    try:
+        return tuple(sort_buy_decisions(
+            collect_relative_buy_decisions(snapshots)
+        ))
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _safe_relative_observation_diagnostic(
+            "relative_buy_pipeline", {"error": str(error)},
+        )
+        return ()
+
+
 def build_resonance_decision(code, direction, event_book, signal_date):
     signal_date = _calendar_date(signal_date)
     boll = event_book["active"].get("BOLL")
@@ -2324,14 +2377,22 @@ def run_signal_exits(context, current_data, snapshots):
     return attempted
 
 
-def run_signal_buys(context, current_data, snapshots):
+def run_signal_buys(
+        context, current_data, snapshots, relative_buy_decisions=()):
     actual_positions = get_actual_positions(context)
-    decisions = collect_buy_decisions(snapshots, actual_positions)
-    sorted_decisions = sort_buy_decisions(decisions)
-    for rank, decision in enumerate(sorted_decisions, start=1):
+    formal_decisions = sort_buy_decisions(
+        collect_buy_decisions(snapshots, actual_positions)
+    )
+    relative_decisions = tuple(relative_buy_decisions or ())
+    for rank, decision in enumerate(formal_decisions, start=1):
         log_resonance_decision(
             decision, True, "BUY_CANDIDATE_SORTED:%s" % rank,
         )
+    for rank, decision in enumerate(relative_decisions, start=1):
+        log_resonance_decision(
+            decision, True, "RELATIVE_BUY_CANDIDATE_SORTED:%s" % rank,
+        )
+    sorted_decisions = tuple(formal_decisions) + relative_decisions
     remaining_slots = max(
         0, g.params["max_holdings"] - len(actual_positions),
     )

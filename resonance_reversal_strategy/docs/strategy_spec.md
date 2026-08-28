@@ -536,14 +536,16 @@ tests/
 
 ## 观察扩展：非极值相对拐点
 
-`20260827.4` 新增的相对拐点只属于研究观察层。正式 RSI/KDJ/BOLL 事件、完整
-共振、ATR、买卖顺序和订单状态仍以本文原有章节为准。相对谓词、两个观察分支、两日
+`20260827.4` 新增相对拐点时只属于研究观察层；`20260828.5` 才允许其中的
+`BUY_TURN` 以空位补位身份进入候选队列。正式 RSI/KDJ/BOLL 事件、完整共振、ATR 和
+正式卖出仍以本文原有章节为准。相对谓词、两个观察分支、两日
 生命周期、日志合同和预注册继续门槛，以
 [`docs/superpowers/specs/2026-08-27-relative-turn-observation-design.md`](superpowers/specs/2026-08-27-relative-turn-observation-design.md)
 为冻结依据。
 
 相对事件在 T 日 09:35 仅以截止 T-1 的完整日线构建独立事件簿，并以 `RELATIVE:`
-命名空间登记观察结果；它不进入正式共振、候选排序、仓位、ATR 或订单。两条观察分支
+命名空间登记观察结果。它不进入正式共振、ATR 或卖出订单；在 `20260828.5` 中只有
+相对 BUY 可在正式 BUY 之后补剩余空位。两条观察分支
 分别为 `HARD_BOLL_SOFT_OSC`（正式 BOLL 加相对 RSI 或 KDJ）和 `SOFT_ALL_THREE`
 （相对 BOLL、RSI、KDJ 三项齐全）。初始化日志须同时提供既有正式事件逻辑指纹和独立
 的相对观察逻辑指纹，供导出的 `.3/.4` 聚宽日志按冻结合同核验。
@@ -599,3 +601,31 @@ retry_pending_exits
 各运行一次；期末不强制平仓。每日组合总资产必须包含未平仓市值，普通摩擦完整交易数至少
 80 且期末未平仓不超过 2 只。任一冻结门槛失败即保留失败实验，不读取 2022+、不修改
 ATR 参数、不加入其他退出，也不组合 `.2/.3`。
+
+## 相对 BUY 空位补位候选（build 20260828.5）
+
+本候选以 `20260828.4` 为直接基线，保留 `ATR_EXIT_POLICY="OBSERVE_ONLY"`。允许变化
+仅限买入候选组装：先收集并稳定排序正式 BUY，随后收集两个既有分支产生的相对
+`BUY_TURN`；相对决策使用 `RELATIVE:` 观察 ID 进入既有去重生命周期。相对
+`SELL_TURN` 不转换为决策。
+
+候选队列严格为：
+
+```text
+relative observation stage
+  -> freeze relative BUY candidates
+  -> formal SIGNAL_EXIT
+  -> formal BUY candidates
+  -> relative BUY candidates
+  -> fill remaining slots only
+```
+
+满仓时相对 BUY 只记录 `PORTFOLIO_FULL`；正式候选已经占用最后空位时，相对候选不得
+挤占或卖出任何持仓。普通相对买入收集错误只记录 `relative_buy_pipeline` 后退化为空队列，
+正式 BUY 继续；`FutureDataError` 原样抛出。初始化日志固定输出
+`relative_buy_policy="EMPTY_SLOT_BACKFILL"`，该字段不得充当功能开关或控制 ATR、卖出、
+清理和异常语义。相对 BUY 队列必须在正式信号卖出前冻结；这样相关未来数据错误不会
+发生在正式信号卖出或买入之后，普通错误则只将相对队列降级为空，不阻断正式卖出和买入。
+
+信号快照、正式和相对事件都只读取 T-1 及以前完整日线。T 日 09:35 当前数据只用于可
+交易性、执行价格和订单提交，不得回写相对事件、排序、持仓槽资格或卖出判断。
