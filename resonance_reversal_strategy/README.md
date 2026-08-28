@@ -191,3 +191,19 @@ python resonance_reversal_strategy/research/analyze_relative_turn_observations.p
 现在代码不包含真实 manifest、其冻结 hash 或聚宽平台结果，用户仍需按上述步骤导出。当前
 也尚无真实聚宽 `.3/.4` 完整日志证据；本地测试不构成订单路径、期末资产或观察收益已通过
 的证据。短区间聚宽冒烟同样不证明正式订单路径、收益或可以实盘。
+
+## ATR 退出纯观测候选（build 20260828.4）
+
+该 build 是从 `20260827.4` 基线独立分出的 2019--2021 结构消融候选，不是正式基线或
+实盘版本。ATR(14,2.5)、5%--15% 边界、入场 ATR、最高收盘锚和 `atr_check` 日志继续
+计算；ATR 本会触发时只记录 `execution_policy=OBSERVE_ONLY` 和
+`order_submitted=false`，不创建 `ATR_EXIT` 挂起状态，也不提交卖单。
+
+新鲜回放中唯一允许创建的正式卖出原因是 `SIGNAL_EXIT`。09:35 调用顺序固定为：挂起
+退出重试、ATR 纯观测、构建 T-1 信号快照、正式信号退出、正式买入。15:30 仍更新最高
+收盘锚和组合汇总。候选不增加替代止损、止盈或参数搜索，也不组合 `.2/.3`。
+
+候选必须各运行一次普通摩擦和双倍摩擦的 2019--2021 聚宽回放，且不得在期末强制平仓。
+除冻结的收益、胜率、Wilson 下界、回撤、完整交易数、中位数、利润集中度和双摩擦门槛
+外，普通摩擦期末未平仓数不得超过基线的 2 只。完整合同见
+[`2026-08-28-atr-exit-observation-only-candidate-design.md`](docs/superpowers/specs/2026-08-28-atr-exit-observation-only-candidate-design.md)。

@@ -568,3 +568,34 @@ superpowers/specs/2026-08-28-training-boundary-manifest-design.md) 冻结的 sch
 合法右截尾只豁免由训练期结束导致的不可达结果。已经存在的部分 horizon 仍严格校验，
 完整观察缺少任一结果继续 fail closed，任何 2022 数据都不能补齐期末观察。该规则只调整
 离线样本选择和报告，不修改正式事件、共振、ATR、持仓、资金或订单行为。
+
+## ATR 退出停用候选（build 20260828.4）
+
+本节只定义从 `020bc36`/`20260827.4` 独立建立的结构消融候选，不改写前文正式基线的
+历史合同。完整冻结设计见
+[`2026-08-28-atr-exit-observation-only-candidate-design.md`](superpowers/specs/2026-08-28-atr-exit-observation-only-candidate-design.md)。
+
+候选仍以 T-1 日线计算 ATR14，并在买入时冻结入场 ATR；2.5 倍数、5%--15% 止损百分比
+边界和 15:30 最高收盘锚更新保持不变。T 日 09:35 当前价只用于记录 ATR 本会触发，
+`observe_atr_exit_conditions` 不提交卖单、不创建或升级 `ATR_EXIT`、不写入
+`sold_today`。`ATR_EXIT_POLICY="OBSERVE_ONLY"` 只进入初始化和观测日志，不是运行
+模式参数。
+
+候选控制流固定为：
+
+```text
+retry_pending_exits
+  -> observe_atr_exit_conditions
+  -> build_signal_snapshots(T-1)
+  -> run_signal_exits
+  -> run_signal_buys
+```
+
+挂起的 `SIGNAL_EXIT` 仍先重试；重试未成交后即使 ATR 本会触发，也不得升级原因或提交
+第二笔卖单。存在合法正式卖出共振时，只提交 `SIGNAL_EXIT`，其成交后的 `sold_today`
+与同日回购保护沿用原逻辑。快照不足而 ATR 本会触发时，持仓继续保留，不增加替代退出。
+
+验收只使用 2019--2021 训练收益窗口和 2018 只读预热/日历证据。普通摩擦与双倍摩擦
+各运行一次；期末不强制平仓。每日组合总资产必须包含未平仓市值，普通摩擦完整交易数至少
+80 且期末未平仓不超过 2 只。任一冻结门槛失败即保留失败实验，不读取 2022+、不修改
+ATR 参数、不加入其他退出，也不组合 `.2/.3`。

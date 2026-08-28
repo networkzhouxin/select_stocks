@@ -110,7 +110,10 @@ def test_do_trading_initializes_runtime_state(monkeypatch):
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
     monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
     monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
-    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: set(), raising=False)
+    monkeypatch.setattr(
+        strategy, "observe_atr_exit_conditions", lambda *args: set(),
+        raising=False,
+    )
     monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {}, raising=False)
     monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set(), raising=False)
     monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [], raising=False)
@@ -1514,7 +1517,8 @@ def test_do_trading_stage_order_has_no_broad_early_return(monkeypatch):
         strategy, "retry_pending_exits", lambda *args: order.append("pending"),
     )
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: order.append("atr"), raising=False,
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: order.append("atr_observe"), raising=False,
     )
     monkeypatch.setattr(
         strategy, "build_signal_snapshots",
@@ -1534,7 +1538,7 @@ def test_do_trading_stage_order_has_no_broad_early_return(monkeypatch):
     strategy.do_trading(fake_context())
 
     assert order == [
-        "reset", "pending", "atr", "signals", "signal_sells", "buys",
+        "reset", "pending", "atr_observe", "signals", "signal_sells", "buys",
     ]
 
 
@@ -1545,7 +1549,8 @@ def test_atr_before_insufficient_signal_data_still_runs(monkeypatch):
     monkeypatch.setattr(strategy, "reset_daily_state", lambda *args: None)
     monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: order.append("atr") or set(),
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: order.append("atr") or set(),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1815,37 +1820,41 @@ def test_submit_sell_preserves_exit_reason_and_clears_only_actual_zero(
     assert runtime.sold_today == {code}
 
 
-def test_atr_exit_marks_sold_and_blocks_same_day_resonance_rebuy(monkeypatch):
+def test_triggered_atr_condition_is_observation_only(monkeypatch):
     code = "510300.XSHG"
     state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 100.0)
     runtime = runtime_state(max_holdings=1, position_states={code: state})
     context = fake_context(positions={code: fake_position(100)})
     current_data = {code: current_record(90.0)}
-
-    def filled_sell(order_code, target_amount):
-        context.portfolio.positions.pop(code)
-        return types.SimpleNamespace(amount=-100, filled=-100)
+    payloads = []
 
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
-    monkeypatch.setattr(strategy, "get_current_data", lambda: current_data, raising=False)
-    monkeypatch.setattr(strategy, "order_target", filled_sell, raising=False)
     monkeypatch.setattr(
-        strategy, "order_target_value",
-        lambda *args: pytest.fail("ATR-sold code must not be bought back today"),
+        strategy, "_emit_structured_log",
+        lambda event, payload: payloads.append((event, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "submit_sell",
+        lambda *args: pytest.fail("ATR observation must not submit a sell"),
         raising=False,
     )
 
-    attempted = strategy.run_atr_exits(context, current_data)
-    buy_results = strategy.run_signal_buys(
-        context, current_data, {code: resonance_snapshot(code)},
+    triggered = strategy.observe_atr_exit_conditions(
+        context, current_data,
     )
 
-    assert attempted == {code}
-    assert runtime.sold_today == {code}
-    assert buy_results == []
+    assert triggered == {code}
+    assert runtime.position_states[code] == state
+    assert state["pending_exit"] is None
+    assert runtime.sold_today == set()
+    assert payloads[0][0] == "atr_check"
+    assert payloads[0][1]["triggered"] is True
+    assert payloads[0][1]["execution_policy"] == "OBSERVE_ONLY"
+    assert payloads[0][1]["order_submitted"] is False
 
 
-def test_pending_retry_then_atr_upgrades_reason_without_duplicate_sell(
+def test_pending_signal_retry_is_not_upgraded_by_atr_observation(
         monkeypatch):
     code = "510300.XSHG"
     state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 100.0)
@@ -1866,15 +1875,17 @@ def test_pending_retry_then_atr_upgrades_reason_without_duplicate_sell(
     monkeypatch.setattr(strategy, "submit_sell", pending_retry, raising=False)
 
     retry_results = strategy.retry_pending_exits(context, current_data)
-    atr_attempts = strategy.run_atr_exits(context, current_data)
+    atr_observations = strategy.observe_atr_exit_conditions(
+        context, current_data,
+    )
 
     assert retry_results == [(code, strategy.OrderOutcome.NOT_FILLED)]
-    assert atr_attempts == set()
+    assert atr_observations == {code}
     assert len(sell_calls) == 1
     assert state["pending_exit"] == {
         "created_date": pd.Timestamp("2021-01-06").date(),
-        "reason": strategy.ExitReason.ATR_EXIT,
-        "trigger_value": 95.0,
+        "reason": strategy.ExitReason.SIGNAL_EXIT,
+        "trigger_value": 99.0,
         "remaining_amount": 100,
     }
 
@@ -1964,35 +1975,54 @@ def test_paused_signal_exit_freezes_pending_and_retries_first_next_session(
     assert runtime.sold_today == {code}
 
 
-def test_atr_pending_exit_overrides_signal_without_second_sell(monkeypatch):
+def test_atr_observation_does_not_preempt_same_day_signal_exit(monkeypatch):
     code = "510300.XSHG"
-    state = strategy.make_position_state(pd.Timestamp("2021-01-05").date(), 2.0, 100.0)
+    state = strategy.make_position_state(pd.Timestamp("2021-01-04").date(), 2.0, 100.0)
     runtime = runtime_state(position_states={code: state})
     context = fake_context(positions={code: fake_position(100)})
     current_data = {code: current_record(90.0)}
     sell_calls = []
 
-    def not_filled_atr(context_arg, order_code, reason, trigger_value):
+    def record_signal_sell(context_arg, order_code, reason, trigger_value):
         sell_calls.append((order_code, reason, trigger_value))
-        if len(sell_calls) > 1:
-            pytest.fail("ATR pending exit must override the ordinary signal sell")
-        return strategy.sync_sell_state_after_order(
-            order_code, strategy.OrderOutcome.NOT_FILLED, reason,
-            context_arg.current_dt.date(), trigger_value, actual_amount=100,
-        )
+        return strategy.OrderOutcome.FILLED
 
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
-    monkeypatch.setattr(strategy, "submit_sell", not_filled_atr, raising=False)
+    monkeypatch.setattr(strategy, "submit_sell", record_signal_sell, raising=False)
 
-    atr_attempts = strategy.run_atr_exits(context, current_data)
+    atr_observations = strategy.observe_atr_exit_conditions(
+        context, current_data,
+    )
     signal_attempts = strategy.run_signal_exits(
         context, current_data,
         {code: resonance_snapshot(code, direction="SELL_TURN")},
     )
 
-    assert atr_attempts == {code}
-    assert signal_attempts == set()
-    assert sell_calls == [(code, strategy.ExitReason.ATR_EXIT, 95.0)]
+    assert atr_observations == {code}
+    assert signal_attempts == {code}
+    assert sell_calls == [(code, strategy.ExitReason.SIGNAL_EXIT, 10.0)]
+
+
+def test_atr_observer_has_no_order_or_exit_state_capability():
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(strategy.observe_atr_exit_conditions)
+    ))
+    called_names = {
+        node.func.id for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    sold_today_mutations = {
+        node.func.attr for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "sold_today"
+    }
+
+    assert {"submit_sell", "set_pending_exit", "order_target"}.isdisjoint(
+        called_names
+    )
+    assert "add" not in sold_today_mutations
 
 
 def test_ordinary_sell_rereads_actual_positions_before_buy_slots(monkeypatch):
@@ -2956,6 +2986,15 @@ def test_structured_logging_contract_contains_required_audit_fields(
     assert order_payload["after_amount"] == 100
     assert order_payload["requested_target"] == 200
     assert order_payload["pending_exit"]["reason"] == "SIGNAL_EXIT"
+    assert order_payload["exit_reason"] is None
+
+    strategy.log_order_transition(
+        snapshot["code"], strategy.OrderSide.SELL,
+        strategy.OrderOutcome.FILLED, 100, 0, 0, None,
+        strategy.ExitReason.SIGNAL_EXIT,
+    )
+    sell_order_payload = json.loads(messages[-1])
+    assert sell_order_payload["exit_reason"] == "SIGNAL_EXIT"
 
     held_state = strategy.make_position_state(
         pd.Timestamp("2021-01-05").date(), 0.5, 10.0,
@@ -3001,7 +3040,8 @@ def test_initialize_emits_version_and_separate_configuration_fingerprints(
     payload = json.loads(messages[-1])
     assert payload["event"] == "strategy_initialized"
     assert payload["version"] == strategy.STRATEGY_VERSION
-    assert payload["build"] == strategy.DEPLOYMENT_BUILD_ID
+    assert payload["build"] == "20260828.4"
+    assert payload["atr_exit_policy"] == "OBSERVE_ONLY"
     assert payload["parameter_fingerprint"]
     assert payload["pool_fingerprint"]
 
@@ -3192,7 +3232,7 @@ def test_empty_no_event_pool_emits_no_resonance_rejection_logs(monkeypatch):
     assert registrations == []
 
 
-def test_atr_check_log_is_observation_only_and_contains_frozen_risk_state(
+def test_atr_check_log_contains_frozen_risk_state_and_observation_policy(
         monkeypatch):
     code = "510300.XSHG"
     state = strategy.make_position_state(
@@ -3212,7 +3252,7 @@ def test_atr_check_log_is_observation_only_and_contains_frozen_risk_state(
         raising=False,
     )
 
-    result = strategy.run_atr_exits(
+    result = strategy.observe_atr_exit_conditions(
         context, {code: current_record(9.9)},
     )
 
@@ -3226,6 +3266,8 @@ def test_atr_check_log_is_observation_only_and_contains_frozen_risk_state(
         "current_price": 9.9,
         "triggered": False,
         "pending_exit": None,
+        "execution_policy": "OBSERVE_ONLY",
+        "order_submitted": False,
     })]
 
 
@@ -3438,7 +3480,9 @@ def test_do_trading_logs_formal_kdj_cross_without_turn_event(monkeypatch):
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
     monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
     monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
-    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: set())
+    monkeypatch.setattr(
+        strategy, "observe_atr_exit_conditions", lambda *args: set(),
+    )
     monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
     monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set())
     monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [])
@@ -3546,7 +3590,7 @@ def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
 
 
 def test_diagnostic_build_id_is_bumped():
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.4"
 
 
 def test_relative_observation_build_and_formal_fingerprints_are_separated(
@@ -3558,8 +3602,9 @@ def test_relative_observation_build_and_formal_fingerprints_are_separated(
     strategy.initialize(types.SimpleNamespace())
 
     payload = json.loads(messages[-1])
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
-    assert payload["build"] == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.4"
+    assert payload["build"] == "20260828.4"
+    assert payload["atr_exit_policy"] == "OBSERVE_ONLY"
     assert payload["parameter_fingerprint"] == "e1227fbd8b4a884e"
     assert payload["pool_fingerprint"] == "9123995edeb1ed84"
     assert payload["event_logic_fingerprint"] == "1c0b8a22f48c97c3"
@@ -3599,7 +3644,8 @@ def test_do_trading_runs_relative_stage_without_skipping_formal_pipeline(
         strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
     )
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
     )
     monkeypatch.setattr(
         strategy, "build_signal_snapshots",
@@ -3915,7 +3961,7 @@ def test_trading_functions_have_no_relative_observation_dependency():
         "relative_observation", "relative_resonance",
     }
     for function in (
-        strategy.run_atr_exits,
+        strategy.observe_atr_exit_conditions,
         strategy.collect_complete_resonance_decisions,
         strategy.collect_buy_decisions,
         strategy.sort_buy_decisions,
@@ -3958,7 +4004,8 @@ def test_relative_snapshot_runtime_error_keeps_formal_trading_pipeline(
         strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
     )
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
     )
     monkeypatch.setattr(
         strategy, "run_signal_exits",
@@ -4031,7 +4078,8 @@ def test_do_trading_normalizes_ordinary_malformed_relative_books_before_formal_f
         strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
     )
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
     )
     monkeypatch.setattr(
         strategy, "build_signal_snapshots", lambda *args: {code: snapshot},
@@ -4090,7 +4138,8 @@ def test_do_trading_rethrows_relative_book_future_data_error_before_formal_flow(
         strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
     )
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
     )
     monkeypatch.setattr(
         strategy, "build_signal_snapshots", lambda *args: {code: snapshot},
@@ -4134,7 +4183,10 @@ def test_relative_observation_log_runtime_error_keeps_formal_trading_pipeline(
     monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
     monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
     monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: calls.append("retry"))
-    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: calls.append("atr"))
+    monkeypatch.setattr(
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
+    )
     monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
     monkeypatch.setattr(
         strategy, "collect_relative_resonance_observations", lambda snapshots: [observation],
@@ -4160,7 +4212,10 @@ def test_malformed_relative_candidate_keeps_formal_trading_pipeline(
     monkeypatch.setattr(strategy, "g", runtime_state(), raising=False)
     monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
     monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: calls.append("retry"))
-    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: calls.append("atr"))
+    monkeypatch.setattr(
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
+    )
     monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
     monkeypatch.setattr(
         strategy, "collect_relative_resonance_observations", lambda snapshots: [object()],
@@ -4194,7 +4249,8 @@ def test_relative_signal_snapshot_log_failure_keeps_formal_pipeline(
         strategy, "retry_pending_exits", lambda *args: calls.append("retry"),
     )
     monkeypatch.setattr(
-        strategy, "run_atr_exits", lambda *args: calls.append("atr"),
+        strategy, "observe_atr_exit_conditions",
+        lambda *args: calls.append("atr"),
     )
     monkeypatch.setattr(
         strategy, "build_signal_snapshots", lambda *args: {code: snapshot},
@@ -4679,7 +4735,9 @@ def test_do_trading_logs_boll_touch_trace_without_event_or_cross(monkeypatch):
     monkeypatch.setattr(strategy, "g", runtime, raising=False)
     monkeypatch.setattr(strategy, "get_current_data", lambda: {}, raising=False)
     monkeypatch.setattr(strategy, "retry_pending_exits", lambda *args: [])
-    monkeypatch.setattr(strategy, "run_atr_exits", lambda *args: set())
+    monkeypatch.setattr(
+        strategy, "observe_atr_exit_conditions", lambda *args: set(),
+    )
     monkeypatch.setattr(strategy, "build_signal_snapshots", lambda *args: {code: snapshot})
     monkeypatch.setattr(strategy, "run_signal_exits", lambda *args: set())
     monkeypatch.setattr(strategy, "run_signal_buys", lambda *args: [])

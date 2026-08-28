@@ -9,8 +9,9 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.4"
+DEPLOYMENT_BUILD_ID = "20260828.4"
 FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
+ATR_EXIT_POLICY = "OBSERVE_ONLY"
 BENCHMARK = "000300.XSHG"
 
 
@@ -277,7 +278,7 @@ def log_resonance_decision(decision, accepted, reason):
 
 
 def log_order_transition(code, side, outcome, before_amount, after_amount,
-                         requested_target, pending_exit):
+                         requested_target, pending_exit, exit_reason=None):
     _emit_structured_log("order_transition", {
         "code": code,
         "side": side,
@@ -286,6 +287,7 @@ def log_order_transition(code, side, outcome, before_amount, after_amount,
         "after_amount": after_amount,
         "requested_target": requested_target,
         "pending_exit": dict(pending_exit) if pending_exit is not None else None,
+        "exit_reason": exit_reason,
     })
 
 
@@ -797,7 +799,7 @@ def do_trading(context):
     reset_daily_state(decision_date, signal_date)
     current_data = get_current_data()
     retry_pending_exits(context, current_data)
-    run_atr_exits(context, current_data)
+    observe_atr_exit_conditions(context, current_data)
     snapshots = build_signal_snapshots(
         signal_date, g.params, decision_date,
     )
@@ -864,6 +866,7 @@ def initialize(context):
             g.params, self_check,
         ),
         "relative_observation_fingerprint": relative_observation_fingerprint(),
+        "atr_exit_policy": ATR_EXIT_POLICY,
         "etf_pool": list(g.etf_pool),
     })
 
@@ -1144,6 +1147,7 @@ def submit_sell(context, code, reason, trigger_value):
     log_order_transition(
         code, OrderSide.SELL, result, before_amount, after_amount, 0,
         state.get("pending_exit") if state is not None else None,
+        reason,
     )
     return result
 
@@ -2223,10 +2227,8 @@ def collect_buy_decisions(snapshots, actual_positions):
     return decisions
 
 
-def run_atr_exits(context, current_data):
-    attempted = set()
-    decision_date = context.current_dt.date()
-    retried_codes = getattr(g, "daily_retried_exits", set())
+def observe_atr_exit_conditions(context, current_data):
+    triggered_codes = set()
     for code in get_actual_positions(context):
         if code in g.sold_today:
             continue
@@ -2255,21 +2257,12 @@ def run_atr_exits(context, current_data):
             "current_price": execution_price,
             "triggered": triggered,
             "pending_exit": state.get("pending_exit"),
+            "execution_policy": ATR_EXIT_POLICY,
+            "order_submitted": False,
         })
-        if (stop_state is None or execution_price is None
-                or execution_price > stop_state["stop_price"]):
-            continue
-        if code in retried_codes:
-            set_pending_exit(
-                state, ExitReason.ATR_EXIT, decision_date,
-                stop_state["stop_price"], get_actual_amount(context, code),
-            )
-            continue
-        submit_sell(
-            context, code, ExitReason.ATR_EXIT, stop_state["stop_price"],
-        )
-        attempted.add(code)
-    return attempted
+        if triggered:
+            triggered_codes.add(code)
+    return triggered_codes
 
 
 def run_signal_exits(context, current_data, snapshots):
