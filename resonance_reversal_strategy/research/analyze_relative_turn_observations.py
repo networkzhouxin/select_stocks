@@ -13,6 +13,7 @@ import sys
 import tempfile
 from collections import Counter
 from datetime import date, datetime, time
+from typing import NamedTuple
 
 
 TRAIN_START = date(2019, 1, 1)
@@ -51,6 +52,33 @@ STRUCTURED_EVENT_FIELD_RE = re.compile(
 )
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _SESSION_MANIFEST_VALIDATION_TOKEN = object()
+MAX_SESSION_MANIFEST_BYTES = 256 * 1024
+
+
+class SessionCalendarMetadata(NamedTuple):
+    schema_version: int
+    market: str
+    coverage_start: str
+    coverage_end: str
+    source: str
+    session_count: int
+
+
+class ValidatedSessionManifest:
+    """An immutable manifest capability that only this module can issue."""
+
+    __slots__ = ("sessions", "sha256", "metadata", "_validation_token")
+
+    def __init__(self, sessions, sha256, metadata, validation_token):
+        if validation_token is not _SESSION_MANIFEST_VALIDATION_TOKEN:
+            raise TypeError("validated session manifest is required")
+        object.__setattr__(self, "sessions", sessions)
+        object.__setattr__(self, "sha256", sha256)
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "_validation_token", validation_token)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("validated session manifest is immutable")
 
 
 def _reject_json_constant(value):
@@ -120,6 +148,25 @@ def _calendar_date(value):
     return date.fromisoformat(value)
 
 
+def _reject_duplicate_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def read_session_calendar_manifest_bytes(path_value):
+    """Read only the bounded manifest bytes needed for its frozen contract."""
+    path = pathlib.Path(path_value)
+    with path.open("rb") as stream:
+        raw_bytes = stream.read(MAX_SESSION_MANIFEST_BYTES + 1)
+    if len(raw_bytes) > MAX_SESSION_MANIFEST_BYTES:
+        raise ValueError("session calendar manifest exceeds maximum size")
+    return raw_bytes
+
+
 def validate_session_calendar_manifest(raw_bytes, expected_sha256):
     """Validate one frozen manifest from its original UTF-8 bytes."""
     if not isinstance(raw_bytes, bytes):
@@ -130,7 +177,10 @@ def validate_session_calendar_manifest(raw_bytes, expected_sha256):
     if actual_sha256.lower() != expected_sha256.lower():
         raise ValueError("session calendar sha256 mismatch")
     try:
-        payload = json.loads(raw_bytes.decode("utf-8"), parse_constant=_reject_json_constant)
+        payload = json.loads(
+            raw_bytes.decode("utf-8"), parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_object,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("invalid session calendar manifest") from exc
     required = {
@@ -163,29 +213,38 @@ def validate_session_calendar_manifest(raw_bytes, expected_sha256):
             raise ValueError("session calendar manifest sessions must be strictly increasing")
         normalized.append(session)
         previous = session
-    return {
-        "_validated_session_manifest": True,
-        "_validation_token": _SESSION_MANIFEST_VALIDATION_TOKEN,
-        "sessions": tuple(normalized),
-        "sha256": actual_sha256,
-        "metadata": {
-            "schema_version": payload["schema_version"],
-            "market": payload["market"],
-            "coverage_start": payload["coverage_start"],
-            "coverage_end": payload["coverage_end"],
-            "source": payload["source"],
-            "session_count": len(normalized),
-        },
-    }
+    return ValidatedSessionManifest(
+        tuple(normalized), actual_sha256,
+        SessionCalendarMetadata(
+            payload["schema_version"], payload["market"],
+            payload["coverage_start"], payload["coverage_end"],
+            payload["source"], len(normalized),
+        ),
+        _SESSION_MANIFEST_VALIDATION_TOKEN,
+    )
 
 
 def _require_validated_session_manifest(manifest):
-    if (type(manifest) is not dict
-            or manifest.get("_validated_session_manifest") is not True
-            or manifest.get("_validation_token") is not _SESSION_MANIFEST_VALIDATION_TOKEN
-            or not isinstance(manifest.get("sessions"), tuple)
-            or not SHA256_RE.fullmatch(manifest.get("sha256", ""))):
+    if (type(manifest) is not ValidatedSessionManifest
+            or manifest._validation_token is not _SESSION_MANIFEST_VALIDATION_TOKEN
+            or type(manifest.sessions) is not tuple
+            or type(manifest.metadata) is not SessionCalendarMetadata
+            or not SHA256_RE.fullmatch(manifest.sha256)):
         raise TypeError("validated session manifest is required")
+    if (manifest.metadata.schema_version != SESSION_MANIFEST_SCHEMA_VERSION
+            or manifest.metadata.market != SESSION_MANIFEST_MARKET
+            or manifest.metadata.coverage_start != TRAIN_START.isoformat()
+            or manifest.metadata.coverage_end != TRAIN_END.isoformat()
+            or manifest.metadata.source != SESSION_MANIFEST_SOURCE
+            or manifest.metadata.session_count != len(manifest.sessions)):
+        raise TypeError("validated session manifest is required")
+    previous = None
+    for session in manifest.sessions:
+        if type(session) is not date or not TRAIN_START <= session <= TRAIN_END:
+            raise TypeError("validated session manifest is required")
+        if previous is not None and session <= previous:
+            raise TypeError("validated session manifest is required")
+        previous = session
     return manifest
 
 
@@ -1250,7 +1309,7 @@ def _audit_outcome_closing_date(record, errors):
 def analyze_records(candidate_records, baseline_records, session_manifest):
     """Validate immutable log contracts and return a deterministic report."""
     session_manifest = _require_validated_session_manifest(session_manifest)
-    session_calendar = session_manifest["sessions"]
+    session_calendar = session_manifest.sessions
     candidate_records = _normalized_timeline(candidate_records)
     baseline_records = _normalized_timeline(baseline_records)
     errors = []
@@ -1467,7 +1526,9 @@ def analyze_records(candidate_records, baseline_records, session_manifest):
         "data_quality_complete": data_quality_complete,
     }
     return {
-        "session_calendar": dict(session_manifest["metadata"], sha256=session_manifest["sha256"]),
+        "session_calendar": dict(
+            session_manifest.metadata._asdict(), sha256=session_manifest.sha256,
+        ),
         "data_quality": {"errors": errors, "relative_fingerprint": RELATIVE_OBSERVATION_FINGERPRINT,
                          "formal_overlap_count": formal_overlap_count,
                          "missing_outcome_count": missing_outcome_count,
@@ -1500,11 +1561,18 @@ def _normalized_input_paths(paths):
 
 def _output_conflicts_with_input(output_path, input_paths):
     for input_path in input_paths:
-        if output_path == input_path:
-            return True
-        if output_path.exists() and os.path.samefile(output_path, input_path):
+        if _paths_alias(output_path, input_path):
             return True
     return False
+
+
+def _paths_alias(left_path, right_path):
+    if left_path == right_path:
+        return True
+    try:
+        return os.path.samefile(left_path, right_path)
+    except OSError:
+        return False
 
 
 def main(argv=None):
@@ -1524,7 +1592,8 @@ def main(argv=None):
         if not manifest_path.is_file():
             raise ValueError("session calendar manifest must be a file: %s" % manifest_path)
         session_manifest = validate_session_calendar_manifest(
-            manifest_path.read_bytes(), args.session_calendar_sha256,
+            read_session_calendar_manifest_bytes(manifest_path),
+            args.session_calendar_sha256,
         )
         if not args.candidate_log:
             raise ValueError("candidate log is required")
@@ -1534,6 +1603,11 @@ def main(argv=None):
             raise ValueError("output is required")
         candidate_paths = _normalized_input_paths(args.candidate_log)
         baseline_paths = _normalized_input_paths(args.baseline_log)
+        if any(_paths_alias(manifest_path, path) for path in candidate_paths + baseline_paths):
+            raise ValueError("session calendar must not match an input log")
+        if any(_paths_alias(candidate_path, baseline_path)
+               for candidate_path in candidate_paths for baseline_path in baseline_paths):
+            raise ValueError("candidate and baseline logs must be distinct")
         output_path = pathlib.Path(args.output).expanduser().resolve(strict=False)
         if _output_conflicts_with_input(
                 output_path, candidate_paths + baseline_paths + [manifest_path]):

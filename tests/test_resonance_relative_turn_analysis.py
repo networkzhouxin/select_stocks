@@ -734,7 +734,7 @@ def test_overlap_invalidates_id_when_any_registration_replica_is_invalid():
     for record in baseline:
         record["_record_namespace"] = analyzer._classify_record_namespace(record, direct_errors)
     _, _, _, canonical = analyzer._validate_baseline(
-        baseline, direct_errors, True, _fixture_session_manifest()["sessions"],
+        baseline, direct_errors, True, _fixture_session_manifest().sessions,
     )
 
     assert any("formal registration log timestamp before 09:35" in error
@@ -1952,8 +1952,8 @@ def test_session_manifest_raw_hash_schema_and_explicit_analysis_contract():
         make_candidate_records(), make_baseline_records(), manifest,
     )
 
-    assert manifest["sha256"] == digest.lower()
-    assert manifest["sessions"] == tuple(
+    assert manifest.sha256 == digest.lower()
+    assert manifest.sessions == tuple(
         date.fromisoformat(value) for value in json.loads(raw)["sessions"]
     )
     assert report["session_calendar"]["sha256"] == digest.lower()
@@ -1962,8 +1962,8 @@ def test_session_manifest_raw_hash_schema_and_explicit_analysis_contract():
     with pytest.raises(TypeError):
         _RAW_ANALYZE_RECORDS(
             make_candidate_records(), make_baseline_records(),
-            {"_validated_session_manifest": True, "sessions": manifest["sessions"],
-             "sha256": manifest["sha256"], "metadata": manifest["metadata"]},
+            {"sessions": manifest.sessions, "sha256": manifest.sha256,
+             "metadata": manifest.metadata},
         )
 
 
@@ -2141,6 +2141,127 @@ def test_cli_rejects_hardlink_and_symlink_output_aliases_of_manifest(tmp_path, c
     assert status == 2
     assert capsys.readouterr().err == "input error: output path must not match an input log\n"
     assert manifest_path.read_bytes() == manifest_before
+
+
+def test_validated_manifest_is_immutable_capability_not_a_mutable_mapping():
+    raw = _session_manifest_bytes()
+    manifest = analyzer.validate_session_calendar_manifest(
+        raw, hashlib.sha256(raw).hexdigest(),
+    )
+    original_sessions = manifest.sessions
+    original_hash = manifest.sha256
+
+    with pytest.raises((AttributeError, TypeError)):
+        manifest.sessions += (date(2021, 12, 30),)
+    with pytest.raises((AttributeError, TypeError)):
+        manifest.sha256 = "0" * 64
+    with pytest.raises((AttributeError, TypeError)):
+        manifest.metadata.market = "XSHE"
+    with pytest.raises((AttributeError, TypeError)):
+        manifest._replace(sha256="0" * 64)
+
+    with pytest.raises(TypeError):
+        analyzer.ValidatedSessionManifest(
+            manifest.sessions, "0" * 64, manifest.metadata, object(),
+        )
+    assert manifest.sessions == original_sessions
+    assert manifest.sha256 == original_hash
+
+
+def test_manifest_loader_rejects_duplicate_json_keys_at_every_object_depth():
+    raw = (
+        b'{"schema_version":1,"schema_version":1,"market":"XSHG",'
+        b'"coverage_start":"2019-01-01","coverage_end":"2021-12-31",'
+        b'"source":"JoinQuant get_all_trade_days","sessions":["2019-01-02"]}'
+    )
+    nested = (
+        b'{"schema_version":1,"market":"XSHG",'
+        b'"coverage_start":"2019-01-01","coverage_end":"2021-12-31",'
+        b'"source":"JoinQuant get_all_trade_days","sessions":["2019-01-02"],'
+        b'"diagnostic":{"key":1,"key":1}}'
+    )
+
+    for payload in (raw, nested):
+        with pytest.raises(ValueError, match="invalid session calendar manifest"):
+            analyzer.validate_session_calendar_manifest(
+                payload, hashlib.sha256(payload).hexdigest(),
+            )
+
+
+def test_bounded_manifest_reader_rejects_eight_mebibytes_before_hash_or_parse(tmp_path):
+    manifest_path = tmp_path / "oversized.json"
+    manifest_path.write_bytes(b" " * (8 * 1024 * 1024))
+
+    with pytest.raises(ValueError, match="maximum size"):
+        analyzer.read_session_calendar_manifest_bytes(manifest_path)
+
+
+def test_cli_rejects_manifest_input_aliases_and_same_candidate_baseline_before_log_read(
+        tmp_path, capsys):
+    manifest_path = tmp_path / "calendar.json"
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    raw = _session_manifest_bytes()
+    manifest_path.write_bytes(raw)
+    candidate_path.write_text("candidate", encoding="utf-8")
+    baseline_path.write_text("baseline", encoding="utf-8")
+    manifest_before = manifest_path.read_bytes()
+    candidate_before = candidate_path.read_bytes()
+    baseline_before = baseline_path.read_bytes()
+    common = ["--session-calendar", str(manifest_path),
+              "--session-calendar-sha256", hashlib.sha256(raw).hexdigest(),
+              "--output", str(output_path)]
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(manifest_path), "--baseline-log", str(baseline_path), *common,
+    ])
+    assert status == 2
+    assert capsys.readouterr().err == "input error: session calendar must not match an input log\n"
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(candidate_path), "--baseline-log", str(candidate_path), *common,
+    ])
+    assert status == 2
+    assert capsys.readouterr().err == "input error: candidate and baseline logs must be distinct\n"
+    assert manifest_path.read_bytes() == manifest_before
+    assert candidate_path.read_bytes() == candidate_before
+    assert baseline_path.read_bytes() == baseline_before
+    assert not output_path.exists()
+
+
+def test_cli_rejects_hardlinked_manifest_and_cross_role_input_aliases(tmp_path, capsys):
+    manifest_path = tmp_path / "calendar.json"
+    candidate_path = tmp_path / "candidate.log"
+    baseline_path = tmp_path / "baseline.log"
+    output_path = tmp_path / "report.json"
+    raw = _session_manifest_bytes()
+    manifest_path.write_bytes(raw)
+    candidate_path.write_text("candidate", encoding="utf-8")
+    baseline_path.write_text("baseline", encoding="utf-8")
+    manifest_alias = tmp_path / "calendar-alias.json"
+    candidate_alias = tmp_path / "candidate-alias.log"
+    os.link(manifest_path, manifest_alias)
+    os.link(candidate_path, candidate_alias)
+    common = ["--session-calendar", str(manifest_path),
+              "--session-calendar-sha256", hashlib.sha256(raw).hexdigest(),
+              "--output", str(output_path)]
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(manifest_alias), "--baseline-log", str(baseline_path), *common,
+    ])
+    assert status == 2
+    assert capsys.readouterr().err == "input error: session calendar must not match an input log\n"
+
+    status = _RAW_MAIN([
+        "--candidate-log", str(candidate_path), "--baseline-log", str(candidate_alias), *common,
+    ])
+    assert status == 2
+    assert capsys.readouterr().err == "input error: candidate and baseline logs must be distinct\n"
+    assert manifest_path.read_bytes() == raw
+    assert candidate_path.read_text(encoding="utf-8") == "candidate"
+    assert baseline_path.read_text(encoding="utf-8") == "baseline"
+    assert not output_path.exists()
 
 
 @pytest.mark.parametrize("field,value,fragment", [
