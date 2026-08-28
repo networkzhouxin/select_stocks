@@ -64,7 +64,7 @@ class SessionCalendarMetadata(NamedTuple):
     session_count: int
 
 
-def _manifest_capability_factory():
+def _build_session_manifest_api():
     issued_snapshots = weakref.WeakKeyDictionary()
 
     class ValidatedSessionManifest:
@@ -82,6 +82,9 @@ def _manifest_capability_factory():
             raise AttributeError("validated session manifest is immutable")
 
     def issue(sessions, sha256, metadata):
+        if (type(sessions) is not tuple or type(sha256) is not str
+                or type(metadata) is not SessionCalendarMetadata):
+            raise TypeError("validated session manifest is required")
         capability = object.__new__(ValidatedSessionManifest)
         object.__setattr__(capability, "sessions", sessions)
         object.__setattr__(capability, "sha256", sha256)
@@ -89,24 +92,122 @@ def _manifest_capability_factory():
         issued_snapshots[capability] = (sessions, sha256, metadata)
         return capability
 
-    def is_issued_snapshot(capability):
+    def has_exact_field_types(capability):
         if type(capability) is not ValidatedSessionManifest:
+            return False
+        try:
+            sessions = capability.sessions
+            sha256 = capability.sha256
+            metadata = capability.metadata
+        except AttributeError:
+            return False
+        if (type(sessions) is not tuple or type(sha256) is not str
+                or type(metadata) is not SessionCalendarMetadata
+                or type(metadata.schema_version) is not int
+                or type(metadata.market) is not str
+                or type(metadata.coverage_start) is not str
+                or type(metadata.coverage_end) is not str
+                or type(metadata.source) is not str
+                or type(metadata.session_count) is not int):
+            return False
+        return all(type(session) is date for session in sessions)
+
+    def is_issued_snapshot(capability):
+        if not has_exact_field_types(capability):
             return False
         snapshot = issued_snapshots.get(capability)
         if snapshot is None:
             return False
+        return snapshot == (
+            capability.sessions, capability.sha256, capability.metadata,
+        )
+
+    def _validate_session_manifest_bytes(raw_bytes, expected_sha256):
+        """Validate one frozen manifest from its original UTF-8 bytes."""
+        if type(raw_bytes) is not bytes:
+            raise ValueError("session calendar manifest must be bytes")
+        if type(expected_sha256) is not str or not SHA256_RE.fullmatch(expected_sha256):
+            raise ValueError("session calendar sha256 must be 64 hexadecimal characters")
+        actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_sha256.lower() != expected_sha256.lower():
+            raise ValueError("session calendar sha256 mismatch")
         try:
-            return snapshot == (
-                capability.sessions, capability.sha256, capability.metadata,
+            payload = json.loads(
+                raw_bytes.decode("utf-8"), parse_constant=_reject_json_constant,
+                object_pairs_hook=_reject_duplicate_json_object,
             )
-        except AttributeError:
-            return False
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("invalid session calendar manifest") from exc
+        required = {
+            "schema_version", "market", "coverage_start", "coverage_end", "source", "sessions",
+        }
+        if type(payload) is not dict or set(payload) != required:
+            raise ValueError("invalid session calendar manifest schema")
+        if (type(payload["schema_version"]) is not int
+                or type(payload["market"]) is not str
+                or type(payload["coverage_start"]) is not str
+                or type(payload["coverage_end"]) is not str
+                or type(payload["source"]) is not str
+                or payload["schema_version"] != SESSION_MANIFEST_SCHEMA_VERSION
+                or payload["market"] != SESSION_MANIFEST_MARKET
+                or payload["source"] != SESSION_MANIFEST_SOURCE
+                or payload["coverage_start"] != TRAIN_START.isoformat()
+                or payload["coverage_end"] != TRAIN_END.isoformat()):
+            raise ValueError("invalid session calendar manifest schema")
+        sessions = payload["sessions"]
+        if type(sessions) is not list or not sessions:
+            raise ValueError("invalid session calendar manifest sessions")
+        normalized = []
+        previous = None
+        for value in sessions:
+            if type(value) is not str or not _valid_text(value):
+                raise ValueError("invalid session calendar manifest session")
+            try:
+                session = _calendar_date(value)
+            except ValueError as exc:
+                raise ValueError("invalid session calendar manifest session") from exc
+            if not TRAIN_START <= session <= TRAIN_END:
+                raise ValueError("session calendar manifest session outside coverage")
+            if previous is not None and session <= previous:
+                raise ValueError("session calendar manifest sessions must be strictly increasing")
+            normalized.append(session)
+            previous = session
+        return issue(
+            tuple(normalized), str(actual_sha256),
+            SessionCalendarMetadata(
+                int(payload["schema_version"]), str(payload["market"]),
+                str(payload["coverage_start"]), str(payload["coverage_end"]),
+                str(payload["source"]), int(len(normalized)),
+            ),
+        )
 
-    return ValidatedSessionManifest, issue, is_issued_snapshot
+    def require(manifest):
+        if (not is_issued_snapshot(manifest)
+                or not SHA256_RE.fullmatch(manifest.sha256)):
+            raise TypeError("validated session manifest is required")
+        if (manifest.metadata.schema_version != SESSION_MANIFEST_SCHEMA_VERSION
+                or manifest.metadata.market != SESSION_MANIFEST_MARKET
+                or manifest.metadata.coverage_start != TRAIN_START.isoformat()
+                or manifest.metadata.coverage_end != TRAIN_END.isoformat()
+                or manifest.metadata.source != SESSION_MANIFEST_SOURCE
+                or manifest.metadata.session_count != len(manifest.sessions)):
+            raise TypeError("validated session manifest is required")
+        previous = None
+        for session in manifest.sessions:
+            if not TRAIN_START <= session <= TRAIN_END:
+                raise TypeError("validated session manifest is required")
+            if previous is not None and session <= previous:
+                raise TypeError("validated session manifest is required")
+            previous = session
+        return manifest
+
+    return _validate_session_manifest_bytes, require
 
 
-(ValidatedSessionManifest, _issue_session_manifest_capability,
- _is_issued_session_manifest_capability) = _manifest_capability_factory()
+validate_session_calendar_manifest, _require_validated_session_manifest = (
+    _build_session_manifest_api()
+)
+del _build_session_manifest_api
 
 
 def _reject_json_constant(value):
@@ -193,85 +294,6 @@ def read_session_calendar_manifest_bytes(path_value):
     if len(raw_bytes) > MAX_SESSION_MANIFEST_BYTES:
         raise ValueError("session calendar manifest exceeds maximum size")
     return raw_bytes
-
-
-def validate_session_calendar_manifest(raw_bytes, expected_sha256):
-    """Validate one frozen manifest from its original UTF-8 bytes."""
-    if type(raw_bytes) is not bytes:
-        raise ValueError("session calendar manifest must be bytes")
-    if type(expected_sha256) is not str or not SHA256_RE.fullmatch(expected_sha256):
-        raise ValueError("session calendar sha256 must be 64 hexadecimal characters")
-    actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
-    if actual_sha256.lower() != expected_sha256.lower():
-        raise ValueError("session calendar sha256 mismatch")
-    try:
-        payload = json.loads(
-            raw_bytes.decode("utf-8"), parse_constant=_reject_json_constant,
-            object_pairs_hook=_reject_duplicate_json_object,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        raise ValueError("invalid session calendar manifest") from exc
-    required = {
-        "schema_version", "market", "coverage_start", "coverage_end", "source", "sessions",
-    }
-    if type(payload) is not dict or set(payload) != required:
-        raise ValueError("invalid session calendar manifest schema")
-    if (type(payload["schema_version"]) is not int
-            or payload["schema_version"] != SESSION_MANIFEST_SCHEMA_VERSION
-            or payload["market"] != SESSION_MANIFEST_MARKET
-            or payload["source"] != SESSION_MANIFEST_SOURCE
-            or payload["coverage_start"] != TRAIN_START.isoformat()
-            or payload["coverage_end"] != TRAIN_END.isoformat()):
-        raise ValueError("invalid session calendar manifest schema")
-    sessions = payload["sessions"]
-    if not isinstance(sessions, list) or not sessions:
-        raise ValueError("invalid session calendar manifest sessions")
-    normalized = []
-    previous = None
-    for value in sessions:
-        if not _valid_text(value):
-            raise ValueError("invalid session calendar manifest session")
-        try:
-            session = _calendar_date(value)
-        except ValueError as exc:
-            raise ValueError("invalid session calendar manifest session") from exc
-        if not TRAIN_START <= session <= TRAIN_END:
-            raise ValueError("session calendar manifest session outside coverage")
-        if previous is not None and session <= previous:
-            raise ValueError("session calendar manifest sessions must be strictly increasing")
-        normalized.append(session)
-        previous = session
-    return _issue_session_manifest_capability(
-        tuple(normalized), actual_sha256,
-        SessionCalendarMetadata(
-            payload["schema_version"], payload["market"],
-            payload["coverage_start"], payload["coverage_end"],
-            payload["source"], len(normalized),
-        ),
-    )
-
-
-def _require_validated_session_manifest(manifest):
-    if (not _is_issued_session_manifest_capability(manifest)
-            or type(manifest.sessions) is not tuple
-            or type(manifest.metadata) is not SessionCalendarMetadata
-            or not SHA256_RE.fullmatch(manifest.sha256)):
-        raise TypeError("validated session manifest is required")
-    if (manifest.metadata.schema_version != SESSION_MANIFEST_SCHEMA_VERSION
-            or manifest.metadata.market != SESSION_MANIFEST_MARKET
-            or manifest.metadata.coverage_start != TRAIN_START.isoformat()
-            or manifest.metadata.coverage_end != TRAIN_END.isoformat()
-            or manifest.metadata.source != SESSION_MANIFEST_SOURCE
-            or manifest.metadata.session_count != len(manifest.sessions)):
-        raise TypeError("validated session manifest is required")
-    previous = None
-    for session in manifest.sessions:
-        if type(session) is not date or not TRAIN_START <= session <= TRAIN_END:
-            raise TypeError("validated session manifest is required")
-        if previous is not None and session <= previous:
-            raise TypeError("validated session manifest is required")
-        previous = session
-    return manifest
 
 
 def _is_training_date(value, label, errors):

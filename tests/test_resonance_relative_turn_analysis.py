@@ -2163,7 +2163,7 @@ def test_validated_manifest_is_immutable_capability_not_a_mutable_mapping():
         manifest._replace(sha256="0" * 64)
 
     with pytest.raises(TypeError):
-        analyzer.ValidatedSessionManifest(
+        type(manifest)(
             manifest.sessions, "0" * 64, manifest.metadata, object(),
         )
     assert manifest.sessions == original_sessions
@@ -2214,6 +2214,81 @@ def test_manifest_validator_rejects_bytes_subclass_before_hash_or_decode():
         analyzer.validate_session_calendar_manifest(
             RewritingBytes(raw), hashlib.sha256(raw).hexdigest(),
         )
+
+
+def test_manifest_issuer_is_not_exposed_and_exact_builtin_fields_are_required():
+    class EqualText(str):
+        def __eq__(self, other):
+            return True
+
+    class EqualInteger(int):
+        def __eq__(self, other):
+            return True
+
+    class EqualTuple(tuple):
+        def __eq__(self, other):
+            return True
+
+    class EqualDate(date):
+        def __eq__(self, other):
+            return True
+
+    raw = _session_manifest_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    legal = analyzer.validate_session_calendar_manifest(raw, digest)
+
+    assert not any(
+        "issue" in name.lower() or "sign" in name.lower()
+        for name in vars(analyzer)
+    )
+
+    contaminated = []
+    hash_subclass = analyzer.validate_session_calendar_manifest(raw, digest)
+    object.__setattr__(hash_subclass, "sha256", EqualText(hash_subclass.sha256))
+    contaminated.append(hash_subclass)
+
+    metadata_text_subclass = analyzer.validate_session_calendar_manifest(raw, digest)
+    object.__setattr__(
+        metadata_text_subclass, "metadata", type(legal.metadata)(
+            legal.metadata.schema_version, EqualText(legal.metadata.market),
+            legal.metadata.coverage_start, legal.metadata.coverage_end,
+            legal.metadata.source, legal.metadata.session_count,
+        ),
+    )
+    contaminated.append(metadata_text_subclass)
+
+    integer_subclass = analyzer.validate_session_calendar_manifest(raw, digest)
+    object.__setattr__(
+        integer_subclass, "metadata", type(legal.metadata)(
+            EqualInteger(legal.metadata.schema_version), legal.metadata.market,
+            legal.metadata.coverage_start, legal.metadata.coverage_end,
+            legal.metadata.source, legal.metadata.session_count,
+        ),
+    )
+    contaminated.append(integer_subclass)
+
+    tuple_subclass = analyzer.validate_session_calendar_manifest(raw, digest)
+    object.__setattr__(tuple_subclass, "sessions", EqualTuple(tuple_subclass.sessions))
+    contaminated.append(tuple_subclass)
+
+    date_subclass = analyzer.validate_session_calendar_manifest(raw, digest)
+    first = date_subclass.sessions[0]
+    object.__setattr__(
+        date_subclass, "sessions", (
+            EqualDate(first.year, first.month, first.day),
+        ) + date_subclass.sessions[1:],
+    )
+    contaminated.append(date_subclass)
+
+    for manifest in contaminated:
+        with pytest.raises(TypeError):
+            _RAW_ANALYZE_RECORDS(
+                make_candidate_records(), make_baseline_records(), manifest,
+            )
+
+    assert _RAW_ANALYZE_RECORDS(
+        make_candidate_records(), make_baseline_records(), legal,
+    )["session_calendar"]["sha256"] == digest
 
 
 def test_manifest_loader_rejects_duplicate_json_keys_at_every_object_depth():
