@@ -3546,7 +3546,7 @@ def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
 
 
 def test_diagnostic_build_id_is_bumped():
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.2"
 
 
 def test_relative_observation_build_and_formal_fingerprints_are_separated(
@@ -3558,13 +3558,16 @@ def test_relative_observation_build_and_formal_fingerprints_are_separated(
     strategy.initialize(types.SimpleNamespace())
 
     payload = json.loads(messages[-1])
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
-    assert payload["build"] == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.2"
+    assert payload["build"] == "20260828.2"
     assert payload["parameter_fingerprint"] == "e1227fbd8b4a884e"
     assert payload["pool_fingerprint"] == "9123995edeb1ed84"
     assert payload["event_logic_fingerprint"] == "1c0b8a22f48c97c3"
     assert payload["relative_observation_fingerprint"] == (
         strategy.relative_observation_fingerprint()
+    )
+    assert payload["relative_buy_candidate_fingerprint"] == (
+        strategy.relative_buy_candidate_fingerprint()
     )
 
 
@@ -3967,7 +3970,7 @@ def test_relative_snapshot_runtime_error_keeps_formal_trading_pipeline(
     )
     monkeypatch.setattr(
         strategy, "run_signal_buys",
-        lambda context, current_data, snapshots: calls.append("buys")
+        lambda context, current_data, snapshots, relative=(): calls.append("buys")
         or snapshots,
     )
 
@@ -4175,11 +4178,15 @@ def test_malformed_relative_candidate_keeps_formal_trading_pipeline(
     strategy.do_trading(fake_context())
 
     assert calls == ["retry", "atr", "exits", "buys"]
-    assert logs[-1] == ("relative_observation_registration", {
+    assert ("relative_observation_registration", {
         "relative_observation_id": None,
         "code": None,
         "reason": "RELATIVE_OBSERVATION_REGISTRATION_FAILED",
         "error_type": "TypeError",
+    }) in logs
+    assert logs[-1] == ("relative_buy_preparation", {
+        "reason": "RELATIVE_BUY_PREPARATION_FAILED",
+        "error_type": "AttributeError",
     })
 
 
@@ -4829,6 +4836,186 @@ def test_poisoned_any_preserves_boll_buy_trace_and_active_event(monkeypatch):
     assert event_book["active"]["BOLL"]["direction"] is (
         strategy.TurnDirection.BUY_TURN
     )
+
+
+def relative_buy_observation(code="510300.XSHG",
+                             direction=None,
+                             branch="HARD_BOLL_SOFT_OSC",
+                             supporters=("BOLL", "RSI")):
+    direction = direction or strategy.TurnDirection.BUY_TURN
+    return {
+        "relative_observation_id": "RELATIVE:" + code,
+        "observation_kind": "RELATIVE_RESONANCE",
+        "branch": branch,
+        "code": code,
+        "direction": direction,
+        "signal_date": date(2021, 1, 5),
+        "supporters": tuple(supporters),
+        "expires_date": date(2021, 1, 6),
+    }
+
+
+def test_relative_trade_candidate_accepts_only_hard_boll_buy():
+    snapshot = resonance_snapshot("510300.XSHG")
+    approved = relative_buy_observation(supporters=("BOLL", "KDJ"))
+    soft_all = relative_buy_observation(branch="SOFT_ALL_THREE")
+    sell = relative_buy_observation(
+        direction=strategy.TurnDirection.SELL_TURN,
+    )
+
+    decision = strategy.build_relative_buy_backfill_decision(
+        approved, snapshot,
+    )
+    assert decision["trade_source"] == "RELATIVE_BUY_BACKFILL"
+    assert strategy.build_relative_buy_backfill_decision(
+        soft_all, snapshot,
+    ) is None
+    assert strategy.build_relative_buy_backfill_decision(
+        sell, snapshot,
+    ) is None
+    assert not set(decision) & {
+        "outcomes", "hit_rate", "mean", "median", "q1",
+    }
+
+
+def test_relative_buy_sort_is_support_count_then_code():
+    decisions = []
+    for code, supporters in (
+            ("B.XSHG", ("BOLL", "KDJ")),
+            ("C.XSHG", ("BOLL", "KDJ", "RSI")),
+            ("A.XSHG", ("BOLL", "KDJ", "RSI"))):
+        decisions.append(strategy.build_relative_buy_backfill_decision(
+            relative_buy_observation(code, supporters=supporters),
+            resonance_snapshot(code),
+        ))
+
+    assert [item["code"] for item in
+            strategy.sort_relative_buy_backfill_decisions(decisions)] == [
+        "A.XSHG", "C.XSHG", "B.XSHG",
+    ]
+
+
+def test_relative_buy_preparation_isolates_ordinary_error(monkeypatch):
+    monkeypatch.setattr(
+        strategy, "collect_relative_buy_backfill_decisions",
+        lambda snapshots: (_ for _ in ()).throw(RuntimeError("relative")),
+    )
+    assert strategy.prepare_relative_buy_backfill_decisions({}) == ()
+
+
+def test_relative_buy_preparation_propagates_future_error(monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    expected = FutureDataError("future")
+    monkeypatch.setattr(
+        strategy, "collect_relative_buy_backfill_decisions",
+        lambda snapshots: (_ for _ in ()).throw(expected),
+    )
+    with pytest.raises(FutureDataError) as raised:
+        strategy.prepare_relative_buy_backfill_decisions({})
+    assert raised.value is expected
+
+
+def relative_buy_decision_fixture(code):
+    return strategy.build_relative_buy_backfill_decision(
+        relative_buy_observation(code), resonance_snapshot(code),
+    )
+
+
+def test_formal_queue_stays_ahead_of_relative_queue(monkeypatch):
+    formal_snapshot = resonance_snapshot("FORMAL.XSHG")
+    formal = strategy.build_resonance_decision(
+        "FORMAL.XSHG", strategy.TurnDirection.BUY_TURN,
+        formal_snapshot["event_book"], formal_snapshot["signal_date"],
+    )
+    relative = relative_buy_decision_fixture("RELATIVE.XSHG")
+    snapshots = {
+        "FORMAL.XSHG": formal_snapshot,
+        "RELATIVE.XSHG": resonance_snapshot("RELATIVE.XSHG"),
+    }
+    runtime = runtime_state(max_holdings=1)
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "collect_buy_decisions", lambda *args: [formal],
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context, code, snapshot, decision: submitted.append(code)
+        or strategy.OrderOutcome.FILLED,
+    )
+
+    strategy.run_signal_buys(
+        fake_context(),
+        {code: current_record() for code in snapshots},
+        snapshots, (relative,),
+    )
+
+    assert submitted == ["FORMAL.XSHG"]
+
+
+def test_paused_relative_candidate_backfills_next_relative(monkeypatch):
+    first = relative_buy_decision_fixture("A.XSHG")
+    second = relative_buy_decision_fixture("B.XSHG")
+    snapshots = {
+        code: resonance_snapshot(code) for code in ("A.XSHG", "B.XSHG")
+    }
+    runtime = runtime_state(max_holdings=1)
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "collect_buy_decisions", lambda *args: [],
+    )
+    monkeypatch.setattr(
+        strategy, "get_tradability",
+        lambda current, code: (
+            strategy.Tradability.PAUSED
+            if code == "A.XSHG" else strategy.Tradability.TRADEABLE
+        ),
+    )
+    monkeypatch.setattr(
+        strategy, "submit_buy",
+        lambda context, code, snapshot, decision: submitted.append(code)
+        or strategy.OrderOutcome.FILLED,
+    )
+
+    strategy.run_signal_buys(
+        fake_context(),
+        {code: current_record() for code in snapshots},
+        snapshots, (first, second),
+    )
+
+    assert submitted == ["B.XSHG"]
+
+
+def test_relative_buy_log_never_claims_sell_or_soft_all_three(monkeypatch):
+    messages = []
+    monkeypatch.setattr(
+        strategy, "log",
+        types.SimpleNamespace(info=lambda message: messages.append(message)),
+        raising=False,
+    )
+    decision = relative_buy_decision_fixture("510300.XSHG")
+
+    strategy.log_relative_buy_decision(
+        decision, rank=1, accepted=True, reason="BUY_ATTEMPT",
+    )
+
+    payload = json.loads(messages[0])
+    assert payload["event"] == "relative_buy_decision"
+    assert payload["direction"] == "BUY_TURN"
+    assert payload["branch"] == "HARD_BOLL_SOFT_OSC"
+
+
+def test_relative_buy_candidate_build_preserves_protected_rules():
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.2"
+    params = strategy.get_default_params()
+    assert params["atr_multiplier"] == pytest.approx(2.5)
+    assert params["stop_floor"] == pytest.approx(0.05)
+    assert params["stop_cap"] == pytest.approx(0.15)
+    assert params["max_holdings"] == 3
+    assert params["target_exposure"] == pytest.approx(0.95)
 
 
 def test_poisoned_any_preserves_resonance_conflict_and_freshness(monkeypatch):

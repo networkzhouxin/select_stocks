@@ -9,7 +9,7 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.4"
+DEPLOYMENT_BUILD_ID = "20260828.2"
 FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
 BENCHMARK = "000300.XSHG"
 
@@ -724,6 +724,82 @@ def run_relative_observation_stage(snapshots):
     return None
 
 
+def build_relative_buy_backfill_decision(observation, snapshot):
+    if observation.get("direction") is not TurnDirection.BUY_TURN:
+        return None
+    if observation.get("branch") != "HARD_BOLL_SOFT_OSC":
+        return None
+    if not is_finite_positive(snapshot.get("entry_atr")):
+        return None
+    supporters = tuple(observation["supporters"])
+    return {
+        "resonance_id": observation["relative_observation_id"],
+        "trade_source": "RELATIVE_BUY_BACKFILL",
+        "branch": observation["branch"],
+        "code": observation["code"],
+        "direction": observation["direction"],
+        "signal_date": observation["signal_date"],
+        "supporters": supporters,
+        "support_count": len(supporters),
+        "expires_date": observation["expires_date"],
+    }
+
+
+def sort_relative_buy_backfill_decisions(decisions):
+    return sorted(decisions, key=lambda item: (
+        -item["support_count"], item["code"],
+    ))
+
+
+def collect_relative_buy_backfill_decisions(snapshots):
+    decisions = []
+    for observation in collect_relative_resonance_observations(snapshots):
+        snapshot = snapshots.get(observation.get("code"))
+        if snapshot is None:
+            continue
+        decision = build_relative_buy_backfill_decision(
+            observation, snapshot,
+        )
+        if decision is not None:
+            decisions.append(decision)
+    return tuple(sort_relative_buy_backfill_decisions(decisions))
+
+
+def prepare_relative_buy_backfill_decisions(snapshots):
+    try:
+        return collect_relative_buy_backfill_decisions(snapshots)
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _safe_relative_observation_diagnostic(
+            "relative_buy_preparation", {
+                "reason": "RELATIVE_BUY_PREPARATION_FAILED",
+                "error_type": type(error).__name__,
+            },
+        )
+        return ()
+
+
+def log_relative_buy_decision(decision, rank, accepted, reason):
+    try:
+        _emit_structured_log("relative_buy_decision", {
+            "trade_source": decision["trade_source"],
+            "branch": decision["branch"],
+            "code": decision["code"],
+            "direction": decision["direction"],
+            "signal_date": decision["signal_date"],
+            "supporters": decision["supporters"],
+            "support_count": decision["support_count"],
+            "rank": rank,
+            "accepted": bool(accepted),
+            "reason": reason,
+            "resonance_id": decision["resonance_id"],
+        })
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+
+
 def _normalize_relative_event_book_for_snapshot(snapshot):
     relative_book = snapshot.get("relative_event_book")
     if relative_book is None:
@@ -818,8 +894,13 @@ def do_trading(context):
                 )):
             log_signal_snapshot(dict(snapshot, decision_date=decision_date))
     run_relative_observation_stage(snapshots)
+    relative_backfill_decisions = (
+        prepare_relative_buy_backfill_decisions(snapshots)
+    )
     run_signal_exits(context, current_data, snapshots)
-    run_signal_buys(context, current_data, snapshots)
+    run_signal_buys(
+        context, current_data, snapshots, relative_backfill_decisions,
+    )
 
 
 def after_close(context):
@@ -864,6 +945,9 @@ def initialize(context):
             g.params, self_check,
         ),
         "relative_observation_fingerprint": relative_observation_fingerprint(),
+        "relative_buy_candidate_fingerprint": (
+            relative_buy_candidate_fingerprint()
+        ),
         "etf_pool": list(g.etf_pool),
     })
 
@@ -1687,6 +1771,19 @@ def relative_observation_fingerprint():
     return _value_fingerprint(relative_observation_logic_contract())
 
 
+def relative_buy_candidate_logic_contract():
+    return {
+        "direction": "BUY_TURN",
+        "branch": "HARD_BOLL_SOFT_OSC",
+        "priority": "AFTER_FORMAL",
+        "sort": ("SUPPORT_COUNT_DESC", "CODE_ASC"),
+    }
+
+
+def relative_buy_candidate_fingerprint():
+    return _value_fingerprint(relative_buy_candidate_logic_contract())
+
+
 def make_turn_event(indicator, direction, event_date, expires_date,
                     trigger_values, reference_extreme=None):
     return {
@@ -2331,7 +2428,65 @@ def run_signal_exits(context, current_data, snapshots):
     return attempted
 
 
-def run_signal_buys(context, current_data, snapshots):
+def _run_relative_buy_backfill(context, current_data, snapshots, decisions,
+                               actual_positions, remaining_slots):
+    results = []
+    for rank, decision in enumerate(decisions, start=1):
+        if remaining_slots == 0:
+            log_relative_buy_decision(
+                decision, rank, False, "PORTFOLIO_FULL",
+            )
+            continue
+        code = decision["code"]
+        if code in actual_positions:
+            log_relative_buy_decision(decision, rank, False, "HELD_NO_ADD")
+            continue
+        if code in g.sold_today:
+            log_relative_buy_decision(decision, rank, False, "SOLD_TODAY")
+            continue
+        if code in g.daily_attempted_buys:
+            log_relative_buy_decision(
+                decision, rank, False, "ALREADY_ATTEMPTED_TODAY",
+            )
+            continue
+        if decision["resonance_id"] in g.processed_resonance_ids:
+            log_relative_buy_decision(
+                decision, rank, False, "RESONANCE_ALREADY_PROCESSED",
+            )
+            continue
+        tradability = get_tradability(current_data, code)
+        if tradability is Tradability.PAUSED:
+            log_relative_buy_decision(
+                decision, rank, False, "PAUSED_BACKFILL",
+            )
+            results.append((code, OrderOutcome.PAUSED))
+            continue
+        mark_resonance_processed(g.processed_resonance_ids, decision)
+        g.daily_attempted_buys.add(code)
+        if tradability is Tradability.UNKNOWN:
+            log_relative_buy_decision(
+                decision, rank, False,
+                "UNKNOWN_TRADABILITY_ATTEMPT_CONSUMED",
+            )
+            results.append((code, OrderOutcome.UNKNOWN))
+            remaining_slots -= 1
+            continue
+        log_relative_buy_decision(decision, rank, True, "BUY_ATTEMPT")
+        outcome = submit_buy(context, code, snapshots[code], decision)
+        results.append((code, outcome))
+        if outcome is OrderOutcome.PAUSED:
+            log_relative_buy_decision(
+                decision, rank, False, "REFRESHED_PAUSED_BACKFILL",
+            )
+            g.processed_resonance_ids.pop(decision["resonance_id"], None)
+            g.daily_attempted_buys.discard(code)
+            continue
+        remaining_slots -= 1
+    return results, remaining_slots
+
+
+def run_signal_buys(context, current_data, snapshots,
+                    relative_backfill_decisions=()):
     actual_positions = get_actual_positions(context)
     decisions = collect_buy_decisions(snapshots, actual_positions)
     sorted_decisions = sort_buy_decisions(decisions)
@@ -2345,6 +2500,11 @@ def run_signal_buys(context, current_data, snapshots):
     if remaining_slots == 0:
         for decision in sorted_decisions:
             log_resonance_decision(decision, False, "PORTFOLIO_FULL")
+        for rank, decision in enumerate(
+                relative_backfill_decisions, start=1):
+            log_relative_buy_decision(
+                decision, rank, False, "PORTFOLIO_FULL",
+            )
         return []
 
     results = []
@@ -2393,4 +2553,9 @@ def run_signal_buys(context, current_data, snapshots):
             g.daily_attempted_buys.discard(code)
             continue
         remaining_slots -= 1
+    relative_results, remaining_slots = _run_relative_buy_backfill(
+        context, current_data, snapshots, relative_backfill_decisions,
+        get_actual_positions(context), remaining_slots,
+    )
+    results.extend(relative_results)
     return results
