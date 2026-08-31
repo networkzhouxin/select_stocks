@@ -143,6 +143,43 @@ def _sorted_relative_buy(timestamp, observation_id):
     })
 
 
+def _signal_snapshot(
+        timestamp, code="159928.XSHE", signal_date="2018-12-28",
+        close=10.0, atr14=0.5, rsi14=30.0, adx14=25.0,
+        boll_width=0.1, boll_mid_slope=0.2, volume_ratio=1.1):
+    return _line(timestamp, {
+        "event": "signal_snapshot",
+        "version": "resonance-v0.1.0",
+        "build": "20260828.5",
+        "parameter_fingerprint": "e1227fbd8b4a884e",
+        "pool_fingerprint": "9123995edeb1ed84",
+        "event_logic_fingerprint": "1c0b8a22f48c97c3",
+        "relative_observation_fingerprint": "f47d32b87be6d926",
+        "code": code,
+        "decision_date": timestamp[:10],
+        "signal_date": signal_date,
+        "valid": True,
+        "trade_values": {
+            "atr14": atr14,
+            "rsi14": rsi14,
+        },
+        "observation_values": {
+            "adx14": adx14,
+            "boll_width": boll_width,
+            "boll_mid_slope": boll_mid_slope,
+            "volume_ratio": volume_ratio,
+        },
+        "event_detection_trace": {
+            "boll": {"current": {"close": close}},
+        },
+        "kdj_cross": "NONE",
+        "active_events": {},
+        "invalidated_events": [],
+        "relative_active_events": {},
+        "relative_invalidated_events": [],
+    })
+
+
 def _portfolio(timestamp, total_value, cash, positions):
     return _line(timestamp, {
         "event": "portfolio_summary",
@@ -159,6 +196,7 @@ def _ordinary_lines():
     sell_id = _relative_id("SELL_TURN", "2019-01-02")
     return [
         _initialization(),
+        _signal_snapshot("2019-01-02 09:35:00"),
         _relative_observation("2019-01-02 09:35:00", buy_id),
         _sorted_relative_buy("2019-01-02 09:35:00", buy_id),
         _fill_line(
@@ -239,6 +277,9 @@ def _counterfactual_lines(
     buy_commission = max(5.0, 10.0 * amount * commission_rate)
     sell_commission = max(5.0, 8.0 * amount * commission_rate)
     for index, code in enumerate(codes):
+        lines.append(_signal_snapshot(
+            "2019-01-02 09:35:00", code=code,
+        ))
         lines.append(_line("2019-01-02 09:35:00", {
             "event": "resonance_decision",
             "accepted": True,
@@ -508,7 +549,7 @@ def test_duplicate_relative_registration_is_rejected(tmp_path):
         _relative_id("BUY_TURN", "2018-12-28"),
     ).replace('"branch": "SOFT_ALL_THREE"',
               '"branch": "HARD_BOLL_SOFT_OSC"')
-    ordinary.insert(2, duplicate)
+    ordinary.insert(3, duplicate)
     ordinary_path = _write_log(tmp_path / "ordinary.log", ordinary)
     double_path = _write_log(tmp_path / "double.log", _double_lines())
     manifest = _validated_manifest(FIXTURE_SESSIONS)
@@ -959,4 +1000,234 @@ def test_non_recovery_rejects_non_0935_observation_evidence(
     manifest = _validated_manifest(COUNTERFACTUAL_SESSIONS)
 
     with pytest.raises(ValueError, match="atr_check identity is invalid"):
+        analyzer.analyze_paths([ordinary_path], [double_path], manifest)
+
+
+def test_entry_quality_links_only_t_minus_one_snapshot_features(tmp_path):
+    ordinary_path = _write_log(tmp_path / "ordinary.log", _ordinary_lines())
+    double_path = _write_log(tmp_path / "double.log", _double_lines())
+    manifest = _validated_manifest(FIXTURE_SESSIONS)
+
+    report = analyzer.analyze_paths(
+        [ordinary_path], [double_path], manifest,
+    )
+
+    attribution = report["entry_quality_attribution"]
+    assert attribution["scope"] == {
+        "processing_stage": "POST_BACKTEST_READ_ONLY_ATTRIBUTION",
+        "path_assumption": "ORIGINAL_TRADE_PATH_FIXED",
+        "strategy_behavior_changed": False,
+        "open_positions_excluded": True,
+    }
+    assert attribution["feature_contract"] == {
+        "categorical": [
+            "entry_source", "entry_branch", "supporters",
+            "entry_rank", "code",
+        ],
+        "continuous": [
+            "rsi14", "adx14", "atr_to_close", "boll_width",
+            "volume_ratio", "normalized_boll_mid_slope",
+        ],
+        "forbidden_post_entry_predictors": [
+            "mfe", "mae", "max_profit_giveback",
+            "longest_underwater_sessions",
+        ],
+    }
+    ordinary = attribution["ordinary"]
+    assert ordinary["closed_count"] == 1
+    assert ordinary["wins"] == 1
+    assert ordinary["losses"] == 0
+    assert ordinary["categorical"]["entry_rank"]["1"]["count"] == 1
+    assert ordinary["categorical"]["supporters"][
+        "BOLL+KDJ+RSI"
+    ]["count"] == 1
+    assert ordinary["continuous"]["atr_to_close"]["winner"] == {
+        "count": 1,
+        "median": pytest.approx(0.05),
+        "q1": pytest.approx(0.05),
+        "q3": pytest.approx(0.05),
+    }
+    assert ordinary["continuous"]["normalized_boll_mid_slope"][
+        "winner"
+    ]["median"] == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize("mutation,error", [
+    ("missing", "filled buy lacks unique signal snapshot"),
+    ("duplicate", "duplicate signal snapshot"),
+    ("not_previous_session", "signal snapshot is not T-1"),
+])
+def test_entry_quality_snapshot_evidence_fails_closed(
+        tmp_path, mutation, error):
+    ordinary = _ordinary_lines()
+    if mutation == "missing":
+        ordinary = [
+            line for line in ordinary
+            if '"event": "signal_snapshot"' not in line
+        ]
+    elif mutation == "duplicate":
+        ordinary.insert(2, _signal_snapshot("2019-01-02 09:35:00"))
+    else:
+        ordinary = [
+            line.replace(
+                '"signal_date": "2018-12-28"',
+                '"signal_date": "2019-01-02"',
+            ) if '"event": "signal_snapshot"' in line else line
+            for line in ordinary
+        ]
+    ordinary_path = _write_log(tmp_path / "ordinary.log", ordinary)
+    double_path = _write_log(tmp_path / "double.log", _double_lines())
+    manifest = _validated_manifest(FIXTURE_SESSIONS)
+
+    with pytest.raises(ValueError, match=error):
+        analyzer.analyze_paths([ordinary_path], [double_path], manifest)
+
+
+def _entry_quality_rows(group_count=8):
+    rows = []
+    for index in range(group_count):
+        losing = index % 2 == 0
+        year = 2019 if index < 4 else 2020
+        rows.append({
+            "code": "WEAK",
+            "entry_date": "%s-01-%02d" % (year, index % 4 + 2),
+            "entry_source": "RELATIVE",
+            "entry_branch": "WEAK_BRANCH",
+            "supporters": "BOLL+KDJ+RSI",
+            "entry_rank": 2,
+            "pnl": -10.0 if losing else 1.0,
+            "return_rate": -0.1 if losing else 0.01,
+            "features": {
+                "rsi14": 30.0 + index,
+                "adx14": 20.0,
+                "atr_to_close": 0.05,
+                "boll_width": 0.1,
+                "volume_ratio": 1.0,
+                "normalized_boll_mid_slope": 0.01,
+            },
+        })
+    for index in range(8):
+        rows.append({
+            "code": "STRONG",
+            "entry_date": "%s-02-%02d" % (
+                2019 if index < 4 else 2020, index % 4 + 2,
+            ),
+            "entry_source": "FORMAL",
+            "entry_branch": "NONE",
+            "supporters": "BOLL+KDJ",
+            "entry_rank": 1,
+            "pnl": 10.0,
+            "return_rate": 0.1,
+            "features": {
+                "rsi14": 40.0,
+                "adx14": 30.0,
+                "atr_to_close": 0.04,
+                "boll_width": 0.08,
+                "volume_ratio": 1.2,
+                "normalized_boll_mid_slope": 0.02,
+            },
+        })
+    return rows
+
+
+def test_entry_quality_gate_marks_only_stable_distributed_weak_cohort():
+    ordinary = analyzer._entry_quality_path(_entry_quality_rows())
+    double = analyzer._entry_quality_path(_entry_quality_rows())
+    decision = analyzer._entry_quality_candidate_decision(ordinary, double)
+
+    weak = ordinary["categorical"]["entry_branch"]["WEAK_BRANCH"]
+    assert weak["count"] == 8
+    assert weak["losses"] == 4
+    assert weak["win_rate"] == pytest.approx(0.5)
+    assert weak["median_return"] == pytest.approx(-0.045)
+    assert weak["candidate_gate"] == {
+        "at_least_eight_trades": True,
+        "at_least_four_losses": True,
+        "win_rate_lags_overall_by_ten_points": True,
+        "median_return_not_positive": True,
+        "pnl_or_concentration_condition": True,
+        "stable_in_at_least_two_years": True,
+        "passed": True,
+    }
+    assert {
+        "field": "entry_branch", "value": "WEAK_BRANCH",
+    } in decision["eligible_groups"]
+    assert decision["proceed_to_counterfactual_design"] is True
+
+
+def test_entry_quality_gate_rejects_seven_trade_boundary():
+    ordinary = analyzer._entry_quality_path(_entry_quality_rows(7))
+    double = analyzer._entry_quality_path(_entry_quality_rows(7))
+    decision = analyzer._entry_quality_candidate_decision(ordinary, double)
+
+    weak = ordinary["categorical"]["entry_branch"]["WEAK_BRANCH"]
+    assert weak["candidate_gate"]["at_least_eight_trades"] is False
+    assert weak["candidate_gate"]["passed"] is False
+    assert {
+        "field": "entry_branch", "value": "WEAK_BRANCH",
+    } not in decision["eligible_groups"]
+
+
+def test_entry_quality_zero_pnl_is_breakeven_not_loss():
+    rows = _entry_quality_rows()
+    for row in rows:
+        if row["entry_branch"] == "WEAK_BRANCH":
+            row["pnl"] = 1.0
+            row["return_rate"] = 0.01
+    for row in rows[:5]:
+        row["pnl"] = 0.0
+        row["return_rate"] = 0.0
+
+    report = analyzer._entry_quality_path(rows)
+    weak = report["categorical"]["entry_branch"]["WEAK_BRANCH"]
+
+    assert weak["wins"] == 3
+    assert weak["losses"] == 0
+    assert weak["breakeven"] == 5
+    assert weak["candidate_gate"]["at_least_four_losses"] is False
+    assert weak["candidate_gate"]["passed"] is False
+    assert report["continuous"]["rsi14"]["loser"]["count"] == 0
+    assert report["continuous"]["rsi14"]["breakeven"]["count"] == 5
+
+
+@pytest.mark.parametrize("mutation", [
+    "after_fill_same_second", "afternoon", "noncanonical_reason",
+])
+def test_entry_quality_sorted_candidate_is_strictly_prefill_0935_evidence(
+        tmp_path, mutation):
+    ordinary = _ordinary_lines()
+    decision_index = next(
+        index for index, line in enumerate(ordinary)
+        if "RELATIVE_BUY_CANDIDATE_SORTED" in line
+    )
+    decision = ordinary.pop(decision_index)
+    if mutation == "after_fill_same_second":
+        fill_index = next(
+            index for index, line in enumerate(ordinary)
+            if "action=open" in line
+        )
+        ordinary.insert(fill_index + 1, decision)
+        expected = "sorted buy decision must precede fill"
+    elif mutation == "afternoon":
+        decision = decision.replace(
+            "2019-01-02 09:35:00", "2019-01-02 15:30:00", 1,
+        )
+        portfolio_index = next(
+            index for index, line in enumerate(ordinary)
+            if "2019-01-02 15:30:00" in line
+        )
+        ordinary.insert(portfolio_index, decision)
+        expected = "sorted buy decision time is invalid"
+    else:
+        decision = decision.replace(
+            "RELATIVE_BUY_CANDIDATE_SORTED:1",
+            "RELATIVE_BUY_CANDIDATE_SORTED:garbage:1",
+        )
+        ordinary.insert(decision_index, decision)
+        expected = "sorted buy rank is invalid"
+    ordinary_path = _write_log(tmp_path / "ordinary.log", ordinary)
+    double_path = _write_log(tmp_path / "double.log", _double_lines())
+    manifest = _validated_manifest(FIXTURE_SESSIONS)
+
+    with pytest.raises(ValueError, match=expected):
         analyzer.analyze_paths([ordinary_path], [double_path], manifest)

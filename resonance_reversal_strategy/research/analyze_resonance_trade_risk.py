@@ -46,6 +46,12 @@ FILL_RE = re.compile(
     r"amount:\s*(?P<amount>\d+),\s*"
     r"commission:\s*(?P<commission>[0-9.]+)"
 )
+FORMAL_SORTED_BUY_RE = re.compile(
+    r"^BUY_CANDIDATE_SORTED:(?P<rank>[1-9][0-9]*)$"
+)
+RELATIVE_SORTED_BUY_RE = re.compile(
+    r"^RELATIVE_BUY_CANDIDATE_SORTED:(?P<rank>[1-9][0-9]*)$"
+)
 
 
 def _load_manifest_api():
@@ -77,6 +83,8 @@ class Fill:
     price: float
     amount: int
     commission: float
+    source_path: str
+    ordinal: int
 
     @property
     def trade_date(self):
@@ -130,7 +138,7 @@ def _finite_number(value, label, positive=False, nonnegative=False):
     return result
 
 
-def _parse_fill(line):
+def _parse_fill(line, source_path, ordinal):
     match = FILL_RE.search(html.unescape(line))
     if match is None:
         return None
@@ -153,6 +161,8 @@ def _parse_fill(line):
         price=price,
         amount=amount,
         commission=commission,
+        source_path=str(source_path),
+        ordinal=ordinal,
     )
 
 
@@ -231,7 +241,7 @@ def parse_joinquant_log(paths):
         with path.open("r", encoding="utf-8-sig") as stream:
             for line in stream:
                 ordinal += 1
-                fill = _parse_fill(line)
+                fill = _parse_fill(line, path, ordinal)
                 if fill is not None:
                     fills.append(fill)
                 record = _parse_structured_record(line, path, ordinal)
@@ -761,14 +771,23 @@ def _entry_identities(records, relative_metadata):
         if event != "resonance_decision":
             continue
         reason = record.get("reason") or ""
-        if reason.startswith("BUY_CANDIDATE_SORTED:"):
+        formal_match = FORMAL_SORTED_BUY_RE.fullmatch(reason)
+        relative_match = RELATIVE_SORTED_BUY_RE.fullmatch(reason)
+        if formal_match is not None:
             source = "FORMAL"
-        elif reason.startswith("RELATIVE_BUY_CANDIDATE_SORTED:"):
+            rank_match = formal_match
+        elif relative_match is not None:
             source = "RELATIVE"
+            rank_match = relative_match
+        elif (reason.startswith("BUY_CANDIDATE_SORTED:")
+              or reason.startswith("RELATIVE_BUY_CANDIDATE_SORTED:")):
+            raise ValueError("sorted buy rank is invalid")
         else:
             continue
+        entry_rank = int(rank_match.group("rank"))
         if (record.get("accepted") is not True
                 or record.get("direction") != "BUY_TURN"
+                or entry_rank <= 0
                 or not isinstance(record.get("code"), str)
                 or not record.get("code")
                 or not isinstance(record.get("resonance_id"), str)
@@ -781,7 +800,7 @@ def _entry_identities(records, relative_metadata):
         key = (record["_timestamp"].date(), record.get("code"))
         if key in candidates:
             raise ValueError("ambiguous buy source for %s/%s" % key)
-        candidates[key] = (source, record)
+        candidates[key] = (source, entry_rank, record)
     return candidates
 
 
@@ -797,7 +816,16 @@ def _trade_sources(parsed_log, relative_metadata):
             raise ValueError(
                 "filled buy has no unique sorted candidate: %s/%s" % key
             )
-        source, record = candidate
+        source, entry_rank, record = candidate
+        timestamp = record.get("_timestamp")
+        if (not isinstance(timestamp, datetime)
+                or timestamp != fill.timestamp
+                or (timestamp.hour, timestamp.minute, timestamp.second)
+                != (9, 35, 0)
+                or record.get("_source_path") != fill.source_path):
+            raise ValueError("sorted buy decision time is invalid")
+        if record.get("_ordinal") >= fill.ordinal:
+            raise ValueError("sorted buy decision must precede fill")
         resonance_id = record.get("resonance_id")
         branch = None
         if source == "RELATIVE":
@@ -815,7 +843,9 @@ def _trade_sources(parsed_log, relative_metadata):
         sources[key] = {
             "entry_source": source,
             "entry_branch": branch,
+            "entry_rank": entry_rank,
             "resonance_id": resonance_id,
+            "signal_date": record.get("signal_date"),
             "supporters": tuple(record.get("supporters") or ()),
         }
     return sources
@@ -957,6 +987,299 @@ def _group_summary(trades, field):
             ),
         }
         for key, values in sorted(grouped.items())
+    }
+
+
+ENTRY_QUALITY_CATEGORICAL_FIELDS = (
+    "entry_source", "entry_branch", "supporters", "entry_rank", "code",
+)
+ENTRY_QUALITY_CONTINUOUS_FIELDS = (
+    "rsi14", "adx14", "atr_to_close", "boll_width", "volume_ratio",
+    "normalized_boll_mid_slope",
+)
+
+
+def _entry_snapshot_features(record, buy_date, code, session_calendar, role):
+    timestamp = record.get("_timestamp")
+    if (not isinstance(timestamp, datetime)
+            or (timestamp.hour, timestamp.minute, timestamp.second)
+            != (9, 35, 0)
+            or timestamp.date() != buy_date
+            or record.get("decision_date") != buy_date.isoformat()
+            or record.get("code") != code
+            or record.get("valid") is not True):
+        raise ValueError("%s entry signal snapshot identity is invalid" % role)
+    try:
+        decision_index = session_calendar.index(buy_date)
+    except ValueError as exc:
+        raise ValueError("%s buy date absent from manifest" % role) from exc
+    if (decision_index == 0
+            or record.get("signal_date")
+            != session_calendar[decision_index - 1].isoformat()):
+        raise ValueError("%s signal snapshot is not T-1" % role)
+    expected_identity = {
+        "build": EXPECTED_BUILD,
+        "parameter_fingerprint": EXPECTED_PARAMETER_FINGERPRINT,
+        "pool_fingerprint": EXPECTED_POOL_FINGERPRINT,
+        "event_logic_fingerprint": EXPECTED_EVENT_FINGERPRINT,
+        "relative_observation_fingerprint": EXPECTED_RELATIVE_FINGERPRINT,
+    }
+    if any(record.get(key) != value for key, value in expected_identity.items()):
+        raise ValueError("%s entry signal snapshot metadata is invalid" % role)
+    trade_values = record.get("trade_values")
+    observation_values = record.get("observation_values")
+    trace = record.get("event_detection_trace")
+    if (not isinstance(trade_values, dict)
+            or not isinstance(observation_values, dict)
+            or not isinstance(trace, dict)):
+        raise ValueError("%s entry signal snapshot values are invalid" % role)
+    boll_trace = trace.get("boll")
+    current_boll = boll_trace.get("current") if isinstance(boll_trace, dict) else None
+    if not isinstance(current_boll, dict):
+        raise ValueError("%s entry signal snapshot close is invalid" % role)
+    close = _finite_number(
+        current_boll.get("close"), "entry signal close", positive=True,
+    )
+    atr14 = _finite_number(
+        trade_values.get("atr14"), "entry signal atr14", positive=True,
+    )
+    boll_mid_slope = _finite_number(
+        observation_values.get("boll_mid_slope"),
+        "entry signal boll_mid_slope",
+    )
+    return {
+        "rsi14": _finite_number(
+            trade_values.get("rsi14"), "entry signal rsi14",
+        ),
+        "adx14": _finite_number(
+            observation_values.get("adx14"), "entry signal adx14",
+            nonnegative=True,
+        ),
+        "atr_to_close": atr14 / close,
+        "boll_width": _finite_number(
+            observation_values.get("boll_width"),
+            "entry signal boll_width", nonnegative=True,
+        ),
+        "volume_ratio": _finite_number(
+            observation_values.get("volume_ratio"),
+            "entry signal volume_ratio", nonnegative=True,
+        ),
+        "normalized_boll_mid_slope": boll_mid_slope / close,
+    }
+
+
+def _entry_quality_rows(
+        records, completed, sources, session_calendar, role):
+    identities = {
+        (trade.buy.trade_date, trade.code) for trade in completed
+    }
+    snapshots = {}
+    for record in records:
+        if record.get("event") != "signal_snapshot":
+            continue
+        timestamp = record.get("_timestamp")
+        code = record.get("code")
+        if not isinstance(timestamp, datetime) or not isinstance(code, str):
+            continue
+        key = (timestamp.date(), code)
+        if key not in identities:
+            continue
+        if key in snapshots:
+            raise ValueError("%s duplicate signal snapshot" % role)
+        snapshots[key] = record
+    rows = []
+    for trade in completed:
+        identity = (trade.buy.trade_date, trade.code)
+        snapshot = snapshots.get(identity)
+        if snapshot is None:
+            raise ValueError(
+                "%s filled buy lacks unique signal snapshot" % role
+            )
+        source = sources[identity]
+        features = _entry_snapshot_features(
+            snapshot, trade.buy.trade_date, trade.code,
+            session_calendar, role,
+        )
+        if source["signal_date"] != snapshot.get("signal_date"):
+            raise ValueError(
+                "%s sorted buy and signal snapshot dates differ" % role
+            )
+        rows.append({
+            "code": trade.code,
+            "entry_date": trade.buy.trade_date.isoformat(),
+            "entry_source": source["entry_source"],
+            "entry_branch": source["entry_branch"] or "NONE",
+            "supporters": "+".join(sorted(source["supporters"])),
+            "entry_rank": source["entry_rank"],
+            "pnl": trade.pnl,
+            "return_rate": trade.return_rate,
+            "features": features,
+        })
+    return rows
+
+
+def _quantile(values, fraction):
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    position = (len(ordered) - 1) * fraction
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _distribution(values):
+    return {
+        "count": len(values),
+        "median": statistics.median(values) if values else None,
+        "q1": _quantile(values, 0.25),
+        "q3": _quantile(values, 0.75),
+    }
+
+
+def _profit_concentration(rows):
+    gross_profits = sorted(
+        (row["pnl"] for row in rows if row["pnl"] > 0), reverse=True,
+    )
+    total = sum(gross_profits)
+    return {
+        "gross_profit": total,
+        "top_1_gross_profit_share": (
+            gross_profits[0] / total if gross_profits else None
+        ),
+        "top_3_gross_profit_share": (
+            sum(gross_profits[:3]) / total if gross_profits else None
+        ),
+    }
+
+
+def _year_summary(rows):
+    grouped = {}
+    for row in rows:
+        year = row["entry_date"][:4]
+        grouped.setdefault(year, []).append(row)
+    return {
+        year: {
+            "count": len(values),
+            "wins": sum(row["pnl"] > 0 for row in values),
+            "win_rate": _safe_rate(
+                sum(row["pnl"] > 0 for row in values), len(values),
+            ),
+            "pnl": sum(row["pnl"] for row in values),
+        }
+        for year, values in sorted(grouped.items())
+    }
+
+
+def _entry_quality_cohort(rows, overall_win_rate, overall_by_year):
+    wins = sum(row["pnl"] > 0 for row in rows)
+    losses = sum(row["pnl"] < 0 for row in rows)
+    breakeven = sum(row["pnl"] == 0 for row in rows)
+    pnl = sum(row["pnl"] for row in rows)
+    median_return = statistics.median(
+        row["return_rate"] for row in rows
+    )
+    concentration = _profit_concentration(rows)
+    by_year = _year_summary(rows)
+    stable_years = sum(
+        summary["count"] >= 2
+        and summary["win_rate"]
+        < overall_by_year[year]["win_rate"]
+        for year, summary in by_year.items()
+    )
+    gate = {
+        "at_least_eight_trades": len(rows) >= 8,
+        "at_least_four_losses": losses >= 4,
+        "win_rate_lags_overall_by_ten_points": (
+            _safe_rate(wins, len(rows)) <= overall_win_rate - 0.10
+        ),
+        "median_return_not_positive": median_return <= 0,
+        "pnl_or_concentration_condition": (
+            pnl <= 0
+            or (
+                concentration["top_1_gross_profit_share"] is not None
+                and concentration["top_1_gross_profit_share"] >= 0.50
+                and median_return <= 0
+            )
+        ),
+        "stable_in_at_least_two_years": stable_years >= 2,
+    }
+    gate["passed"] = all(gate.values())
+    return {
+        "count": len(rows),
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate": _safe_rate(wins, len(rows)),
+        "pnl": pnl,
+        "median_return": median_return,
+        "profit_concentration": concentration,
+        "by_entry_year": by_year,
+        "candidate_gate": gate,
+    }
+
+
+def _entry_quality_path(rows):
+    wins = sum(row["pnl"] > 0 for row in rows)
+    losses = sum(row["pnl"] < 0 for row in rows)
+    breakeven = sum(row["pnl"] == 0 for row in rows)
+    overall_win_rate = _safe_rate(wins, len(rows))
+    overall_by_year = _year_summary(rows)
+    categorical = {}
+    for field in ENTRY_QUALITY_CATEGORICAL_FIELDS:
+        grouped = {}
+        for row in rows:
+            grouped.setdefault(str(row[field]), []).append(row)
+        categorical[field] = {
+            value: _entry_quality_cohort(
+                values, overall_win_rate, overall_by_year,
+            )
+            for value, values in sorted(grouped.items())
+        }
+    continuous = {}
+    for field in ENTRY_QUALITY_CONTINUOUS_FIELDS:
+        continuous[field] = {
+            "winner": _distribution([
+                row["features"][field] for row in rows if row["pnl"] > 0
+            ]),
+            "loser": _distribution([
+                row["features"][field] for row in rows if row["pnl"] < 0
+            ]),
+            "breakeven": _distribution([
+                row["features"][field] for row in rows if row["pnl"] == 0
+            ]),
+        }
+    return {
+        "closed_count": len(rows),
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate": overall_win_rate,
+        "pnl": sum(row["pnl"] for row in rows),
+        "profit_concentration": _profit_concentration(rows),
+        "by_entry_year": overall_by_year,
+        "categorical": categorical,
+        "continuous": continuous,
+    }
+
+
+def _entry_quality_candidate_decision(ordinary, double_friction):
+    eligible = []
+    for field in ENTRY_QUALITY_CATEGORICAL_FIELDS:
+        if field == "code":
+            continue
+        ordinary_groups = ordinary["categorical"][field]
+        double_groups = double_friction["categorical"][field]
+        for value in sorted(set(ordinary_groups) & set(double_groups)):
+            if (ordinary_groups[value]["candidate_gate"]["passed"]
+                    and double_groups[value]["candidate_gate"]["passed"]):
+                eligible.append({"field": field, "value": value})
+    return {
+        "eligible_groups": eligible,
+        "proceed_to_counterfactual_design": bool(eligible),
     }
 
 
@@ -1307,6 +1630,13 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
         double_atr_observations, double_amounts, evaluation_sessions,
         DOUBLE_FRICTION_COMMISSION_RATE,
     )
+    ordinary_entry_quality = _entry_quality_path(_entry_quality_rows(
+        ordinary.records, completed, sources, manifest.sessions, "ordinary",
+    ))
+    double_entry_quality = _entry_quality_path(_entry_quality_rows(
+        double_friction.records, double_completed, double_sources,
+        manifest.sessions, "double friction",
+    ))
     return {
         "source_files": {
             "ordinary": _source_file_report(ordinary_paths),
@@ -1345,6 +1675,37 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
                     and double_counterfactual["gate"]["passed"]
                 ),
             },
+        },
+        "entry_quality_attribution": {
+            "scope": {
+                "processing_stage": "POST_BACKTEST_READ_ONLY_ATTRIBUTION",
+                "path_assumption": "ORIGINAL_TRADE_PATH_FIXED",
+                "strategy_behavior_changed": False,
+                "open_positions_excluded": True,
+            },
+            "feature_contract": {
+                "categorical": list(ENTRY_QUALITY_CATEGORICAL_FIELDS),
+                "continuous": list(ENTRY_QUALITY_CONTINUOUS_FIELDS),
+                "forbidden_post_entry_predictors": [
+                    "mfe", "mae", "max_profit_giveback",
+                    "longest_underwater_sessions",
+                ],
+            },
+            "candidate_gate_contract": {
+                "minimum_trades": 8,
+                "minimum_losses": 4,
+                "minimum_win_rate_lag": 0.10,
+                "maximum_median_return": 0.0,
+                "minimum_consistent_years": 2,
+                "minimum_trades_per_consistent_year": 2,
+                "alternative_profit_concentration": 0.50,
+                "code_is_diagnostic_only": True,
+            },
+            "ordinary": ordinary_entry_quality,
+            "double_friction": double_entry_quality,
+            "decision": _entry_quality_candidate_decision(
+                ordinary_entry_quality, double_entry_quality,
+            ),
         },
         "trade_summary": {
             "closed_count": len(completed),
