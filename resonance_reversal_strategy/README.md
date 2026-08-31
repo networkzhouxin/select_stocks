@@ -191,3 +191,10 @@ python resonance_reversal_strategy/research/analyze_relative_turn_observations.p
 现在代码不包含真实 manifest、其冻结 hash 或聚宽平台结果，用户仍需按上述步骤导出。当前
 也尚无真实聚宽 `.3/.4` 完整日志证据；本地测试不构成订单路径、期末资产或观察收益已通过
 的证据。短区间聚宽冒烟同样不证明正式订单路径、收益或可以实盘。
+
+## BOLL 买入论点失效退出候选（build 20260828.3）
+
+`.3` 从 `.4` 独立建立，保留 ATR 及正式信号退出；正式 BOLL 支持买入成交时冻结该事件
+低点，此后仅当有效 T-1 收盘价严格低于冻结值时触发 `BOLL_THESIS_EXIT`。等于边界、
+历史状态无参考值、无效快照和非 BOLL 持仓均不触发。优先级固定为
+`ATR_EXIT > BOLL_THESIS_EXIT > SIGNAL_EXIT`，不使用 T 日报价判定论点失效。

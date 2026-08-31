@@ -9,7 +9,7 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.4"
+DEPLOYMENT_BUILD_ID = "20260828.3"
 FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
 BENCHMARK = "000300.XSHG"
 
@@ -33,6 +33,7 @@ class OrderSide(Enum):
 
 class ExitReason(Enum):
     ATR_EXIT = "ATR_EXIT"
+    BOLL_THESIS_EXIT = "BOLL_THESIS_EXIT"
     SIGNAL_EXIT = "SIGNAL_EXIT"
 
 
@@ -52,7 +53,8 @@ class OrderOutcome(Enum):
 
 EXIT_PRIORITY = {
     ExitReason.SIGNAL_EXIT: 1,
-    ExitReason.ATR_EXIT: 2,
+    ExitReason.BOLL_THESIS_EXIT: 2,
+    ExitReason.ATR_EXIT: 3,
 }
 
 
@@ -277,7 +279,7 @@ def log_resonance_decision(decision, accepted, reason):
 
 
 def log_order_transition(code, side, outcome, before_amount, after_amount,
-                         requested_target, pending_exit):
+                         requested_target, pending_exit, exit_reason=None):
     _emit_structured_log("order_transition", {
         "code": code,
         "side": side,
@@ -286,6 +288,22 @@ def log_order_transition(code, side, outcome, before_amount, after_amount,
         "after_amount": after_amount,
         "requested_target": requested_target,
         "pending_exit": dict(pending_exit) if pending_exit is not None else None,
+        "exit_reason": exit_reason,
+    })
+
+
+def log_boll_thesis_exit_decision(code, position_state, snapshot,
+                                  decision_date, action):
+    _emit_structured_log("boll_thesis_exit_decision", {
+        "code": code,
+        "exit_reason": ExitReason.BOLL_THESIS_EXIT,
+        "entry_boll_reference_extreme": position_state.get(
+            "entry_boll_reference_extreme"
+        ),
+        "signal_close": snapshot.get("close"),
+        "signal_date": snapshot.get("signal_date"),
+        "decision_date": decision_date,
+        "action": action,
     })
 
 
@@ -818,6 +836,7 @@ def do_trading(context):
                 )):
             log_signal_snapshot(dict(snapshot, decision_date=decision_date))
     run_relative_observation_stage(snapshots)
+    run_boll_thesis_exits(context, current_data, snapshots)
     run_signal_exits(context, current_data, snapshots)
     run_signal_buys(context, current_data, snapshots)
 
@@ -1036,13 +1055,40 @@ def get_execution_price(current_data, code):
     return float(price)
 
 
-def make_position_state(buy_date, entry_atr, entry_price):
+def make_position_state(buy_date, entry_atr, entry_price,
+                        entry_boll_reference_extreme=None):
     return {
         "buy_date": buy_date,
         "entry_atr": float(entry_atr),
         "highest_close_anchor": float(entry_price),
         "pending_exit": None,
+        "entry_boll_reference_extreme": entry_boll_reference_extreme,
     }
+
+
+def extract_entry_boll_reference(snapshot, decision):
+    if (not snapshot
+            or decision.get("direction") is not TurnDirection.BUY_TURN
+            or "BOLL" not in tuple(decision.get("supporters", ()))):
+        return None
+    boll_event = (
+        (snapshot.get("event_book") or {}).get("active", {}).get("BOLL")
+    )
+    if (boll_event is None
+            or boll_event.get("direction") is not TurnDirection.BUY_TURN):
+        return None
+    value = boll_event.get("reference_extreme")
+    return float(value) if is_finite_positive(value) else None
+
+
+def boll_thesis_is_invalidated(position_state, snapshot):
+    if not snapshot or not snapshot.get("valid"):
+        return False
+    reference = position_state.get("entry_boll_reference_extreme")
+    close = snapshot.get("close")
+    if not is_finite_positive(reference) or not is_finite_positive(close):
+        return False
+    return float(close) < float(reference)
 
 
 def set_pending_exit(position_state, reason, created_date, trigger_value,
@@ -1061,11 +1107,13 @@ def set_pending_exit(position_state, reason, created_date, trigger_value,
 
 
 def sync_buy_state_after_order(code, outcome, before_amount, after_amount,
-                               decision_date, entry_atr, entry_price):
+                               decision_date, entry_atr, entry_price,
+                               entry_boll_reference_extreme=None):
     g.daily_attempted_buys.add(code)
     if after_amount > before_amount:
         g.position_states[code] = make_position_state(
             decision_date, entry_atr, entry_price,
+            entry_boll_reference_extreme,
         )
     return outcome
 
@@ -1115,6 +1163,7 @@ def submit_buy(context, code, snapshot, decision):
     result = sync_buy_state_after_order(
         code, outcome, before_amount, after_amount,
         context.current_dt.date(), snapshot["entry_atr"], execution_price,
+        extract_entry_boll_reference(snapshot, decision),
     )
     state = g.position_states.get(code)
     log_order_transition(
@@ -1143,7 +1192,7 @@ def submit_sell(context, code, reason, trigger_value):
     state = g.position_states.get(code)
     log_order_transition(
         code, OrderSide.SELL, result, before_amount, after_amount, 0,
-        state.get("pending_exit") if state is not None else None,
+        state.get("pending_exit") if state is not None else None, reason,
     )
     return result
 
@@ -2267,6 +2316,41 @@ def run_atr_exits(context, current_data):
             continue
         submit_sell(
             context, code, ExitReason.ATR_EXIT, stop_state["stop_price"],
+        )
+        attempted.add(code)
+    return attempted
+
+
+def run_boll_thesis_exits(context, current_data, snapshots):
+    attempted = set()
+    decision_date = context.current_dt.date()
+    retried_codes = getattr(g, "daily_retried_exits", set())
+    for code in sorted(get_actual_positions(context)):
+        if code in g.sold_today:
+            continue
+        state = g.position_states.get(code)
+        snapshot = snapshots.get(code)
+        if state is None or not boll_thesis_is_invalidated(state, snapshot):
+            continue
+        trigger_value = float(snapshot["close"])
+        actual_amount = get_actual_amount(context, code)
+        if (code in retried_codes
+                or get_tradability(current_data, code) is Tradability.PAUSED):
+            log_boll_thesis_exit_decision(
+                code, state, snapshot, decision_date,
+                "PENDING_REASON_UPDATE" if code in retried_codes
+                else "PAUSED_PENDING",
+            )
+            set_pending_exit(
+                state, ExitReason.BOLL_THESIS_EXIT, decision_date,
+                trigger_value, actual_amount,
+            )
+            continue
+        log_boll_thesis_exit_decision(
+            code, state, snapshot, decision_date, "SELL_ATTEMPT",
+        )
+        submit_sell(
+            context, code, ExitReason.BOLL_THESIS_EXIT, trigger_value,
         )
         attempted.add(code)
     return attempted

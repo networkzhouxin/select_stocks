@@ -1073,6 +1073,7 @@ def test_partial_buy_establishes_frozen_risk_state_and_consumes_daily_attempt(
         "entry_atr": 2.5,
         "highest_close_anchor": 10.2,
         "pending_exit": None,
+        "entry_boll_reference_extreme": None,
     }
 
 
@@ -1728,6 +1729,7 @@ def test_submit_buy_uses_current_account_values_and_actual_partial_fill(
         "entry_atr": 2.5,
         "highest_close_anchor": 11.0,
         "pending_exit": None,
+        "entry_boll_reference_extreme": None,
     }
 
 
@@ -3546,7 +3548,7 @@ def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
 
 
 def test_diagnostic_build_id_is_bumped():
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.3"
 
 
 def test_relative_observation_build_and_formal_fingerprints_are_separated(
@@ -3558,8 +3560,8 @@ def test_relative_observation_build_and_formal_fingerprints_are_separated(
     strategy.initialize(types.SimpleNamespace())
 
     payload = json.loads(messages[-1])
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
-    assert payload["build"] == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.3"
+    assert payload["build"] == "20260828.3"
     assert payload["parameter_fingerprint"] == "e1227fbd8b4a884e"
     assert payload["pool_fingerprint"] == "9123995edeb1ed84"
     assert payload["event_logic_fingerprint"] == "1c0b8a22f48c97c3"
@@ -4829,6 +4831,43 @@ def test_poisoned_any_preserves_boll_buy_trace_and_active_event(monkeypatch):
     assert event_book["active"]["BOLL"]["direction"] is (
         strategy.TurnDirection.BUY_TURN
     )
+
+
+def test_entry_boll_reference_and_strict_thesis_boundary():
+    snapshot = resonance_snapshot("510300.XSHG")
+    snapshot["event_book"]["active"]["BOLL"]["reference_extreme"] = 3.8
+    decision = {"direction": strategy.TurnDirection.BUY_TURN,
+                "supporters": ("BOLL", "RSI")}
+    assert strategy.extract_entry_boll_reference(snapshot, decision) == pytest.approx(3.8)
+    state = strategy.make_position_state("2021-01-04", 0.2, 4.0, 3.8)
+    assert state["entry_boll_reference_extreme"] == pytest.approx(3.8)
+    assert strategy.boll_thesis_is_invalidated(state, {"valid": True, "close": 3.79}) is True
+    assert strategy.boll_thesis_is_invalidated(state, {"valid": True, "close": 3.8}) is False
+    assert strategy.boll_thesis_is_invalidated(state, {"valid": False, "close": 3.7}) is False
+
+
+def test_exit_priority_keeps_atr_above_boll_and_boll_above_signal():
+    assert strategy.EXIT_PRIORITY[strategy.ExitReason.ATR_EXIT] == 3
+    assert strategy.EXIT_PRIORITY[strategy.ExitReason.BOLL_THESIS_EXIT] == 2
+    assert strategy.EXIT_PRIORITY[strategy.ExitReason.SIGNAL_EXIT] == 1
+
+
+def test_run_boll_thesis_exits_submits_one_t_minus_one_sell(monkeypatch):
+    code = "510300.XSHG"
+    state = {"buy_date": date(2021, 1, 4), "entry_atr": 0.2,
+             "highest_close_anchor": 4.0, "pending_exit": None,
+             "entry_boll_reference_extreme": 3.8}
+    runtime = runtime_state(position_states={code: state})
+    context = fake_context(positions={code: fake_position(1000)})
+    submitted = []
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(strategy, "submit_sell",
+        lambda context, code, reason, trigger: submitted.append((code, reason, trigger)) or strategy.OrderOutcome.FILLED)
+    strategy.run_boll_thesis_exits(
+        context, {code: current_record(3.78)},
+        {code: {"valid": True, "close": 3.79, "signal_date": date(2021, 1, 5)}},
+    )
+    assert submitted == [(code, strategy.ExitReason.BOLL_THESIS_EXIT, 3.79)]
 
 
 def test_poisoned_any_preserves_resonance_conflict_and_freshness(monkeypatch):

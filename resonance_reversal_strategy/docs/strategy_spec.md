@@ -568,3 +568,11 @@ superpowers/specs/2026-08-28-training-boundary-manifest-design.md) 冻结的 sch
 合法右截尾只豁免由训练期结束导致的不可达结果。已经存在的部分 horizon 仍严格校验，
 完整观察缺少任一结果继续 fail closed，任何 2022 数据都不能补齐期末观察。该规则只调整
 离线样本选择和报告，不修改正式事件、共振、ATR、持仓、资金或订单行为。
+
+### BOLL 买入论点失效退出候选 `.3`
+
+`20260828.3` 仅为正式 BOLL 支持的买入冻结当时事件 `reference_extreme`。每日快照完成、
+相对观察记录之后且正式信号退出之前，以 T-1 `close < reference` 的严格条件触发
+`BOLL_THESIS_EXIT`；相等不触发，缺失值不猜测。ATR 先运行且优先级最高，新原因复用
+现有 pending 重试和卖出同步，不建立第二套状态机。相对观察、买入排序、仓位和 ETF 池
+均不改变。
