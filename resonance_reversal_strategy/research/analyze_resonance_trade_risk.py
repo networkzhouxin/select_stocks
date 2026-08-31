@@ -998,6 +998,7 @@ ENTRY_QUALITY_CONTINUOUS_FIELDS = (
     "rsi14", "adx14", "atr_to_close", "boll_width", "volume_ratio",
     "normalized_boll_mid_slope",
 )
+VOLUME_RATIO_DELTA_ZERO_ABS_TOLERANCE = 1e-12
 
 
 def _entry_snapshot_features(record, buy_date, code, session_calendar, role):
@@ -1287,6 +1288,183 @@ def _entry_quality_path(rows):
         "by_entry_year": overall_by_year,
         "categorical": categorical,
         "continuous": continuous,
+    }
+
+
+def _volume_ratio_marginal_path(rows):
+    wins = sum(row["pnl"] > 0 for row in rows)
+    overall_win_rate = _safe_rate(wins, len(rows))
+    overall_by_year = _year_summary(rows)
+    grouped = {}
+    for row in rows:
+        volume_ratio = _finite_number(
+            row["features"].get("volume_ratio"),
+            "entry volume ratio marginal value", nonnegative=True,
+        )
+        group = (
+            "VOLUME_ABOVE_ONE"
+            if volume_ratio > 1.0 else "VOLUME_AT_OR_BELOW_ONE"
+        )
+        grouped.setdefault(group, []).append(row)
+    groups = {}
+    for group, values in sorted(grouped.items()):
+        summary = _entry_quality_cohort(
+            values, overall_win_rate, overall_by_year,
+        )
+        summary.pop("candidate_gate")
+        groups[group] = summary
+    result = {
+        "boundary": {
+            "above_one": "> 1.0",
+            "at_or_below_one": "<= 1.0",
+            "threshold_search_performed": False,
+            "delta_zero_absolute_tolerance": (
+                VOLUME_RATIO_DELTA_ZERO_ABS_TOLERANCE
+            ),
+        },
+        "groups": groups,
+        "comparison_available": False,
+        "overall_delta_at_or_below_minus_above": None,
+        "by_entry_year_delta_at_or_below_minus_above": {},
+        "cross_year_direction_stability": {
+            "win_rate": None,
+            "pnl": None,
+        },
+    }
+    below = groups.get("VOLUME_AT_OR_BELOW_ONE")
+    above = groups.get("VOLUME_ABOVE_ONE")
+    if below is None or above is None:
+        return result
+    result["comparison_available"] = True
+    result["overall_delta_at_or_below_minus_above"] = {
+        "win_rate": below["win_rate"] - above["win_rate"],
+        "pnl": below["pnl"] - above["pnl"],
+        "median_return": below["median_return"] - above["median_return"],
+    }
+    common_years = sorted(
+        set(below["by_entry_year"]) & set(above["by_entry_year"])
+    )
+    by_year_delta = {
+        year: {
+            "win_rate": (
+                below["by_entry_year"][year]["win_rate"]
+                - above["by_entry_year"][year]["win_rate"]
+            ),
+            "pnl": (
+                below["by_entry_year"][year]["pnl"]
+                - above["by_entry_year"][year]["pnl"]
+            ),
+        }
+        for year in common_years
+    }
+    result["by_entry_year_delta_at_or_below_minus_above"] = by_year_delta
+    result["cross_year_direction_stability"] = {
+        metric: _year_delta_directions_stable(by_year_delta, metric)
+        for metric in ("win_rate", "pnl")
+    }
+    return result
+
+
+def _delta_direction(value):
+    if value is None:
+        return "UNAVAILABLE"
+    if abs(value) <= VOLUME_RATIO_DELTA_ZERO_ABS_TOLERANCE:
+        return "ZERO"
+    if value > 0:
+        return "POSITIVE"
+    if value < 0:
+        return "NEGATIVE"
+    return "ZERO"
+
+
+def _same_available_delta_direction(left, right):
+    left_direction = _delta_direction(left)
+    right_direction = _delta_direction(right)
+    if "UNAVAILABLE" in (left_direction, right_direction):
+        return None
+    if "ZERO" in (left_direction, right_direction):
+        return False
+    return left_direction == right_direction
+
+
+def _year_delta_directions_stable(by_year_delta, metric):
+    if len(by_year_delta) < 2:
+        return None
+    directions = {
+        _delta_direction(values.get(metric))
+        for values in by_year_delta.values()
+    }
+    if "UNAVAILABLE" in directions:
+        return None
+    if "ZERO" in directions:
+        return False
+    return len(directions) == 1
+
+
+def _volume_ratio_marginal_attribution(ordinary_rows, double_rows):
+    ordinary = _volume_ratio_marginal_path(ordinary_rows)
+    double_friction = _volume_ratio_marginal_path(double_rows)
+    metrics = ("win_rate", "pnl", "median_return")
+    ordinary_overall = (
+        ordinary["overall_delta_at_or_below_minus_above"] or {}
+    )
+    double_overall = (
+        double_friction["overall_delta_at_or_below_minus_above"] or {}
+    )
+    overall_matches = {
+        metric: _same_available_delta_direction(
+            ordinary_overall.get(metric), double_overall.get(metric),
+        )
+        for metric in metrics
+    }
+    ordinary_years = ordinary[
+        "by_entry_year_delta_at_or_below_minus_above"
+    ]
+    double_years = double_friction[
+        "by_entry_year_delta_at_or_below_minus_above"
+    ]
+    common_years = sorted(set(ordinary_years) & set(double_years))
+    yearly_matches = {
+        year: {
+            metric: _same_available_delta_direction(
+                ordinary_years[year].get(metric),
+                double_years[year].get(metric),
+            )
+            for metric in ("win_rate", "pnl")
+        }
+        for year in common_years
+    }
+    direction_matches = (
+        list(overall_matches.values())
+        + [
+            value
+            for matches in yearly_matches.values()
+            for value in matches.values()
+        ]
+    )
+    complete_direction_evidence = (
+        ordinary["comparison_available"]
+        and double_friction["comparison_available"]
+        and len(yearly_matches) >= 2
+        and all(value is not None for value in direction_matches)
+    )
+    all_directions_match = (
+        all(direction_matches) if complete_direction_evidence else None
+    )
+    return {
+        "scope": {
+            "processing_stage": "POST_BACKTEST_READ_ONLY_ATTRIBUTION",
+            "path_assumption": "ORIGINAL_TRADE_PATH_FIXED",
+            "strategy_behavior_changed": False,
+            "rule_candidate_created": False,
+        },
+        "ordinary": ordinary,
+        "double_friction": double_friction,
+        "cross_friction_stability": {
+            "overall_delta_direction_matches": overall_matches,
+            "by_entry_year_delta_direction_matches": yearly_matches,
+            "all_reported_directions_match": all_directions_match,
+        },
     }
 
 
@@ -1654,13 +1832,15 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
         double_atr_observations, double_amounts, evaluation_sessions,
         DOUBLE_FRICTION_COMMISSION_RATE,
     )
-    ordinary_entry_quality = _entry_quality_path(_entry_quality_rows(
+    ordinary_entry_rows = _entry_quality_rows(
         ordinary.records, completed, sources, manifest.sessions, "ordinary",
-    ))
-    double_entry_quality = _entry_quality_path(_entry_quality_rows(
+    )
+    double_entry_rows = _entry_quality_rows(
         double_friction.records, double_completed, double_sources,
         manifest.sessions, "double friction",
-    ))
+    )
+    ordinary_entry_quality = _entry_quality_path(ordinary_entry_rows)
+    double_entry_quality = _entry_quality_path(double_entry_rows)
     return {
         "source_files": {
             "ordinary": _source_file_report(ordinary_paths),
@@ -1738,6 +1918,9 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
             },
             "ordinary": ordinary_entry_quality,
             "double_friction": double_entry_quality,
+            "volume_ratio_marginal": _volume_ratio_marginal_attribution(
+                ordinary_entry_rows, double_entry_rows,
+            ),
             "decision": _entry_quality_candidate_decision(
                 ordinary_entry_quality, double_entry_quality,
             ),

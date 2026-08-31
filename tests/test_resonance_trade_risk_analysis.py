@@ -1044,6 +1044,16 @@ def test_entry_quality_links_only_t_minus_one_snapshot_features(tmp_path):
         },
         "threshold_search_performed": False,
     }
+    marginal = attribution["volume_ratio_marginal"]
+    assert marginal["scope"]["strategy_behavior_changed"] is False
+    assert marginal["scope"]["rule_candidate_created"] is False
+    assert marginal["ordinary"]["groups"][
+        "VOLUME_ABOVE_ONE"
+    ]["count"] == 1
+    assert marginal["ordinary"]["comparison_available"] is False
+    assert marginal["cross_friction_stability"][
+        "all_reported_directions_match"
+    ] is None
     ordinary = attribution["ordinary"]
     assert ordinary["closed_count"] == 1
     assert ordinary["wins"] == 1
@@ -1263,3 +1273,188 @@ def test_entry_market_state_uses_fixed_zero_and_one_boundaries(
         "normalized_boll_mid_slope": slope,
         "volume_ratio": volume_ratio,
     }) == expected
+
+
+def test_volume_ratio_marginal_reports_fixed_boundary_and_year_deltas():
+    rows = _entry_quality_rows()
+    for index, row in enumerate(rows):
+        row["features"]["normalized_boll_mid_slope"] = (
+            -0.01 if index % 2 == 0 else 0.01
+        )
+
+    report = analyzer._volume_ratio_marginal_path(rows)
+
+    assert report["boundary"] == {
+        "above_one": "> 1.0",
+        "at_or_below_one": "<= 1.0",
+        "threshold_search_performed": False,
+        "delta_zero_absolute_tolerance": 1e-12,
+    }
+    below = report["groups"]["VOLUME_AT_OR_BELOW_ONE"]
+    above = report["groups"]["VOLUME_ABOVE_ONE"]
+    assert below["count"] == 8
+    assert below["wins"] == 4
+    assert below["win_rate"] == pytest.approx(0.5)
+    assert above["count"] == 8
+    assert above["wins"] == 8
+    assert above["win_rate"] == pytest.approx(1.0)
+    assert report["comparison_available"] is True
+    assert report["overall_delta_at_or_below_minus_above"] == {
+        "win_rate": pytest.approx(-0.5),
+        "pnl": pytest.approx(-116.0),
+        "median_return": pytest.approx(-0.145),
+    }
+    assert report["by_entry_year_delta_at_or_below_minus_above"] == {
+        "2019": {
+            "win_rate": pytest.approx(-0.5),
+            "pnl": pytest.approx(-58.0),
+        },
+        "2020": {
+            "win_rate": pytest.approx(-0.5),
+            "pnl": pytest.approx(-58.0),
+        },
+    }
+    assert report["cross_year_direction_stability"] == {
+        "win_rate": True,
+        "pnl": True,
+    }
+
+
+def test_volume_ratio_marginal_marks_mixed_year_directions_unstable():
+    rows = _entry_quality_rows()
+    for row in rows:
+        if row["code"] == "STRONG" and row["entry_date"].startswith("2020"):
+            row["pnl"] = -10.0
+            row["return_rate"] = -0.1
+
+    report = analyzer._volume_ratio_marginal_path(rows)
+
+    assert report["cross_year_direction_stability"] == {
+        "win_rate": False,
+        "pnl": False,
+    }
+
+
+@pytest.mark.parametrize("value,expected", [
+    (0.0, "ZERO"),
+    (0.1 + 0.2 - 0.3, "ZERO"),
+    (0.5e-12, "ZERO"),
+    (-0.5e-12, "ZERO"),
+    (2.0e-12, "POSITIVE"),
+    (-2.0e-12, "NEGATIVE"),
+])
+def test_volume_ratio_delta_direction_uses_fixed_numeric_zero_tolerance(
+        value, expected):
+    assert analyzer._delta_direction(value) == expected
+
+
+def test_volume_ratio_zero_direction_is_not_stable_evidence():
+    by_year = {
+        "2019": {"win_rate": 0.0},
+        "2020": {"win_rate": 0.1 + 0.2 - 0.3},
+    }
+
+    assert analyzer._year_delta_directions_stable(
+        by_year, "win_rate",
+    ) is False
+    assert analyzer._same_available_delta_direction(0.0, 0.0) is False
+
+
+@pytest.mark.parametrize("rows", [
+    [],
+    [dict(_entry_quality_rows()[0])],
+])
+def test_volume_ratio_marginal_marks_missing_group_unavailable(rows):
+    report = analyzer._volume_ratio_marginal_path(rows)
+
+    assert report["comparison_available"] is False
+    assert report["cross_year_direction_stability"] == {
+        "win_rate": None,
+        "pnl": None,
+    }
+
+
+def test_volume_ratio_marginal_marks_one_common_year_unavailable():
+    rows = _entry_quality_rows()
+    rows = [row for row in rows if row["entry_date"].startswith("2019")]
+
+    report = analyzer._volume_ratio_marginal_path(rows)
+
+    assert report["comparison_available"] is True
+    assert report["cross_year_direction_stability"] == {
+        "win_rate": None,
+        "pnl": None,
+    }
+
+
+def test_volume_ratio_marginal_compares_direction_across_friction_paths():
+    ordinary_rows = _entry_quality_rows()
+    double_rows = _entry_quality_rows()
+    for row in double_rows:
+        row["pnl"] -= 0.5
+        row["return_rate"] -= 0.005
+
+    report = analyzer._volume_ratio_marginal_attribution(
+        ordinary_rows, double_rows,
+    )
+
+    assert report["scope"] == {
+        "processing_stage": "POST_BACKTEST_READ_ONLY_ATTRIBUTION",
+        "path_assumption": "ORIGINAL_TRADE_PATH_FIXED",
+        "strategy_behavior_changed": False,
+        "rule_candidate_created": False,
+    }
+    assert report["cross_friction_stability"] == {
+        "overall_delta_direction_matches": {
+            "win_rate": True,
+            "pnl": True,
+            "median_return": True,
+        },
+        "by_entry_year_delta_direction_matches": {
+            "2019": {"win_rate": True, "pnl": True},
+            "2020": {"win_rate": True, "pnl": True},
+        },
+        "all_reported_directions_match": True,
+    }
+
+
+def test_volume_ratio_cross_friction_marks_single_year_unavailable():
+    rows = [
+        row for row in _entry_quality_rows()
+        if row["entry_date"].startswith("2019")
+    ]
+
+    report = analyzer._volume_ratio_marginal_attribution(rows, rows)
+
+    assert report["ordinary"]["cross_year_direction_stability"] == {
+        "win_rate": None,
+        "pnl": None,
+    }
+    assert report["double_friction"][
+        "cross_year_direction_stability"
+    ] == {"win_rate": None, "pnl": None}
+    assert report["cross_friction_stability"][
+        "all_reported_directions_match"
+    ] is None
+
+
+def test_volume_ratio_cross_friction_requires_two_common_years():
+    ordinary_rows = _entry_quality_rows()
+    double_rows = _entry_quality_rows()
+    for row in double_rows:
+        if row["entry_date"].startswith("2019"):
+            row["entry_date"] = row["entry_date"].replace(
+                "2019", "2021", 1,
+            )
+
+    report = analyzer._volume_ratio_marginal_attribution(
+        ordinary_rows, double_rows,
+    )
+
+    yearly = report["cross_friction_stability"][
+        "by_entry_year_delta_direction_matches"
+    ]
+    assert list(yearly) == ["2020"]
+    assert report["cross_friction_stability"][
+        "all_reported_directions_match"
+    ] is None
