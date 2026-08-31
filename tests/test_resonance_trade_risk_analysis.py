@@ -23,6 +23,14 @@ FIXTURE_SESSIONS = (
     "2018-12-28", "2019-01-02", "2019-01-03", "2019-01-04",
     "2019-01-07", "2019-01-08", "2019-01-09",
 )
+COUNTERFACTUAL_SESSIONS = (
+    "2018-12-28", "2019-01-02", "2019-01-03", "2019-01-04",
+    "2019-01-07", "2019-01-08", "2019-01-09", "2019-01-10",
+    "2019-01-11", "2019-01-14", "2019-01-15", "2019-01-16",
+    "2019-01-17", "2019-01-18", "2019-01-21", "2019-01-22",
+    "2019-01-23", "2019-01-24", "2019-01-25", "2019-01-28",
+    "2019-01-29", "2019-01-30", "2019-01-31",
+)
 
 
 def _manifest_bytes(sessions):
@@ -223,6 +231,72 @@ def _double_lines():
             .replace('"159928.XSHE": 200', '"159928.XSHE": 198')
         for line in lines
     ]
+
+
+def _counterfactual_lines(
+        codes, amount=100, anchor=10.0, commission_rate=0.0003):
+    lines = [_initialization()]
+    buy_commission = max(5.0, 10.0 * amount * commission_rate)
+    sell_commission = max(5.0, 8.0 * amount * commission_rate)
+    for index, code in enumerate(codes):
+        lines.append(_line("2019-01-02 09:35:00", {
+            "event": "resonance_decision",
+            "accepted": True,
+            "code": code,
+            "direction": "BUY_TURN",
+            "reason": "BUY_CANDIDATE_SORTED:%s" % (index + 1),
+            "resonance_id": "FORMAL:%s" % code,
+            "signal_date": "2018-12-28",
+            "supporters": ["BOLL", "RSI"],
+        }))
+        lines.append(_fill_line(
+            "2019-01-02 09:35:00", code, "open", 10.0, amount,
+            buy_commission,
+        ))
+        lines.append(_line("2019-01-02 09:35:00", {
+            "event": "order_transition", "code": code,
+            "side": "BUY", "outcome": "FILLED",
+            "before_amount": 0, "after_amount": amount,
+        }))
+    positions = {code: amount for code in codes}
+    lines.append(_portfolio(
+        "2019-01-02 15:30:00", 20000.0, 17000.0, positions,
+    ))
+    for session in COUNTERFACTUAL_SESSIONS[2:-1]:
+        current_price = 9.0 if session == "2019-01-30" else 9.5
+        for code in codes:
+            lines.append(_line(session + " 09:35:00", {
+                "event": "atr_check", "code": code,
+                "current_price": current_price,
+                "highest_close_anchor": anchor,
+                "execution_policy": "OBSERVE_ONLY",
+                "order_submitted": False,
+            }))
+        lines.append(_portfolio(
+            session + " 15:30:00", 20000.0, 17000.0, positions,
+        ))
+    for code in codes:
+        lines.append(_line("2019-01-31 09:35:00", {
+            "event": "atr_check", "code": code,
+            "current_price": 8.0,
+            "highest_close_anchor": anchor,
+            "execution_policy": "OBSERVE_ONLY",
+            "order_submitted": False,
+        }))
+        lines.append(_fill_line(
+            "2019-01-31 09:35:00", code, "close", 8.0, amount,
+            sell_commission,
+        ))
+        lines.append(_line("2019-01-31 09:35:00", {
+            "event": "order_transition", "code": code,
+            "side": "SELL", "outcome": "FILLED",
+            "before_amount": amount, "after_amount": 0,
+            "exit_reason": "SIGNAL_EXIT",
+        }))
+    lines.append(_portfolio(
+        "2019-01-31 15:30:00", 19000.0, 19000.0, {},
+    ))
+    return lines
 
 
 def _write_log(path, lines):
@@ -721,3 +795,168 @@ def test_non_recorded_terminal_outcomes_are_valid_but_not_numeric(
 
     assert report["relative_sell_diagnostics"]["held_observation_count"] == 1
     assert report["relative_sell_diagnostics"]["horizon_5_count"] == 0
+
+
+def test_non_recovery_counterfactual_uses_prior_anchor_at_session_20(
+        tmp_path):
+    code = "159928.XSHE"
+    ordinary_path = _write_log(
+        tmp_path / "ordinary.log", _counterfactual_lines([code]),
+    )
+    double_path = _write_log(
+        tmp_path / "double.log", _counterfactual_lines([code]),
+    )
+    manifest = _validated_manifest(COUNTERFACTUAL_SESSIONS)
+
+    report = analyzer.analyze_paths(
+        [ordinary_path], [double_path], manifest,
+    )
+
+    counterfactual = report["non_recovery_counterfactual"]
+    assert counterfactual["rule"] == {
+        "completed_holding_sessions": 20,
+        "qualification": "PRIOR_HIGHEST_CLOSE_NOT_ABOVE_ENTRY_PRICE",
+        "execution": "DECISION_SESSION_0935_ATR_CHECK_PRICE",
+        "path_assumption": "ORIGINAL_TRADE_PATH_FIXED",
+    }
+    ordinary = counterfactual["ordinary"]
+    assert ordinary["commission_rate"] == pytest.approx(0.0003)
+    assert ordinary["triggered_closed_count"] == 1
+    assert ordinary["improved_trade_count"] == 1
+    assert ordinary["actual_closed_pnl"] == pytest.approx(-210.0)
+    assert ordinary["counterfactual_closed_pnl"] == pytest.approx(-110.0)
+    assert ordinary["pnl_delta"] == pytest.approx(100.0)
+    assert ordinary["actual_wins"] == 0
+    assert ordinary["counterfactual_wins"] == 0
+    assert ordinary["actual_worst_trade_pnl"] == pytest.approx(-210.0)
+    assert ordinary["counterfactual_worst_trade_pnl"] == pytest.approx(-110.0)
+    assert ordinary["gate"]["at_least_three_improved_trades"] is False
+    assert ordinary["gate"]["passed"] is False
+    assert ordinary["rows"] == [{
+        "code": code,
+        "entry_date": "2019-01-02",
+        "decision_date": "2019-01-30",
+        "actual_exit_date": "2019-01-31",
+        "entry_source": "FORMAL",
+        "entry_branch": None,
+        "entry_price": 10.0,
+        "prior_highest_close_anchor": 10.0,
+        "execution_price": 9.0,
+        "execution_amount": 100,
+        "execution_commission": 5.0,
+        "actual_pnl": pytest.approx(-210.0),
+        "counterfactual_pnl": pytest.approx(-110.0),
+        "pnl_delta": pytest.approx(100.0),
+        "actual_winner": False,
+        "counterfactual_winner": False,
+    }]
+
+
+def test_non_recovery_gate_requires_three_distributed_improvements(
+        tmp_path):
+    codes = ["159928.XSHE", "510300.XSHG", "513050.XSHG"]
+    ordinary_path = _write_log(
+        tmp_path / "ordinary.log", _counterfactual_lines(codes, amount=100),
+    )
+    double_path = _write_log(
+        tmp_path / "double.log", _counterfactual_lines(codes, amount=90),
+    )
+    manifest = _validated_manifest(COUNTERFACTUAL_SESSIONS)
+
+    report = analyzer.analyze_paths(
+        [ordinary_path], [double_path], manifest,
+    )
+
+    counterfactual = report["non_recovery_counterfactual"]
+    assert counterfactual["ordinary"]["pnl_delta"] == pytest.approx(300.0)
+    assert counterfactual["double_friction"]["pnl_delta"] == pytest.approx(
+        270.0,
+    )
+    assert counterfactual["ordinary"]["gate"]["passed"] is True
+    assert counterfactual["double_friction"]["gate"]["passed"] is True
+    assert counterfactual["decision"] == {
+        "ordinary_passed": True,
+        "double_friction_passed": True,
+        "proceed_to_strategy_candidate": True,
+    }
+
+
+def test_non_recovery_does_not_trigger_after_prior_close_above_entry(
+        tmp_path):
+    code = "159928.XSHE"
+    ordinary_path = _write_log(
+        tmp_path / "ordinary.log",
+        _counterfactual_lines([code], anchor=10.01),
+    )
+    double_path = _write_log(
+        tmp_path / "double.log",
+        _counterfactual_lines([code], anchor=10.01),
+    )
+    manifest = _validated_manifest(COUNTERFACTUAL_SESSIONS)
+
+    report = analyzer.analyze_paths(
+        [ordinary_path], [double_path], manifest,
+    )
+
+    ordinary = report["non_recovery_counterfactual"]["ordinary"]
+    assert ordinary["triggered_closed_count"] == 0
+    assert ordinary["counterfactual_closed_pnl"] == pytest.approx(-210.0)
+
+
+def test_non_recovery_uses_distinct_large_order_commission_rates(tmp_path):
+    code = "159928.XSHE"
+    ordinary_path = _write_log(
+        tmp_path / "ordinary.log",
+        _counterfactual_lines(
+            [code], amount=10000, commission_rate=0.0003,
+        ),
+    )
+    double_path = _write_log(
+        tmp_path / "double.log",
+        _counterfactual_lines(
+            [code], amount=10000, commission_rate=0.0006,
+        ),
+    )
+    manifest = _validated_manifest(COUNTERFACTUAL_SESSIONS)
+
+    report = analyzer.analyze_paths(
+        [ordinary_path], [double_path], manifest,
+    )["non_recovery_counterfactual"]
+
+    ordinary = report["ordinary"]
+    double = report["double_friction"]
+    assert ordinary["commission_rate"] == pytest.approx(0.0003)
+    assert double["commission_rate"] == pytest.approx(0.0006)
+    assert ordinary["rows"][0]["execution_commission"] == pytest.approx(27.0)
+    assert double["rows"][0]["execution_commission"] == pytest.approx(54.0)
+    assert ordinary["rows"][0]["counterfactual_pnl"] == pytest.approx(
+        -10057.0,
+    )
+    assert double["rows"][0]["counterfactual_pnl"] == pytest.approx(
+        -10114.0,
+    )
+
+
+@pytest.mark.parametrize("old,new", [
+    ("2019-01-30 09:35:00", "2019-01-30 09:36:00"),
+    ('"execution_policy": "OBSERVE_ONLY"',
+     '"execution_policy": "EXECUTE"'),
+    ('"order_submitted": false', '"order_submitted": true'),
+])
+def test_non_recovery_rejects_non_0935_observation_evidence(
+        tmp_path, old, new):
+    code = "159928.XSHE"
+    ordinary = [
+        line.replace(old, new)
+        if ('2019-01-30' in line and '"event": "atr_check"' in line)
+        else line
+        for line in _counterfactual_lines([code])
+    ]
+    ordinary_path = _write_log(tmp_path / "ordinary.log", ordinary)
+    double_path = _write_log(
+        tmp_path / "double.log", _counterfactual_lines([code]),
+    )
+    manifest = _validated_manifest(COUNTERFACTUAL_SESSIONS)
+
+    with pytest.raises(ValueError, match="atr_check identity is invalid"):
+        analyzer.analyze_paths([ordinary_path], [double_path], manifest)

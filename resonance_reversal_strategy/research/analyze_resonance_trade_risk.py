@@ -22,6 +22,10 @@ EXPECTED_PARAMETER_FINGERPRINT = "e1227fbd8b4a884e"
 EXPECTED_POOL_FINGERPRINT = "9123995edeb1ed84"
 EXPECTED_EVENT_FINGERPRINT = "1c0b8a22f48c97c3"
 EXPECTED_RELATIVE_FINGERPRINT = "f47d32b87be6d926"
+NON_RECOVERY_COMPLETED_SESSIONS = 20
+ORDINARY_COMMISSION_RATE = 0.0003
+DOUBLE_FRICTION_COMMISSION_RATE = 0.0006
+MINIMUM_COMMISSION = 5.0
 RELATIVE_BRANCHES = frozenset((
     "HARD_BOLL_SOFT_OSC", "SOFT_ALL_THREE",
 ))
@@ -824,11 +828,18 @@ def _position_amounts_by_date(points):
     }
 
 
-def _marks_by_code(records):
+def _atr_observations_by_code(records):
     result = {}
     for record in records:
         if record.get("event") != "atr_check":
             continue
+        timestamp = record.get("_timestamp")
+        if (not isinstance(timestamp, datetime)
+                or (timestamp.hour, timestamp.minute, timestamp.second)
+                != (9, 35, 0)
+                or record.get("execution_policy") != EXPECTED_ATR_POLICY
+                or record.get("order_submitted") is not False):
+            raise ValueError("atr_check identity is invalid")
         code = record.get("code")
         price = _finite_number(
             record.get("current_price"), "atr_check current_price",
@@ -837,7 +848,15 @@ def _marks_by_code(records):
         key = (record["_timestamp"].date(), code)
         if key in result:
             raise ValueError("duplicate atr_check mark")
-        result[key] = price
+        anchor = record.get("highest_close_anchor")
+        if anchor is not None:
+            anchor = _finite_number(
+                anchor, "atr_check highest_close_anchor", positive=True,
+            )
+        result[key] = {
+            "current_price": price,
+            "highest_close_anchor": anchor,
+        }
     return result
 
 
@@ -985,6 +1004,154 @@ def _relative_sell_diagnostics(records, registrations, outcomes):
     }
 
 
+def _non_recovery_trigger(
+        buy, actual_exit_date, source, atr_observations, amounts,
+        evaluation_sessions, commission_rate):
+    try:
+        buy_index = evaluation_sessions.index(buy.trade_date)
+    except ValueError as exc:
+        raise ValueError("buy date absent from evaluation sessions") from exc
+    decision_index = buy_index + NON_RECOVERY_COMPLETED_SESSIONS
+    if decision_index >= len(evaluation_sessions):
+        return None
+    decision_date = evaluation_sessions[decision_index]
+    if actual_exit_date is not None and decision_date > actual_exit_date:
+        return None
+    observation = atr_observations.get((decision_date, buy.code))
+    if observation is None:
+        return None
+    anchor = observation.get("highest_close_anchor")
+    if anchor is None or anchor > buy.price:
+        return None
+    prior_session = evaluation_sessions[decision_index - 1]
+    execution_amount = amounts.get(prior_session, {}).get(buy.code)
+    if execution_amount is None:
+        raise ValueError(
+            "non-recovery trigger lacks prior-session position amount: %s/%s"
+            % (decision_date, buy.code)
+        )
+    execution_price = observation["current_price"]
+    commission = max(
+        MINIMUM_COMMISSION,
+        execution_price * execution_amount * commission_rate,
+    )
+    buy_cost = buy.price * buy.amount + buy.commission
+    counterfactual_pnl = (
+        execution_price * execution_amount - commission - buy_cost
+    )
+    return {
+        "code": buy.code,
+        "entry_date": buy.trade_date.isoformat(),
+        "decision_date": decision_date.isoformat(),
+        "actual_exit_date": (
+            actual_exit_date.isoformat() if actual_exit_date is not None
+            else None
+        ),
+        "entry_source": source["entry_source"],
+        "entry_branch": source["entry_branch"],
+        "entry_price": buy.price,
+        "prior_highest_close_anchor": anchor,
+        "execution_price": execution_price,
+        "execution_amount": execution_amount,
+        "execution_commission": commission,
+        "counterfactual_pnl": counterfactual_pnl,
+    }
+
+
+def _non_recovery_counterfactual(
+        completed, open_positions, sources, atr_observations, amounts,
+        evaluation_sessions, commission_rate):
+    rows = []
+    counterfactual_by_identity = {}
+    for trade in completed:
+        identity = (trade.buy.trade_date, trade.code)
+        row = _non_recovery_trigger(
+            trade.buy, trade.sell.trade_date, sources[identity],
+            atr_observations, amounts, evaluation_sessions,
+            commission_rate,
+        )
+        if row is None:
+            continue
+        row.update({
+            "actual_pnl": trade.pnl,
+            "pnl_delta": row["counterfactual_pnl"] - trade.pnl,
+            "actual_winner": trade.pnl > 0,
+            "counterfactual_winner": row["counterfactual_pnl"] > 0,
+        })
+        rows.append(row)
+        counterfactual_by_identity[identity] = row["counterfactual_pnl"]
+    open_rows = []
+    for buy in open_positions:
+        identity = (buy.trade_date, buy.code)
+        row = _non_recovery_trigger(
+            buy, None, sources[identity], atr_observations, amounts,
+            evaluation_sessions, commission_rate,
+        )
+        if row is not None:
+            open_rows.append(row)
+    actual_pnls = [trade.pnl for trade in completed]
+    counterfactual_pnls = [
+        counterfactual_by_identity.get(
+            (trade.buy.trade_date, trade.code), trade.pnl,
+        )
+        for trade in completed
+    ]
+    actual_wins = sum(value > 0 for value in actual_pnls)
+    counterfactual_wins = sum(value > 0 for value in counterfactual_pnls)
+    actual_total = sum(actual_pnls)
+    counterfactual_total = sum(counterfactual_pnls)
+    actual_worst = min(actual_pnls) if actual_pnls else None
+    counterfactual_worst = (
+        min(counterfactual_pnls) if counterfactual_pnls else None
+    )
+    improved_count = sum(row["pnl_delta"] > 0 for row in rows)
+    harmed_count = sum(row["pnl_delta"] < 0 for row in rows)
+    winners_turned_to_losses = sum(
+        row["actual_winner"] and not row["counterfactual_winner"]
+        for row in rows
+    )
+    gate = {
+        "win_rate_not_lower": counterfactual_wins >= actual_wins,
+        "closed_pnl_improved": counterfactual_total > actual_total,
+        "worst_trade_loss_reduced": (
+            actual_worst is not None
+            and actual_worst < 0
+            and counterfactual_worst > actual_worst
+        ),
+        "at_least_three_improved_trades": improved_count >= 3,
+    }
+    gate["passed"] = all(gate.values())
+    return {
+        "commission_rate": commission_rate,
+        "closed_trade_count": len(completed),
+        "open_position_count": len(open_positions),
+        "triggered_closed_count": len(rows),
+        "triggered_open_count": len(open_rows),
+        "improved_trade_count": improved_count,
+        "harmed_trade_count": harmed_count,
+        "actual_winners_turned_to_losses": winners_turned_to_losses,
+        "actual_wins": actual_wins,
+        "counterfactual_wins": counterfactual_wins,
+        "actual_win_rate": _safe_rate(actual_wins, len(completed)),
+        "counterfactual_win_rate": _safe_rate(
+            counterfactual_wins, len(completed),
+        ),
+        "actual_closed_pnl": actual_total,
+        "counterfactual_closed_pnl": counterfactual_total,
+        "pnl_delta": counterfactual_total - actual_total,
+        "actual_worst_trade_pnl": actual_worst,
+        "counterfactual_worst_trade_pnl": counterfactual_worst,
+        "gate": gate,
+        "rows": sorted(
+            rows, key=lambda row: (row["decision_date"], row["code"]),
+        ),
+        "open_rows": sorted(
+            open_rows,
+            key=lambda row: (row["decision_date"], row["code"]),
+        ),
+    }
+
+
 def _max_drawdown_episode(points, sources, completed, open_positions):
     peak = points[0]
     best = (0.0, peak, peak)
@@ -1088,14 +1255,29 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
     ordinary_relative, ordinary_outcomes = _relative_records(
         ordinary.records, "ordinary", manifest.sessions,
     )
-    _relative_records(
+    double_relative, _ = _relative_records(
         double_friction.records, "double friction", manifest.sessions,
     )
     path_reconciliation = _reconcile_paths(ordinary, double_friction)
     completed, open_positions = _pair_completed_trades(ordinary.fills)
+    double_completed, double_open_positions = _pair_completed_trades(
+        double_friction.fills
+    )
     sources = _trade_sources(ordinary, ordinary_relative)
-    marks = _marks_by_code(ordinary.records)
+    double_sources = _trade_sources(double_friction, double_relative)
+    atr_observations = _atr_observations_by_code(ordinary.records)
+    double_atr_observations = _atr_observations_by_code(
+        double_friction.records
+    )
+    marks = {
+        key: observation["current_price"]
+        for key, observation in atr_observations.items()
+    }
     amounts = _position_amounts_by_date(ordinary.portfolio_points)
+    double_amounts = _position_amounts_by_date(
+        double_friction.portfolio_points
+    )
+    evaluation_sessions = _evaluation_sessions(manifest)
     sell_registrations = {
         observation_id: record
         for observation_id, record in ordinary_relative.items()
@@ -1112,10 +1294,19 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
             marks,
             amounts,
             sell_registrations,
-            _evaluation_sessions(manifest),
+            evaluation_sessions,
         )
         for trade in completed
     ]
+    ordinary_counterfactual = _non_recovery_counterfactual(
+        completed, open_positions, sources, atr_observations, amounts,
+        evaluation_sessions, ORDINARY_COMMISSION_RATE,
+    )
+    double_counterfactual = _non_recovery_counterfactual(
+        double_completed, double_open_positions, double_sources,
+        double_atr_observations, double_amounts, evaluation_sessions,
+        DOUBLE_FRICTION_COMMISSION_RATE,
+    )
     return {
         "source_files": {
             "ordinary": _source_file_report(ordinary_paths),
@@ -1129,6 +1320,32 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
             "relative_buy_policy": ordinary_init["relative_buy_policy"],
         },
         "path_reconciliation": path_reconciliation,
+        "non_recovery_counterfactual": {
+            "rule": {
+                "completed_holding_sessions": (
+                    NON_RECOVERY_COMPLETED_SESSIONS
+                ),
+                "qualification": (
+                    "PRIOR_HIGHEST_CLOSE_NOT_ABOVE_ENTRY_PRICE"
+                ),
+                "execution": "DECISION_SESSION_0935_ATR_CHECK_PRICE",
+                "path_assumption": "ORIGINAL_TRADE_PATH_FIXED",
+            },
+            "ordinary": ordinary_counterfactual,
+            "double_friction": double_counterfactual,
+            "decision": {
+                "ordinary_passed": ordinary_counterfactual["gate"][
+                    "passed"
+                ],
+                "double_friction_passed": double_counterfactual["gate"][
+                    "passed"
+                ],
+                "proceed_to_strategy_candidate": (
+                    ordinary_counterfactual["gate"]["passed"]
+                    and double_counterfactual["gate"]["passed"]
+                ),
+            },
+        },
         "trade_summary": {
             "closed_count": len(completed),
             "open_count": len(open_positions),
