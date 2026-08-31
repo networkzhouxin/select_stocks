@@ -191,3 +191,56 @@ python resonance_reversal_strategy/research/analyze_relative_turn_observations.p
 现在代码不包含真实 manifest、其冻结 hash 或聚宽平台结果，用户仍需按上述步骤导出。当前
 也尚无真实聚宽 `.3/.4` 完整日志证据；本地测试不构成订单路径、期末资产或观察收益已通过
 的证据。短区间聚宽冒烟同样不证明正式订单路径、收益或可以实盘。
+
+## 交易候选绩效评估器
+
+`research/analyze_candidate_performance.py` 只读取聚宽导出的三类完整日志和上文同一份
+schema V2 交易日 manifest：`.4` 基线、普通摩擦候选、双倍摩擦候选。它不读取行情，
+不运行策略，也不搜索参数、ETF、阈值或窗口。示例：
+
+```powershell
+python resonance_reversal_strategy/research/analyze_candidate_performance.py `
+  --baseline-log D:\logs\resonance-20260827.4-baseline.log `
+  --candidate-log D:\logs\resonance-candidate.log `
+  --double-friction-log D:\logs\resonance-candidate-double-friction.log `
+  --expected-baseline-build 20260827.4 `
+  --expected-candidate-build 20260828.CANDIDATE `
+  --session-calendar .\joinquant_sessions_2018_2021.json `
+  --session-calendar-sha256 <预先冻结的sha256> `
+  --output D:\logs\resonance-candidate-report.json
+```
+
+三个角色日志、manifest 和输出必须是五个不同的物理文件；每个角色只能有一条且必须有
+一条匹配预期 build 的初始化记录。报告以 20,000 元初始资金计算日频净值、总收益、年度
+收益、最大回撤、完整交易胜率及 Wilson 下界、中位交易收益、Profit Factor 和前 10%
+盈利集中度。买卖成交数量分别进入现金流，因此 ETF 份额变化不会被错误截成相同数量。
+
+最终门槛固定为：普通候选总收益大于 129.25%、胜率大于 55.8%、95% Wilson 下界大于
+50%、最大回撤小于 6.28%、完整交易不少于 80 笔、交易收益中位数大于 0、前 10% 完整
+交易占毛利润不超过 50%，且双倍摩擦总收益大于 64.10%。缺少或复用双倍摩擦日志、缺少
+初始化、build 不一致、manifest 不匹配或指标不可计算都会 fail closed；不得用普通候选
+结果代替双倍摩擦证据。
+
+## ATR 退出影子观察（build 20260828.1）
+
+`.1` 保留 `.4` 的全部正式信号、参数、ETF 池、相对观察和 ATR 卖出路径，只在 ATR
+卖单确认完全清仓且原持仓状态已经同步后登记 `ATR_SHADOW:` 记录。参考价是当次退出
+决策已经持有的 T 日 09:35 报价；H1/H3/H5 结果只在对应未来交易日 15:30 收盘后记录。
+影子队列与正式 `observation_events` 隔离，不参与信号、排序、仓位、挂起退出或订单。
+普通登记/记录异常只写诊断，不能改变已经完成的卖出；`FutureDataError` 仍原样抛出。
+
+聚宽完成同一 2019--2021、20,000 元回放后，使用：
+
+```powershell
+python resonance_reversal_strategy/research/analyze_atr_exit_shadows.py `
+  --baseline-log D:\logs\resonance-20260827.4.log `
+  --candidate-log D:\logs\resonance-20260828.1.log `
+  --session-calendar .\joinquant_sessions_2018_2021.json `
+  --session-calendar-sha256 <预先冻结的sha256> `
+  --output D:\logs\atr-exit-shadow-report.json
+```
+
+基线、候选、manifest 和输出必须是四个不同物理文件。只有 138 笔完全成交订单路径、
+730 个日频组合汇总及 23,856.40 元期末资产与 `.4` 完全一致，影子结果才可解释。
+`continue_atr_investigation=true` 也只允许提出新的 ATR 调整规格；不得自动删除 ATR、
+修改 2.5 倍数或改变 5%--15% 边界。

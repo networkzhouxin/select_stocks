@@ -101,8 +101,56 @@ def test_ensure_runtime_state_initializes_required_state(monkeypatch):
     assert runtime.position_states == {}
     assert runtime.processed_resonance_ids == {}
     assert runtime.observation_events == {}
+    assert runtime.atr_shadow_events == {}
+    assert runtime.atr_shadow_events is not runtime.observation_events
     assert runtime.sold_today == set()
     assert runtime.daily_attempted_buys == set()
+
+
+def test_runtime_state_normalizes_legacy_entry_price_without_inference(
+        monkeypatch):
+    legacy = {
+        "buy_date": date(2021, 1, 4),
+        "entry_atr": 1.0,
+        "highest_close_anchor": 12.0,
+        "pending_exit": None,
+    }
+    runtime = types.SimpleNamespace(position_states={"510300.XSHG": legacy})
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+
+    strategy.ensure_runtime_state()
+
+    assert legacy["entry_price"] is None
+
+
+def test_atr_shadow_id_is_deterministic_and_namespaced():
+    first = strategy.build_atr_shadow_id(
+        "510300.XSHG", date(2021, 1, 4), date(2021, 1, 12),
+    )
+    second = strategy.build_atr_shadow_id(
+        "510300.XSHG", date(2021, 1, 4), date(2021, 1, 12),
+    )
+
+    assert first == second
+    assert first.startswith("ATR_SHADOW:")
+
+
+def test_make_atr_shadow_event_preserves_frozen_entry_fields():
+    state = strategy.make_position_state(
+        date(2021, 1, 4), 0.2, 4.0,
+    )
+
+    event = strategy.make_atr_shadow_event(
+        "510300.XSHG", state, date(2021, 1, 12), 3.6, 3.5,
+    )
+
+    assert event["entry_price"] == pytest.approx(4.0)
+    assert event["entry_atr"] == pytest.approx(0.2)
+    assert event["highest_close_anchor"] == pytest.approx(4.0)
+    assert event["reference_price"] == pytest.approx(3.6)
+    assert event["stop_price"] == pytest.approx(3.5)
+    assert event["horizons"] == (1, 3, 5)
+    assert event["outcomes"] == {}
 
 
 def test_do_trading_initializes_runtime_state(monkeypatch):
@@ -1071,6 +1119,7 @@ def test_partial_buy_establishes_frozen_risk_state_and_consumes_daily_attempt(
     assert runtime.position_states["510300.XSHG"] == {
         "buy_date": "2021-01-05",
         "entry_atr": 2.5,
+        "entry_price": 10.2,
         "highest_close_anchor": 10.2,
         "pending_exit": None,
     }
@@ -1269,10 +1318,48 @@ def runtime_state(max_holdings=3, position_states=None, processed=None,
         position_states={} if position_states is None else position_states,
         processed_resonance_ids={} if processed is None else processed,
         observation_events={},
+        atr_shadow_events={},
         sold_today=set() if sold is None else sold,
         daily_attempted_buys=set() if attempted is None else attempted,
         daily_retried_exits=set() if retried is None else retried,
     )
+
+
+def arrange_atr_shadow_submit_sell(
+        monkeypatch, outcome, after_amount, calls=None):
+    code = "510300.XSHG"
+    calls = [] if calls is None else calls
+    state = strategy.make_position_state(date(2021, 1, 4), 0.2, 4.0)
+    runtime = runtime_state(position_states={code: state})
+    amounts = iter((1000, after_amount))
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "get_current_data",
+        lambda: {code: current_record(price=3.6, paused=False)},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        strategy, "get_actual_amount",
+        lambda context, requested_code: next(amounts),
+    )
+    monkeypatch.setattr(
+        strategy, "classify_order_outcome",
+        lambda *args, **kwargs: outcome,
+    )
+    monkeypatch.setattr(
+        strategy, "order_target",
+        lambda order_code, target: calls.append("order_target")
+        or types.SimpleNamespace(amount=-1000, filled=-1000),
+        raising=False,
+    )
+    original_sync = strategy.sync_sell_state_after_order
+
+    def tracked_sync(*args, **kwargs):
+        calls.append("state_sync")
+        return original_sync(*args, **kwargs)
+
+    monkeypatch.setattr(strategy, "sync_sell_state_after_order", tracked_sync)
+    return runtime, calls
 
 
 def test_signal_loader_is_strictly_t_minus_one(monkeypatch):
@@ -1726,6 +1813,7 @@ def test_submit_buy_uses_current_account_values_and_actual_partial_fill(
     assert runtime.position_states[code] == {
         "buy_date": pd.Timestamp("2021-01-06").date(),
         "entry_atr": 2.5,
+        "entry_price": 11.0,
         "highest_close_anchor": 11.0,
         "pending_exit": None,
     }
@@ -1813,6 +1901,109 @@ def test_submit_sell_preserves_exit_reason_and_clears_only_actual_zero(
     assert orders == [(code, 0)]
     assert runtime.position_states == {}
     assert runtime.sold_today == {code}
+
+
+@pytest.mark.parametrize(
+    "reason,outcome,remaining,expected",
+    [
+        (strategy.ExitReason.ATR_EXIT, strategy.OrderOutcome.FILLED, 0, 1),
+        (strategy.ExitReason.ATR_EXIT, strategy.OrderOutcome.PARTIAL, 100, 0),
+        (
+            strategy.ExitReason.ATR_EXIT,
+            strategy.OrderOutcome.NOT_FILLED,
+            100,
+            0,
+        ),
+        (strategy.ExitReason.SIGNAL_EXIT, strategy.OrderOutcome.FILLED, 0, 0),
+    ],
+)
+def test_atr_shadow_registers_only_for_full_atr_exit(
+        monkeypatch, reason, outcome, remaining, expected):
+    registrations = []
+    arrange_atr_shadow_submit_sell(
+        monkeypatch, outcome=outcome, after_amount=remaining,
+    )
+    monkeypatch.setattr(
+        strategy, "try_register_atr_exit_shadow",
+        lambda *args, **kwargs: registrations.append((args, kwargs)) or True,
+        raising=False,
+    )
+
+    result = strategy.submit_sell(
+        fake_context(current_date="2021-01-12"),
+        "510300.XSHG", reason, 3.5,
+    )
+
+    assert result is outcome
+    assert len(registrations) == expected
+
+
+def test_atr_shadow_registration_error_cannot_change_filled_sell(
+        monkeypatch):
+    runtime, _ = arrange_atr_shadow_submit_sell(
+        monkeypatch, outcome=strategy.OrderOutcome.FILLED, after_amount=0,
+    )
+    monkeypatch.setattr(
+        strategy, "register_atr_exit_shadow",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("shadow")
+        ),
+        raising=False,
+    )
+
+    result = strategy.submit_sell(
+        fake_context(current_date="2021-01-12"),
+        "510300.XSHG", strategy.ExitReason.ATR_EXIT, 3.5,
+    )
+
+    assert result is strategy.OrderOutcome.FILLED
+    assert runtime.sold_today == {"510300.XSHG"}
+    assert runtime.position_states == {}
+
+
+def test_atr_shadow_quote_is_read_after_sell_state_sync(monkeypatch):
+    calls = []
+    arrange_atr_shadow_submit_sell(
+        monkeypatch, outcome=strategy.OrderOutcome.FILLED,
+        after_amount=0, calls=calls,
+    )
+    monkeypatch.setattr(
+        strategy, "get_execution_price",
+        lambda current_data, code: calls.append("shadow_quote") or 3.6,
+    )
+
+    strategy.submit_sell(
+        fake_context(current_date="2021-01-12"),
+        "510300.XSHG", strategy.ExitReason.ATR_EXIT, 3.5,
+    )
+
+    assert calls.index("order_target") < calls.index("state_sync")
+    assert calls.index("state_sync") < calls.index("shadow_quote")
+
+
+def test_register_atr_shadow_is_idempotent(monkeypatch):
+    messages = []
+    state = strategy.make_position_state(date(2021, 1, 4), 0.2, 4.0)
+    runtime = runtime_state()
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    monkeypatch.setattr(
+        strategy, "_emit_structured_log",
+        lambda event, payload: messages.append((event, payload)),
+    )
+
+    first = strategy.register_atr_exit_shadow(
+        "510300.XSHG", state, date(2021, 1, 12), 3.6, 3.5,
+    )
+    second = strategy.register_atr_exit_shadow(
+        "510300.XSHG", state, date(2021, 1, 12), 3.6, 3.5,
+    )
+
+    assert first is True
+    assert second is False
+    assert len(runtime.atr_shadow_events) == 1
+    assert [event for event, _ in messages] == [
+        "atr_exit_shadow_registered",
+    ]
 
 
 def test_atr_exit_marks_sold_and_blocks_same_day_resonance_rebuy(monkeypatch):
@@ -3018,6 +3209,10 @@ def test_after_close_runs_observations_anchor_cleanup_and_summary_without_orders
         lambda *args: order.append("observations"), raising=False,
     )
     monkeypatch.setattr(
+        strategy, "record_due_atr_shadow_outcomes",
+        lambda *args: order.append("atr_shadows"), raising=False,
+    )
+    monkeypatch.setattr(
         strategy, "log_portfolio_summary",
         lambda *args: order.append("summary"), raising=False,
     )
@@ -3034,7 +3229,74 @@ def test_after_close_runs_observations_anchor_cleanup_and_summary_without_orders
 
     strategy.after_close(context)
 
-    assert order == ["observations", "summary"]
+    assert order == ["observations", "atr_shadows", "summary"]
+
+
+def install_atr_shadow_event(monkeypatch, event_date="2021-01-04",
+                             reference_price=10.0, entry_price=10.2):
+    state = strategy.make_position_state(
+        date(2020, 12, 28), 1.0, entry_price,
+    )
+    event = strategy.make_atr_shadow_event(
+        "510300.XSHG", state, date.fromisoformat(event_date),
+        reference_price, 9.0,
+    )
+    runtime = runtime_state()
+    runtime.atr_shadow_events[event["atr_shadow_id"]] = event
+    monkeypatch.setattr(strategy, "g", runtime, raising=False)
+    return event
+
+
+def test_atr_shadow_outcomes_use_exact_future_sessions_and_never_order(
+        monkeypatch):
+    event = install_atr_shadow_event(monkeypatch)
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: [date(2021, 1, 4), date(2021, 1, 5)],
+        raising=False,
+    )
+    for function_name in (
+            "order_target", "order_target_value", "submit_buy", "submit_sell"):
+        monkeypatch.setattr(
+            strategy, function_name,
+            lambda *args, **kwargs: pytest.fail(
+                "ATR shadow outcome recording must not place orders"
+            ),
+            raising=False,
+        )
+
+    context = fake_context(current_date="2021-01-05")
+    context.current_dt = pd.Timestamp("2021-01-05 15:30:00")
+    strategy.record_due_atr_shadow_outcomes(
+        context, {"510300.XSHG": current_record(price=10.5)},
+    )
+
+    outcome = event["outcomes"][1]
+    assert outcome["closing_date"] == date(2021, 1, 5)
+    assert outcome["return"] == pytest.approx(0.05)
+    assert outcome["recovered_entry"] is True
+
+
+def test_atr_shadow_future_data_error_propagates(monkeypatch):
+    class FutureDataError(RuntimeError):
+        pass
+
+    install_atr_shadow_event(monkeypatch)
+    expected = FutureDataError("future boundary")
+    monkeypatch.setattr(
+        strategy, "get_trade_days",
+        lambda **kwargs: (_ for _ in ()).throw(expected),
+        raising=False,
+    )
+    context = fake_context(current_date="2021-01-05")
+    context.current_dt = pd.Timestamp("2021-01-05 15:30:00")
+
+    with pytest.raises(FutureDataError) as raised:
+        strategy.record_due_atr_shadow_outcomes(
+            context, {"510300.XSHG": current_record(price=10.5)},
+        )
+
+    assert raised.value is expected
 
 
 def test_buy_attempt_logs_transition_and_registers_retrospective_event(
@@ -3546,7 +3808,7 @@ def _event_diagnostic_frame(previous_overrides=None, current_overrides=None):
 
 
 def test_diagnostic_build_id_is_bumped():
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.1"
 
 
 def test_relative_observation_build_and_formal_fingerprints_are_separated(
@@ -3558,13 +3820,19 @@ def test_relative_observation_build_and_formal_fingerprints_are_separated(
     strategy.initialize(types.SimpleNamespace())
 
     payload = json.loads(messages[-1])
-    assert strategy.DEPLOYMENT_BUILD_ID == "20260827.4"
-    assert payload["build"] == "20260827.4"
+    assert strategy.DEPLOYMENT_BUILD_ID == "20260828.1"
+    assert payload["build"] == "20260828.1"
     assert payload["parameter_fingerprint"] == "e1227fbd8b4a884e"
     assert payload["pool_fingerprint"] == "9123995edeb1ed84"
     assert payload["event_logic_fingerprint"] == "1c0b8a22f48c97c3"
     assert payload["relative_observation_fingerprint"] == (
         strategy.relative_observation_fingerprint()
+    )
+    assert payload["atr_shadow_fingerprint"] == (
+        strategy.atr_shadow_fingerprint()
+    )
+    assert payload["atr_shadow_fingerprint"] != (
+        payload["relative_observation_fingerprint"]
     )
 
 

@@ -9,7 +9,7 @@ from numbers import Real
 
 
 STRATEGY_VERSION = "resonance-v0.1.0"
-DEPLOYMENT_BUILD_ID = "20260827.4"
+DEPLOYMENT_BUILD_ID = "20260828.1"
 FORMAL_EVENT_LOGIC_BUILD_ID = "20260827.3"
 BENCHMARK = "000300.XSHG"
 
@@ -771,6 +771,123 @@ def record_due_observation_outcomes(context, current_data):
             )
 
 
+def _atr_shadow_record_is_terminal(record):
+    return _builtins.all(
+        _is_terminal_observation_outcome(record["outcomes"].get(horizon))
+        for horizon in record["horizons"]
+    )
+
+
+def _validate_atr_shadow_record(shadow_id, record):
+    if (not isinstance(shadow_id, str)
+            or not shadow_id.startswith("ATR_SHADOW:")):
+        raise ValueError("invalid ATR shadow namespace")
+    if not isinstance(record, dict):
+        raise ValueError("ATR shadow record must be an object")
+    if record.get("atr_shadow_id") != shadow_id:
+        raise ValueError("ATR shadow identity mismatch")
+    if record.get("observation_kind") != "ATR_EXIT_SHADOW":
+        raise ValueError("invalid ATR shadow observation kind")
+    if tuple(record.get("horizons") or ()) != (1, 3, 5):
+        raise ValueError("invalid ATR shadow horizons")
+    if not isinstance(record.get("outcomes"), dict):
+        raise ValueError("ATR shadow outcomes must be an object")
+    if _calendar_date(record.get("event_date")) is None:
+        raise ValueError("ATR shadow event date is required")
+    if not is_finite_positive(record.get("reference_price")):
+        raise ValueError("ATR shadow reference price must be finite positive")
+    if not isinstance(record.get("code"), str) or not record["code"]:
+        raise ValueError("ATR shadow code is required")
+
+
+def _record_due_atr_shadow_outcomes_for_record(
+        shadow_id, record, closing_date, current_data):
+    event_date = _calendar_date(record["event_date"])
+    if closing_date is None or closing_date <= event_date:
+        return
+    trade_days = get_trade_days(
+        start_date=event_date, end_date=closing_date,
+    )
+    elapsed_trade_dates = sorted({
+        trade_date
+        for trade_date in (_calendar_date(day) for day in trade_days)
+        if (trade_date is not None
+            and event_date < trade_date <= closing_date)
+    })
+    elapsed_sessions = len(elapsed_trade_dates)
+    due_horizons = due_observation_horizons(record, elapsed_sessions)
+    for horizon in due_horizons:
+        due_date = elapsed_trade_dates[horizon - 1]
+        if horizon < elapsed_sessions:
+            outcome = {
+                "status": "HORIZON_MISSED",
+                "closing_date": due_date,
+                "closing_price": None,
+                "return": None,
+                "recovered_entry": None,
+            }
+        else:
+            closing_price = get_execution_price(current_data, record["code"])
+            if closing_price is None:
+                outcome = {
+                    "status": "PRICE_UNAVAILABLE",
+                    "closing_date": due_date,
+                    "closing_price": None,
+                    "return": None,
+                    "recovered_entry": None,
+                }
+            else:
+                entry_price = record.get("entry_price")
+                outcome = {
+                    "status": "RECORDED",
+                    "closing_date": due_date,
+                    "closing_price": closing_price,
+                    "return": (
+                        closing_price / record["reference_price"] - 1.0
+                    ),
+                    "recovered_entry": (
+                        None
+                        if not is_finite_positive(entry_price)
+                        else closing_price >= entry_price
+                    ),
+                }
+        record["outcomes"][horizon] = outcome
+        _emit_structured_log("atr_exit_shadow_outcome", {
+            "atr_shadow_id": shadow_id,
+            "observation_kind": record["observation_kind"],
+            "code": record["code"],
+            "event_date": record["event_date"],
+            "horizon": horizon,
+            "outcome": outcome,
+            "build": record["build"],
+        })
+    if _atr_shadow_record_is_terminal(record):
+        g.atr_shadow_events.pop(shadow_id, None)
+
+
+def record_due_atr_shadow_outcomes(context, current_data):
+    closing_date = _calendar_date(context.current_dt)
+    for shadow_id, record in list(g.atr_shadow_events.items()):
+        try:
+            _validate_atr_shadow_record(shadow_id, record)
+            if _atr_shadow_record_is_terminal(record):
+                g.atr_shadow_events.pop(shadow_id, None)
+                continue
+            _record_due_atr_shadow_outcomes_for_record(
+                shadow_id, record, closing_date, current_data,
+            )
+        except Exception as error:
+            if _is_future_data_error(error):
+                raise
+            g.atr_shadow_events.pop(shadow_id, None)
+            _emit_structured_log("atr_shadow_diagnostic", {
+                "atr_shadow_id": shadow_id,
+                "reason": "ATR_SHADOW_RECORD_DROPPED",
+                "error_type": type(error).__name__,
+                "build": DEPLOYMENT_BUILD_ID,
+            })
+
+
 def ensure_runtime_state():
     if not hasattr(g, "params"):
         g.params = get_default_params()
@@ -778,10 +895,15 @@ def ensure_runtime_state():
         g.etf_pool = get_default_etf_pool()
     if not hasattr(g, "position_states"):
         g.position_states = {}
+    for state in g.position_states.values():
+        if isinstance(state, dict) and "entry_price" not in state:
+            state["entry_price"] = None
     if not hasattr(g, "processed_resonance_ids"):
         g.processed_resonance_ids = {}
     if not hasattr(g, "observation_events"):
         g.observation_events = {}
+    if not hasattr(g, "atr_shadow_events"):
+        g.atr_shadow_events = {}
     if not hasattr(g, "sold_today"):
         g.sold_today = set()
     if not hasattr(g, "daily_attempted_buys"):
@@ -834,6 +956,7 @@ def after_close(context):
         closing_price = get_execution_price(current_data, code)
         update_highest_close_anchor(state, closing_price)
     record_due_observation_outcomes(context, current_data)
+    record_due_atr_shadow_outcomes(context, current_data)
     log_portfolio_summary(context)
 
 
@@ -864,6 +987,7 @@ def initialize(context):
             g.params, self_check,
         ),
         "relative_observation_fingerprint": relative_observation_fingerprint(),
+        "atr_shadow_fingerprint": atr_shadow_fingerprint(),
         "etf_pool": list(g.etf_pool),
     })
 
@@ -1040,9 +1164,82 @@ def make_position_state(buy_date, entry_atr, entry_price):
     return {
         "buy_date": buy_date,
         "entry_atr": float(entry_atr),
+        "entry_price": float(entry_price),
         "highest_close_anchor": float(entry_price),
         "pending_exit": None,
     }
+
+
+def build_atr_shadow_id(code, buy_date, exit_date):
+    raw = "%s|%s|%s" % (
+        code, _calendar_date(buy_date), _calendar_date(exit_date),
+    )
+    return "ATR_SHADOW:" + hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()[:20]
+
+
+def make_atr_shadow_event(code, state, exit_date, reference_price,
+                          stop_price):
+    return {
+        "atr_shadow_id": build_atr_shadow_id(
+            code, state["buy_date"], exit_date,
+        ),
+        "observation_kind": "ATR_EXIT_SHADOW",
+        "code": code,
+        "event_date": _calendar_date(exit_date),
+        "reference_price": float(reference_price),
+        "entry_price": state.get("entry_price"),
+        "entry_atr": state["entry_atr"],
+        "highest_close_anchor": state["highest_close_anchor"],
+        "stop_price": float(stop_price),
+        "horizons": (1, 3, 5),
+        "outcomes": {},
+        "build": DEPLOYMENT_BUILD_ID,
+    }
+
+
+def register_atr_exit_shadow(code, state, exit_date, reference_price,
+                             stop_price):
+    event = make_atr_shadow_event(
+        code, state, exit_date, reference_price, stop_price,
+    )
+    shadow_id = event["atr_shadow_id"]
+    if not shadow_id.startswith("ATR_SHADOW:"):
+        raise ValueError("ATR shadow id must use ATR_SHADOW namespace")
+    if shadow_id in g.atr_shadow_events:
+        return False
+    g.atr_shadow_events[shadow_id] = event
+    _emit_structured_log("atr_exit_shadow_registered", event)
+    return True
+
+
+def try_register_atr_exit_shadow(code, state, exit_date, current_data,
+                                 stop_price):
+    try:
+        reference_price = get_execution_price(current_data, code)
+        if reference_price is None:
+            _emit_structured_log("atr_shadow_diagnostic", {
+                "code": code,
+                "event_date": exit_date,
+                "reason": "REFERENCE_PRICE_UNAVAILABLE",
+                "build": DEPLOYMENT_BUILD_ID,
+            })
+            return False
+        return register_atr_exit_shadow(
+            code, state, exit_date, reference_price, stop_price,
+        )
+    except Exception as error:
+        if _is_future_data_error(error):
+            raise
+        _emit_structured_log("atr_shadow_diagnostic", {
+            "code": code,
+            "event_date": exit_date,
+            "reason": "ATR_SHADOW_REGISTRATION_FAILED",
+            "error_type": type(error).__name__,
+            "build": DEPLOYMENT_BUILD_ID,
+        })
+        return False
 
 
 def set_pending_exit(position_state, reason, created_date, trigger_value,
@@ -1128,6 +1325,17 @@ def submit_sell(context, code, reason, trigger_value):
     current_data = get_current_data()
     tradability = get_tradability(current_data, code)
     before_amount = get_actual_amount(context, code)
+    live_state = g.position_states.get(code)
+    state_before = None
+    if isinstance(live_state, dict):
+        state_before = {
+            "buy_date": live_state.get("buy_date"),
+            "entry_atr": live_state.get("entry_atr"),
+            "entry_price": live_state.get("entry_price"),
+            "highest_close_anchor": live_state.get(
+                "highest_close_anchor"
+            ),
+        }
     order = None
     if before_amount > 0 and tradability is Tradability.TRADEABLE:
         order = order_target(code, 0)
@@ -1145,6 +1353,14 @@ def submit_sell(context, code, reason, trigger_value):
         code, OrderSide.SELL, result, before_amount, after_amount, 0,
         state.get("pending_exit") if state is not None else None,
     )
+    if (reason is ExitReason.ATR_EXIT
+            and result is OrderOutcome.FILLED
+            and after_amount == 0
+            and state_before is not None):
+        try_register_atr_exit_shadow(
+            code, state_before, context.current_dt.date(),
+            current_data, trigger_value,
+        )
     return result
 
 
@@ -1685,6 +1901,21 @@ def relative_observation_logic_contract():
 
 def relative_observation_fingerprint():
     return _value_fingerprint(relative_observation_logic_contract())
+
+
+def atr_shadow_logic_contract():
+    return {
+        "namespace": "ATR_SHADOW",
+        "registration": "FULLY_FILLED_ATR_EXIT_AFTER_STATE_SYNC",
+        "reference_price": "EXIT_DECISION_09_35_QUOTE",
+        "outcomes": [1, 3, 5],
+        "outcome_time": "AFTER_CLOSE_ONLY",
+        "trading_effect": "NONE",
+    }
+
+
+def atr_shadow_fingerprint():
+    return _value_fingerprint(atr_shadow_logic_contract())
 
 
 def make_turn_event(indicator, direction, event_date, expires_date,
