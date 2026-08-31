@@ -1022,7 +1022,7 @@ def test_entry_quality_links_only_t_minus_one_snapshot_features(tmp_path):
     assert attribution["feature_contract"] == {
         "categorical": [
             "entry_source", "entry_branch", "supporters",
-            "entry_rank", "code",
+            "entry_rank", "entry_market_state", "code",
         ],
         "continuous": [
             "rsi14", "adx14", "atr_to_close", "boll_width",
@@ -1033,6 +1033,17 @@ def test_entry_quality_links_only_t_minus_one_snapshot_features(tmp_path):
             "longest_underwater_sessions",
         ],
     }
+    assert attribution["semantic_boundaries"] == {
+        "normalized_boll_mid_slope": {
+            "positive": "> 0",
+            "nonpositive": "<= 0",
+        },
+        "volume_ratio": {
+            "above_one": "> 1.0",
+            "at_or_below_one": "<= 1.0",
+        },
+        "threshold_search_performed": False,
+    }
     ordinary = attribution["ordinary"]
     assert ordinary["closed_count"] == 1
     assert ordinary["wins"] == 1
@@ -1040,6 +1051,9 @@ def test_entry_quality_links_only_t_minus_one_snapshot_features(tmp_path):
     assert ordinary["categorical"]["entry_rank"]["1"]["count"] == 1
     assert ordinary["categorical"]["supporters"][
         "BOLL+KDJ+RSI"
+    ]["count"] == 1
+    assert ordinary["categorical"]["entry_market_state"][
+        "SLOPE_POSITIVE|VOLUME_ABOVE_ONE"
     ]["count"] == 1
     assert ordinary["continuous"]["atr_to_close"]["winner"] == {
         "count": 1,
@@ -1152,6 +1166,10 @@ def test_entry_quality_gate_marks_only_stable_distributed_weak_cohort():
     assert {
         "field": "entry_branch", "value": "WEAK_BRANCH",
     } in decision["eligible_groups"]
+    assert {
+        "field": "entry_market_state",
+        "value": "SLOPE_POSITIVE|VOLUME_AT_OR_BELOW_ONE",
+    } in decision["eligible_groups"]
     assert decision["proceed_to_counterfactual_design"] is True
 
 
@@ -1231,3 +1249,17 @@ def test_entry_quality_sorted_candidate_is_strictly_prefill_0935_evidence(
 
     with pytest.raises(ValueError, match=expected):
         analyzer.analyze_paths([ordinary_path], [double_path], manifest)
+
+
+@pytest.mark.parametrize("slope,volume_ratio,expected", [
+    (0.01, 1.01, "SLOPE_POSITIVE|VOLUME_ABOVE_ONE"),
+    (0.01, 1.00, "SLOPE_POSITIVE|VOLUME_AT_OR_BELOW_ONE"),
+    (0.00, 1.01, "SLOPE_NONPOSITIVE|VOLUME_ABOVE_ONE"),
+    (-0.01, 1.00, "SLOPE_NONPOSITIVE|VOLUME_AT_OR_BELOW_ONE"),
+])
+def test_entry_market_state_uses_fixed_zero_and_one_boundaries(
+        slope, volume_ratio, expected):
+    assert analyzer._entry_market_state({
+        "normalized_boll_mid_slope": slope,
+        "volume_ratio": volume_ratio,
+    }) == expected

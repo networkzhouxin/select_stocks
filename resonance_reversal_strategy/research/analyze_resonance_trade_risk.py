@@ -991,7 +991,8 @@ def _group_summary(trades, field):
 
 
 ENTRY_QUALITY_CATEGORICAL_FIELDS = (
-    "entry_source", "entry_branch", "supporters", "entry_rank", "code",
+    "entry_source", "entry_branch", "supporters", "entry_rank",
+    "entry_market_state", "code",
 )
 ENTRY_QUALITY_CONTINUOUS_FIELDS = (
     "rsi14", "adx14", "atr_to_close", "boll_width", "volume_ratio",
@@ -1140,6 +1141,25 @@ def _distribution(values):
     }
 
 
+def _entry_market_state(features):
+    slope = _finite_number(
+        features.get("normalized_boll_mid_slope"),
+        "entry market state normalized_boll_mid_slope",
+    )
+    volume_ratio = _finite_number(
+        features.get("volume_ratio"),
+        "entry market state volume_ratio", nonnegative=True,
+    )
+    slope_state = (
+        "SLOPE_POSITIVE" if slope > 0 else "SLOPE_NONPOSITIVE"
+    )
+    volume_state = (
+        "VOLUME_ABOVE_ONE"
+        if volume_ratio > 1.0 else "VOLUME_AT_OR_BELOW_ONE"
+    )
+    return "%s|%s" % (slope_state, volume_state)
+
+
 def _profit_concentration(rows):
     gross_profits = sorted(
         (row["pnl"] for row in rows if row["pnl"] > 0), reverse=True,
@@ -1232,7 +1252,11 @@ def _entry_quality_path(rows):
     for field in ENTRY_QUALITY_CATEGORICAL_FIELDS:
         grouped = {}
         for row in rows:
-            grouped.setdefault(str(row[field]), []).append(row)
+            value = (
+                _entry_market_state(row["features"])
+                if field == "entry_market_state" else row[field]
+            )
+            grouped.setdefault(str(value), []).append(row)
         categorical[field] = {
             value: _entry_quality_cohort(
                 values, overall_win_rate, overall_by_year,
@@ -1690,6 +1714,17 @@ def analyze_paths(ordinary_paths, double_friction_paths, manifest):
                     "mfe", "mae", "max_profit_giveback",
                     "longest_underwater_sessions",
                 ],
+            },
+            "semantic_boundaries": {
+                "normalized_boll_mid_slope": {
+                    "positive": "> 0",
+                    "nonpositive": "<= 0",
+                },
+                "volume_ratio": {
+                    "above_one": "> 1.0",
+                    "at_or_below_one": "<= 1.0",
+                },
+                "threshold_search_performed": False,
             },
             "candidate_gate_contract": {
                 "minimum_trades": 8,
