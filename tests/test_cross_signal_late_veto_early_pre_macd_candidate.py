@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import pathlib
 import sys
 import types
+from types import SimpleNamespace
 
 import pytest
 
@@ -139,3 +141,126 @@ def test_early_channel_keeps_existing_buy_guards(overrides, held_codes):
     assert candidate.filter_early_pre_macd_buy_candidates(
         [eligible_score(**overrides)], held_codes=held_codes
     ) == []
+
+
+def test_candidate_identity_remains_frozen():
+    candidate = candidate_module()
+
+    assert candidate.STRATEGY_VERSION == (
+        "cross-v0.3.3-late-veto-early-pre-macd-candidate"
+    )
+    assert candidate.DEPLOYMENT_BUILD_ID == "20260822.3-candidate"
+    assert candidate.business_config_fingerprint() == "f6b08195dd3d"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"macd_cross_up": False, "macd_cross_up_age": None},
+        {"macd_cross_up_age": 1},
+        {"rsi6_cross_rsi12_up_age": 0},
+        {"rsi6_cross_rsi12_up_age": 3},
+        {"kdj_k_cross_up_age": 0},
+        {"kdj_k_cross_up_age": 3},
+        {"close": 2.5999},
+    ],
+)
+def test_late_veto_requires_every_frozen_condition(overrides):
+    candidate = candidate_module()
+    late = eligible_score(
+        buy_score=84,
+        close=2.60,
+        macd_cross_up=True,
+        macd_cross_up_age=0,
+        rsi6_cross_rsi12_up_age=2,
+        kdj_k_cross_up_age=1,
+    )
+    late.update(overrides)
+
+    assert candidate.is_late_macd_boll_upper_entry(late) is False
+
+
+def test_three_primary_candidates_are_not_displaced_by_early_channel():
+    candidate = candidate_module()
+    scores = [eligible_score(code="EARLY.XSHG", buy_score=59)]
+    scores.extend(
+        eligible_score(
+            code="P%d.XSHG" % index,
+            buy_score=buy_score,
+            macd_cross_up=True,
+            macd_cross_up_age=1,
+        )
+        for index, buy_score in enumerate((80, 70, 60), start=1)
+    )
+
+    queue = candidate.build_new_buy_queue(scores, held_codes=[])
+
+    assert [item["entry_channel"] for item in queue[:3]] == [
+        "primary",
+        "primary",
+        "primary",
+    ]
+    assert queue[3]["entry_channel"] == "early_pre_macd"
+
+
+def test_entry_channel_does_not_change_position_sizing():
+    candidate = candidate_module()
+    score = eligible_score(buy_score=55, volume_score=6)
+    primary = dict(score, entry_channel="primary")
+    early = dict(score, entry_channel="early_pre_macd")
+
+    primary_target = candidate.calc_stress_adjusted_buy_target_value(
+        20000,
+        primary,
+        current_date="2021-01-04",
+        atr_stop_history=[],
+        trade_days=[],
+    )
+    early_target = candidate.calc_stress_adjusted_buy_target_value(
+        20000,
+        early,
+        current_date="2021-01-04",
+        atr_stop_history=[],
+        trade_days=[],
+    )
+
+    assert primary_target == early_target
+
+
+def test_do_trading_scores_every_etf_at_previous_trade_date(monkeypatch):
+    candidate = candidate_module()
+    scored_dates = []
+    candidate.g = SimpleNamespace(
+        params=candidate.get_default_params(),
+        sold_guard_date=None,
+        sold_today=set(),
+        etf_pool=["AAA.XSHG", "BBB.XSHG"],
+        highest_since_buy={},
+        entry_atr={},
+        buy_date={},
+        last_scores={},
+        atr_stop_history=[],
+    )
+    monkeypatch.setattr(
+        candidate,
+        "get_prev_trade_date",
+        lambda context: "2020-12-31",
+    )
+    monkeypatch.setattr(candidate, "get_current_data", lambda: {}, raising=False)
+    monkeypatch.setattr(candidate, "check_atr_stops", lambda context, data: [])
+    monkeypatch.setattr(
+        candidate,
+        "is_confirmed_paused",
+        lambda current_data, code: False,
+    )
+
+    def record_score_date(code, signal_date, return_reason=False):
+        scored_dates.append(signal_date)
+        return (None, "no_score") if return_reason else None
+
+    monkeypatch.setattr(candidate, "calc_cross_signal_score", record_score_date)
+    context = SimpleNamespace(current_dt=dt.datetime(2021, 1, 4, 9, 35))
+
+    candidate.do_trading(context)
+
+    assert scored_dates == ["2020-12-31", "2020-12-31"]
