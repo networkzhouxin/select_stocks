@@ -2,9 +2,9 @@
 """
 Cross-Signal ETF Strategy v0.3.3 for JoinQuant.
 
-Observation-only copy for T-1 resonance attribution on actual filled entries.
-The observation payload must never participate in eligibility, ranking, sizing,
-sell decisions, or order execution.
+Observation-only copy for T-1 resonance attribution on actual filled entries
+and actual filled signal exits. Observation payloads must never participate in
+eligibility, ranking, sizing, sell decisions, or order execution.
 
 Research protocol:
 - Develop first on 2019-01-01 to 2021-12-31 only.
@@ -21,7 +21,7 @@ from jqdata import *
 
 STRATEGY_VERSION = "cross-v0.3.3"
 DEPLOYMENT_BUILD_ID = "20260822.2"
-RESONANCE_OBSERVATION_BUILD_ID = "20260902.1"
+RESONANCE_OBSERVATION_BUILD_ID = "20260902.2"
 RESONANCE_OBSERVATION_SCHEMA = 1
 RESONANCE_OBSERVATION_RULE_ID = "HARD_BOLL_RSI14_KDJ_W2"
 
@@ -290,7 +290,8 @@ def initialize(context):
     log.info("[indicator params] %s" % format_indicator_params(g.params))
     log.info(
         "[resonance-observation-build] build=%s schema=%s rule=%s "
-        "behavior_changed=False entry_filter=False log_after_fill=True" % (
+        "behavior_changed=False entry_filter=False "
+        "entry_log_after_fill=True sell_score_log_after_fill=True" % (
             RESONANCE_OBSERVATION_BUILD_ID,
             RESONANCE_OBSERVATION_SCHEMA,
             RESONANCE_OBSERVATION_RULE_ID,
@@ -580,6 +581,82 @@ def build_resonance_entry_observation_from_indicators(indicator_frame, signal_da
     }
 
 
+def _classify_resonance_sell_observation(entry_observation):
+    events = entry_observation.get("events") or {}
+    boll = events.get("BOLL")
+    rsi = events.get("RSI")
+    kdj = events.get("KDJ")
+    supporters = tuple(
+        indicator for indicator in ("BOLL", "RSI", "KDJ")
+        if events.get(indicator, {}).get("direction") == "SELL"
+    )
+    fresh_supporters = tuple(
+        indicator for indicator in supporters
+        if events[indicator].get("age") == 0
+    )
+
+    if boll is None or boll.get("direction") != "SELL":
+        result = "BOLL_NOT_SUPPORTING"
+        complete = False
+    elif _builtins.any(
+            event is not None and event.get("direction") == "BUY"
+            for event in (rsi, kdj)):
+        result = "THIRD_INDICATOR_CONFLICT"
+        complete = False
+    elif len(supporters) < 2:
+        result = "INSUFFICIENT_SUPPORT"
+        complete = False
+    elif not fresh_supporters:
+        result = "NO_FRESH_SUPPORTER"
+        complete = False
+    else:
+        result = (
+            "COMPLETE_3" if len(supporters) == 3
+            else "COMPLETE_2_RSI" if "RSI" in supporters
+            else "COMPLETE_2_KDJ"
+        )
+        complete = True
+
+    observation = dict(entry_observation)
+    observation.update({
+        "direction": "SELL",
+        "result": result,
+        "is_complete": complete,
+        "support_count": len(supporters),
+        "supporters": supporters,
+        "fresh_supporters": fresh_supporters,
+    })
+    return observation
+
+
+def build_resonance_sell_observation_from_indicators(indicator_frame, signal_date):
+    """Classify reference SELL resonance without changing a Cross exit."""
+    entry_observation = build_resonance_entry_observation_from_indicators(
+        indicator_frame, signal_date)
+    return _classify_resonance_sell_observation(entry_observation)
+
+
+def safe_build_resonance_sell_observation(entry_observation):
+    try:
+        if entry_observation.get("status") != "OK":
+            return {
+                "status": entry_observation.get("status", "ERROR"),
+                "error_type": entry_observation.get("error_type", "EntryObservationError"),
+                "direction": "SELL",
+                "result": "UNAVAILABLE",
+                "is_complete": False,
+            }
+        return _classify_resonance_sell_observation(entry_observation)
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "error_type": exc.__class__.__name__,
+            "direction": "SELL",
+            "result": "UNAVAILABLE",
+            "is_complete": False,
+        }
+
+
 def build_resonance_entry_observation(price_frame, signal_date):
     required = ("high", "low", "close")
     if price_frame is None or _builtins.any(name not in price_frame for name in required):
@@ -685,6 +762,80 @@ def emit_resonance_entry_observation(score, execution_date, signal_date):
         except Exception:
             pass
         return False
+
+
+def emit_resonance_sell_observation(score, execution_date, signal_date):
+    """Best-effort logging after a filled signal exit; never controls trading."""
+    code = str(score.get("code", "UNKNOWN"))
+    try:
+        observation = score.get("resonance_sell_observation") or {
+            "status": "MISSING", "direction": "SELL",
+            "result": "UNAVAILABLE", "is_complete": False,
+        }
+        status = observation.get("status", "MISSING")
+        if status != "OK":
+            log.info(
+                "[resonance-sell-observation] schema=%s build=%s rule=%s code=%s "
+                "execution_date=%s signal_date=%s exit_reason=sell_score "
+                "sell_score=%.0f direction=SELL status=%s result=%s error=%s" % (
+                    RESONANCE_OBSERVATION_SCHEMA,
+                    RESONANCE_OBSERVATION_BUILD_ID,
+                    RESONANCE_OBSERVATION_RULE_ID,
+                    code,
+                    _observation_date(execution_date),
+                    _observation_date(signal_date),
+                    float(score.get("sell_score", np.nan)),
+                    status,
+                    observation.get("result", "UNAVAILABLE"),
+                    observation.get("error_type", "NONE"),
+                ))
+            return False
+
+        values = observation.get("values") or {}
+        log.info(
+            "[resonance-sell-observation] schema=%s build=%s rule=%s code=%s "
+            "execution_date=%s signal_date=%s exit_reason=sell_score "
+            "sell_score=%.0f direction=SELL status=OK result=%s complete=%s "
+            "support_count=%s supporters=%s fresh=%s BOLL=%s RSI=%s KDJ=%s "
+            "RSI14=%.4f K=%.4f D=%.4f J=%.4f BOLL_L/M/U=%.4f/%.4f/%.4f" % (
+                RESONANCE_OBSERVATION_SCHEMA,
+                RESONANCE_OBSERVATION_BUILD_ID,
+                RESONANCE_OBSERVATION_RULE_ID,
+                code,
+                _observation_date(execution_date),
+                _observation_date(signal_date),
+                float(score.get("sell_score", np.nan)),
+                observation.get("result"),
+                observation.get("is_complete"),
+                observation.get("support_count", 0),
+                "+".join(observation.get("supporters") or ()) or "NONE",
+                "+".join(observation.get("fresh_supporters") or ()) or "NONE",
+                _format_observation_event(observation, "BOLL"),
+                _format_observation_event(observation, "RSI"),
+                _format_observation_event(observation, "KDJ"),
+                float(values.get("rsi14", np.nan)),
+                float(values.get("k", np.nan)),
+                float(values.get("d", np.nan)),
+                float(values.get("j", np.nan)),
+                float(values.get("boll_lower", np.nan)),
+                float(values.get("boll_mid", np.nan)),
+                float(values.get("boll_upper", np.nan)),
+            ))
+        return True
+    except Exception as exc:
+        try:
+            log.warning(
+                "[resonance-sell-observation-error] code=%s execution_date=%s "
+                "signal_date=%s error=%s trading_continues=True" % (
+                    code,
+                    _observation_date(execution_date),
+                    _observation_date(signal_date),
+                    exc.__class__.__name__,
+                ))
+        except Exception:
+            pass
+        return False
+
 
 def _valid_pair(a_prev, a_cur, b_prev, b_cur):
     return not _builtins.any(pd.isna(v) for v in [a_prev, a_cur, b_prev, b_cur])
@@ -1149,6 +1300,8 @@ def calc_cross_signal_score(code, end_date, return_reason=False):
 
         snapshot = build_signal_snapshot(df, p)
         resonance_observation = safe_build_resonance_entry_observation(df, end_date)
+        resonance_sell_observation = safe_build_resonance_sell_observation(
+            resonance_observation)
     except Exception as exc:
         reason = "exception:%s" % exc.__class__.__name__
         return (None, reason) if return_reason else None
@@ -1164,6 +1317,7 @@ def calc_cross_signal_score(code, end_date, return_reason=False):
     result.update(buy_score)
     result.update(sell_score)
     result["resonance_entry_observation"] = resonance_observation
+    result["resonance_sell_observation"] = resonance_sell_observation
     result["code"] = code
     return (result, None) if return_reason else result
 
@@ -1384,6 +1538,8 @@ def do_trading(context):
             continue
         if should_force_sell(score, False, p):
             execute_sell(code, context, "sell_score %.0f" % score["sell_score"])
+            if not has_position(context, code):
+                emit_resonance_sell_observation(score, today, prev_date)
         elif score["sell_score"] >= p["risk_tighten_threshold"]:
             log.info("[sell-risk-observation] %s sell_score %.0f log_only=True" % (
                 code, score["sell_score"]))

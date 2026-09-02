@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STRATEGY_ROOT = ROOT / "cross_signal_strategy"
 
 
-def test_cross_signal_root_keeps_three_formal_entries_and_labels_candidates():
+def test_cross_signal_root_separates_observation_and_labels_candidates():
     root_python_files = sorted(path.name for path in STRATEGY_ROOT.glob("*.py"))
 
     formal_entries = {
@@ -13,9 +13,15 @@ def test_cross_signal_root_keeps_three_formal_entries_and_labels_candidates():
         "smart_trade_joinquant_cross_signal_etf.py",
         "smart_trade_ptrade_cross_signal_etf.py",
     }
-    candidate_entries = set(root_python_files) - formal_entries
+    observation_entries = {
+        "smart_trade_joinquant_cross_signal_etf_resonance_observation.py",
+    }
+    candidate_entries = (
+        set(root_python_files) - formal_entries - observation_entries
+    )
 
     assert formal_entries.issubset(root_python_files)
+    assert observation_entries.issubset(root_python_files)
     assert candidate_entries == {
         "smart_trade_joinquant_cross_signal_etf_late_macd_boll_filter_candidate.py",
         "smart_trade_joinquant_cross_signal_etf_late_veto_early_pre_macd_candidate.py",

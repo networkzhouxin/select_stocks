@@ -247,7 +247,7 @@ def test_successful_observation_log_is_self_identifying_and_parseable(monkeypatc
     for token in (
         "[resonance-entry-observation]",
         "schema=1",
-        "build=20260902.1",
+        "build=20260902.2",
         "rule=HARD_BOLL_RSI14_KDJ_W2",
         "code=513100.XSHG",
         "execution_date=2021-01-07",
