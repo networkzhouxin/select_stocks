@@ -25,6 +25,7 @@ def test_cross_signal_root_separates_observation_and_labels_candidates():
     assert candidate_entries == {
         "smart_trade_joinquant_cross_signal_etf_late_macd_boll_filter_candidate.py",
         "smart_trade_joinquant_cross_signal_etf_late_veto_early_pre_macd_candidate.py",
+        "smart_trade_joinquant_cross_signal_etf_no_atr_exit_candidate.py",
     }
     assert all(name.endswith("_candidate.py") for name in candidate_entries)
 
