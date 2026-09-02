@@ -347,7 +347,18 @@ def test_entry_channel_does_not_change_position_sizing():
     )
 ```
 
-Use `inspect.getsource(candidate.manage_holdings)` to require `calc_cross_signal_score(code, prev_date` and reject `calc_cross_signal_score(code, today`.
+Exercise `do_trading` with a Monday context, a fake previous trading date, no positions/stops, and a score function that records its date argument and returns no score. Assert every ETF was scored with the fake previous date and never with the current date:
+
+```python
+def test_do_trading_scores_every_etf_at_previous_trade_date(monkeypatch):
+    candidate = candidate_module()
+    scored_dates = []
+    configure_empty_portfolio_run(monkeypatch, candidate, scored_dates)
+    candidate.do_trading(monday_context("2021-01-04"))
+    assert scored_dates == ["2020-12-31"] * len(candidate.g.etf_pool)
+```
+
+The test helpers stay in the test file and patch only JoinQuant platform boundaries; the real `do_trading` control flow remains under test.
 
 - [ ] **Step 3: Run characterization and verify zero candidate diff**
 
@@ -372,18 +383,18 @@ git commit -m "test(cross-signal): lock frozen stacked candidate"
 **Files:**
 - Create: `cross_signal_strategy/docs/late_veto_early_pre_macd_joinquant_runbook.md`
 - Create: `cross_signal_strategy/reports/templates/late_veto_early_pre_macd_pair.json`
-- Create: `tests/test_cross_signal_late_veto_early_pre_macd_runbook.py`
+- Create: `tests/test_cross_signal_late_veto_early_pre_macd_template.py`
 
 **Interfaces:**
 - Consumes: Task 1 schema/CLI.
 - Produces: a copyable evidence template and ordered execution checklist.
 
-- [ ] **Step 1: Write a red documentation contract test**
+- [ ] **Step 1: Write a red executable-template contract test**
 
-Read the runbook/template and assert all seven `GateKind` values, both fingerprints, cash `20000`, time `09:35`, nominal-first/doubled-friction sequencing, stop-on-first-failure, and evaluator command are present. Load the example template through `load_paired_run` and evaluate it as structurally valid.
+Load the example JSON through `load_paired_run`, assert its frozen identities/configuration, and pass it to `evaluate_pair`. Human-facing runbook prose is reviewed directly rather than tested by string matching.
 
 ```powershell
-python -m pytest tests/test_cross_signal_late_veto_early_pre_macd_runbook.py -q
+python -m pytest tests/test_cross_signal_late_veto_early_pre_macd_template.py -q
 ```
 
 Expected: failure because the artifacts do not exist.
@@ -417,8 +428,8 @@ Use `example_only: true` and a structurally valid synthetic `training_nominal` p
 - [ ] **Step 4: Run tests and commit**
 
 ```powershell
-python -m pytest tests/test_cross_signal_late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_runbook.py -q
-git add -- cross_signal_strategy/docs/late_veto_early_pre_macd_joinquant_runbook.md cross_signal_strategy/reports/templates/late_veto_early_pre_macd_pair.json tests/test_cross_signal_late_veto_early_pre_macd_runbook.py
+python -m pytest tests/test_cross_signal_late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_template.py -q
+git add -- cross_signal_strategy/docs/late_veto_early_pre_macd_joinquant_runbook.md cross_signal_strategy/reports/templates/late_veto_early_pre_macd_pair.json tests/test_cross_signal_late_veto_early_pre_macd_template.py
 git commit -m "docs(cross-signal): add paired JoinQuant runbook"
 ```
 
@@ -442,9 +453,9 @@ Map every hunk to gate enforcement, characterization, or runbook evidence. Confi
 - [ ] **Step 2: Run static and focused checks**
 
 ```powershell
-python -m py_compile cross_signal_strategy/research/late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_candidate.py tests/test_cross_signal_late_veto_early_pre_macd_runbook.py
+python -m py_compile cross_signal_strategy/research/late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_candidate.py tests/test_cross_signal_late_veto_early_pre_macd_template.py
 git diff --check
-python -m pytest tests/test_cross_signal_late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_candidate.py tests/test_cross_signal_research_budget.py tests/test_cross_signal_late_veto_early_pre_macd_runbook.py -q
+python -m pytest tests/test_cross_signal_late_veto_early_pre_macd_gate.py tests/test_cross_signal_late_veto_early_pre_macd_candidate.py tests/test_cross_signal_research_budget.py tests/test_cross_signal_late_veto_early_pre_macd_template.py -q
 ```
 
 Expected: new/candidate-specific tests pass. Record any known stale count failure separately.
