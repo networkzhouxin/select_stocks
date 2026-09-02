@@ -1,0 +1,78 @@
+{
+  "example_only": true,
+  "kind": "training_nominal",
+  "baseline": {
+    "config": {
+      "strategy_version": "cross-v0.3.3",
+      "build_id": "20260822.2",
+      "fingerprint": "77e44d93d255",
+      "start_date": "2019-01-01",
+      "end_date": "2021-12-31",
+      "initial_cash": 20000,
+      "platform": "JoinQuant",
+      "benchmark": "000300.XSHG",
+      "use_real_price": true,
+      "avoid_future_data": true,
+      "frequency": "daily",
+      "execution_time": "09:35",
+      "commission_rate": 0.0003,
+      "minimum_commission": 5,
+      "slippage_rate": 0.001,
+      "friction_profile": "nominal",
+      "log_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "trade_export_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "metrics": {
+      "total_return": 1.2925001,
+      "max_drawdown": 0.0628,
+      "win_rate": 0.5578947368421053,
+      "closed_trade_count": 95,
+      "profit_loss_ratio": 5.297,
+      "annual_returns": {
+        "2019": 0.30,
+        "2020": 0.40,
+        "2021": 0.20
+      },
+      "positive_to_negative_round_trips": 31,
+      "early_fills": 0,
+      "early_fill_years": []
+    }
+  },
+  "candidate": {
+    "config": {
+      "strategy_version": "cross-v0.3.3-late-veto-early-pre-macd-candidate",
+      "build_id": "20260822.3-candidate",
+      "fingerprint": "f6b08195dd3d",
+      "start_date": "2019-01-01",
+      "end_date": "2021-12-31",
+      "initial_cash": 20000,
+      "platform": "JoinQuant",
+      "benchmark": "000300.XSHG",
+      "use_real_price": true,
+      "avoid_future_data": true,
+      "frequency": "daily",
+      "execution_time": "09:35",
+      "commission_rate": 0.0003,
+      "minimum_commission": 5,
+      "slippage_rate": 0.001,
+      "friction_profile": "nominal",
+      "log_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "trade_export_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "metrics": {
+      "total_return": 1.31,
+      "max_drawdown": 0.06,
+      "win_rate": 0.59,
+      "closed_trade_count": 100,
+      "profit_loss_ratio": 5.4,
+      "annual_returns": {
+        "2019": 0.31,
+        "2020": 0.41,
+        "2021": 0.21
+      },
+      "positive_to_negative_round_trips": 30,
+      "early_fills": 3,
+      "early_fill_years": [2019, 2020]
+    }
+  }
+}
