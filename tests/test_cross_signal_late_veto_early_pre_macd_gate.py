@@ -24,6 +24,10 @@ def _run_config(*, candidate: bool) -> dict:
         "start_date": "2019-01-01",
         "end_date": "2021-12-31",
         "initial_cash": 20000,
+        "platform": "JoinQuant",
+        "benchmark": "000300.XSHG",
+        "use_real_price": True,
+        "avoid_future_data": True,
         "frequency": "daily",
         "execution_time": "09:35",
         "commission_rate": 0.0003,
@@ -114,6 +118,8 @@ def test_load_pair_preserves_decimal_precision_and_frozen_identities(tmp_path):
 
     assert pair.baseline.metrics.total_return == Decimal("1.2925001")
     assert pair.baseline.config.fingerprint == "77e44d93d255"
+    assert pair.baseline.config.benchmark == "000300.XSHG"
+    assert pair.baseline.config.avoid_future_data is True
     assert pair.candidate.config.fingerprint == "f6b08195dd3d"
 
 
@@ -125,6 +131,8 @@ def test_load_pair_preserves_decimal_precision_and_frozen_identities(tmp_path):
         ("initial_cash", 10000),
         ("execution_time", "15:00"),
         ("commission_rate", 0.0004),
+        ("benchmark", "000905.XSHG"),
+        ("avoid_future_data", False),
     ],
 )
 def test_invalid_or_unpaired_identity_is_rejected(tmp_path, field, value):

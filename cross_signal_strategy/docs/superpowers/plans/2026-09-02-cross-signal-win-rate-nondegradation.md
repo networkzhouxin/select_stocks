@@ -106,6 +106,10 @@ class RunConfig:
     start_date: str
     end_date: str
     initial_cash: Decimal
+    platform: str
+    benchmark: str
+    use_real_price: bool
+    avoid_future_data: bool
     frequency: str
     execution_time: str
     commission_rate: Decimal

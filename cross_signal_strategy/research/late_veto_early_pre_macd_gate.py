@@ -32,6 +32,10 @@ class RunConfig:
     start_date: str
     end_date: str
     initial_cash: Decimal
+    platform: str
+    benchmark: str
+    use_real_price: bool
+    avoid_future_data: bool
     frequency: str
     execution_time: str
     commission_rate: Decimal
@@ -66,6 +70,7 @@ class PairedRun:
     kind: GateKind
     baseline: RunResult
     candidate: RunResult
+    example_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,10 +113,14 @@ def load_paired_run(path: str | Path) -> PairedRun:
         parse_float=Decimal,
         parse_int=Decimal,
     )
+    example_only = payload.get("example_only", False)
+    if not isinstance(example_only, bool):
+        raise ValueError("example_only must be a boolean")
     pair = PairedRun(
         kind=GateKind(str(payload["kind"])),
         baseline=_load_run(payload["baseline"]),
         candidate=_load_run(payload["candidate"]),
+        example_only=example_only,
     )
     _validate_pair(pair)
     return pair
@@ -155,6 +164,12 @@ def _load_run(payload: Mapping[str, object]) -> RunResult:
             start_date=str(config["start_date"]),
             end_date=str(config["end_date"]),
             initial_cash=_decimal(config["initial_cash"]),
+            platform=str(config["platform"]),
+            benchmark=str(config["benchmark"]),
+            use_real_price=_boolean(config["use_real_price"], "use_real_price"),
+            avoid_future_data=_boolean(
+                config["avoid_future_data"], "avoid_future_data"
+            ),
             frequency=str(config["frequency"]),
             execution_time=str(config["execution_time"]),
             commission_rate=_decimal(config["commission_rate"]),
@@ -234,6 +249,12 @@ def _nonnegative_int(value: object, field: str) -> int:
     return int(number)
 
 
+def _boolean(value: object, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("%s must be a boolean" % field)
+    return value
+
+
 def _validate_pair(pair: PairedRun) -> None:
     _validate_identity(pair.baseline.config, FORMAL_IDENTITY, "baseline")
     _validate_identity(pair.candidate.config, CANDIDATE_IDENTITY, "candidate")
@@ -246,6 +267,10 @@ def _validate_pair(pair: PairedRun) -> None:
         "start_date",
         "end_date",
         "initial_cash",
+        "platform",
+        "benchmark",
+        "use_real_price",
+        "avoid_future_data",
         "frequency",
         "execution_time",
         "commission_rate",
@@ -260,6 +285,14 @@ def _validate_pair(pair: PairedRun) -> None:
     config = pair.baseline.config
     if config.initial_cash != Decimal("20000"):
         raise ValueError("initial_cash must remain 20000")
+    if config.platform != "JoinQuant":
+        raise ValueError("platform must remain JoinQuant")
+    if config.benchmark != "000300.XSHG":
+        raise ValueError("benchmark must remain 000300.XSHG")
+    if not config.use_real_price:
+        raise ValueError("use_real_price must remain enabled")
+    if not config.avoid_future_data:
+        raise ValueError("avoid_future_data must remain enabled")
     if config.frequency != "daily":
         raise ValueError("frequency must remain daily")
     if config.execution_time != "09:35":
@@ -334,6 +367,9 @@ def main(argv: list[str] | None = None) -> int:
         pair = load_paired_run(args[0])
     except (OSError, ValueError, KeyError, TypeError, InvalidOperation) as exc:
         print("INVALID: %s" % exc)
+        return 2
+    if pair.example_only:
+        print("INVALID: example_only evidence cannot make an authoritative decision")
         return 2
     decision = evaluate_pair(pair)
     if decision.passed:
