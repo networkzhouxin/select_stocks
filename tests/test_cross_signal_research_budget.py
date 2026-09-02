@@ -59,8 +59,8 @@ def test_repository_budget_accounts_for_every_recorded_experiment():
 
     report = audit_research_budget(FAILED_EXPERIMENTS, BUDGET)
 
-    assert report.failed_experiment_count == 69
-    assert report.expected_failed_experiment_count == 69
+    assert report.failed_experiment_count == 70
+    assert report.expected_failed_experiment_count == 70
     assert report.duplicate_experiments == ()
     assert report.errors == ()
 
@@ -434,7 +434,7 @@ def test_late_macd_boll_upper_filter_is_exhausted_after_joinquant_rejection():
     assert raw["prohibit_alternatives"] is True
 
 
-def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant():
+def test_stacked_late_veto_early_pre_macd_candidate_is_exhausted_after_rejection():
     from cross_signal_strategy.research.research_budget import (
         evaluate_experiment_request,
         load_research_budget,
@@ -449,7 +449,7 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant(
         if item["key"] == family.key
     )
 
-    assert family.status == "blocked"
+    assert family.status == "exhausted"
     assert family.max_new_experiments == 0
     assert family.planned_experiment is None
     assert evaluate_experiment_request(
@@ -475,7 +475,26 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant(
     )
     assert raw["candidate_build"] == "20260822.3-candidate"
     assert raw["candidate_fingerprint"] == "f6b08195dd3d"
-    assert raw["joinquant_status"] == "pending"
+    assert raw["joinquant_status"] == "rejected_training_nominal"
+    assert raw["joinquant_evidence_mode"] == (
+        "rejection_only_without_trade_exports"
+    )
+    assert raw["joinquant_baseline_total_return"] == pytest.approx(1.29248)
+    assert raw["joinquant_total_return"] == pytest.approx(0.976525)
+    assert raw["joinquant_baseline_max_drawdown"] == pytest.approx(
+        0.06283753140895998
+    )
+    assert raw["joinquant_max_drawdown"] == pytest.approx(
+        0.0674728423456309
+    )
+    assert raw["joinquant_baseline_win_rate"] == pytest.approx(53 / 95)
+    assert raw["joinquant_win_rate"] == pytest.approx(52 / 101)
+    assert raw["joinquant_early_fills"] == 20
+    assert raw["joinquant_early_fill_years"] == [2019, 2020, 2021]
+    assert raw["joinquant_pair_report"] == (
+        "cross_signal_strategy/reports/"
+        "late_veto_early_pre_macd_training_nominal_pair.json"
+    )
     assert raw["official_gate"][
         "win_rate_must_improve_vs_formal_and_late_veto"
     ] is True

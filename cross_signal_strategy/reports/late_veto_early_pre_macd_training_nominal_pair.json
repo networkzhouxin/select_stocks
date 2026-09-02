@@ -1,0 +1,117 @@
+{
+  "kind": "training_nominal",
+  "decision_date": "2026-09-02",
+  "decision": "rejected_training_nominal",
+  "evidence_mode": "rejection_only_without_trade_exports",
+  "evidence_limitation": "Independent JoinQuant trade exports were not provided. Complete logs and JoinQuant performance summaries support rejection only; this evidence cannot pass or adopt the candidate. Positive-to-negative counts use displayed log precision and are not needed for the decisive headline rejection.",
+  "evidence_sources": {
+    "baseline_log": {
+      "path": "C:/Users/C1-CWadmin/.codex/attachments/97178bef-379b-465e-8ae2-89519f68fc39/pasted-text.txt",
+      "sha256": "579078194849c4dad5a1fe7e2179153cee356958332aa3f079bb27a62e5f258c"
+    },
+    "candidate_log": {
+      "path": "C:/Users/C1-CWadmin/.codex/attachments/5ecc3054-8042-4df0-ab6c-1f6b52445ea9/pasted-text.txt",
+      "sha256": "544ce0b9f283b1f1254c78ab8f854db6d61a0219a014d6b1e99dfbf47bcae14d"
+    },
+    "baseline_performance_summary": {
+      "path": "C:/Users/C1-CWadmin/AppData/Local/Temp/codex-clipboard-4184e0e5-4a90-4339-a713-3f0ca003d57b.png",
+      "sha256": "a95c21ecb2e611151530a65f6cf112b5b7dc80dba35393a0ccda6cb316a6557c",
+      "displayed_total_return": "1.2925",
+      "displayed_max_drawdown": "0.0628",
+      "displayed_win_rate": "0.558"
+    },
+    "candidate_performance_summary": {
+      "path": "C:/Users/C1-CWadmin/AppData/Local/Temp/codex-clipboard-5f4e16f6-9a1a-4615-afb9-87ce26ffa185.png",
+      "sha256": "e58bd14a64d4b15156eb2c502b4ce5e75d3da6e0d5be0276d1dea478addffdd4",
+      "displayed_total_return": "0.9765",
+      "displayed_max_drawdown": "0.0675",
+      "displayed_win_rate": "0.515"
+    },
+    "trade_exports": "not_provided_by_user"
+  },
+  "baseline": {
+    "config": {
+      "strategy_version": "cross-v0.3.3",
+      "build_id": "20260822.2",
+      "fingerprint": "77e44d93d255",
+      "start_date": "2019-01-01",
+      "end_date": "2021-12-31",
+      "initial_cash": "20000",
+      "platform": "JoinQuant",
+      "benchmark": "000300.XSHG",
+      "use_real_price": true,
+      "avoid_future_data": true,
+      "frequency": "daily",
+      "execution_time": "09:35",
+      "commission_rate": "0.0003",
+      "minimum_commission": "5",
+      "slippage_rate": "0.001",
+      "friction_profile": "nominal",
+      "log_sha256": "579078194849c4dad5a1fe7e2179153cee356958332aa3f079bb27a62e5f258c",
+      "performance_summary_sha256": "a95c21ecb2e611151530a65f6cf112b5b7dc80dba35393a0ccda6cb316a6557c"
+    },
+    "metrics": {
+      "total_return": "1.29248",
+      "max_drawdown": "0.06283753140895998",
+      "win_rate": "0.5578947368421052631578947368",
+      "closed_trade_count": 95,
+      "profit_loss_ratio": "5.297039494672366",
+      "annual_returns": {
+        "2019": "0.36857",
+        "2020": "0.525815267030550136",
+        "2021": "0.097833764728699804"
+      },
+      "positive_to_negative_round_trips": 33,
+      "early_fills": 0,
+      "early_fill_years": []
+    }
+  },
+  "candidate": {
+    "config": {
+      "strategy_version": "cross-v0.3.3-late-veto-early-pre-macd-candidate",
+      "build_id": "20260822.3-candidate",
+      "fingerprint": "f6b08195dd3d",
+      "start_date": "2019-01-01",
+      "end_date": "2021-12-31",
+      "initial_cash": "20000",
+      "platform": "JoinQuant",
+      "benchmark": "000300.XSHG",
+      "use_real_price": true,
+      "avoid_future_data": true,
+      "frequency": "daily",
+      "execution_time": "09:35",
+      "commission_rate": "0.0003",
+      "minimum_commission": "5",
+      "slippage_rate": "0.001",
+      "friction_profile": "nominal",
+      "log_sha256": "544ce0b9f283b1f1254c78ab8f854db6d61a0219a014d6b1e99dfbf47bcae14d",
+      "performance_summary_sha256": "e58bd14a64d4b15156eb2c502b4ce5e75d3da6e0d5be0276d1dea478addffdd4"
+    },
+    "metrics": {
+      "total_return": "0.976525",
+      "max_drawdown": "0.0674728423456308974",
+      "win_rate": "0.5148514851485148514851485149",
+      "closed_trade_count": 101,
+      "profit_loss_ratio": "3.700168862769083",
+      "annual_returns": {
+        "2019": "0.23061",
+        "2020": "0.521818447761679167",
+        "2021": "0.055404709079889895"
+      },
+      "positive_to_negative_round_trips": 38,
+      "early_fills": 20,
+      "early_fill_years": [2019, 2020, 2021]
+    }
+  },
+  "headline_deltas": {
+    "total_return": "-0.315955",
+    "max_drawdown": "0.0046353109366709174",
+    "win_rate": "-0.0430432516935904116727452219",
+    "required_win_rate_delta": "0.03"
+  },
+  "later_stages": {
+    "training_double_friction": "not_run_training_nominal_failed",
+    "validation": "not_run_training_nominal_failed",
+    "full_period": "not_run_training_nominal_failed"
+  }
+}

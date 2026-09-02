@@ -24,6 +24,13 @@ class GateKind(str, Enum):
     FULL_PERIOD = "full_period"
 
 
+class EvidenceMode(str, Enum):
+    FULL = "full"
+    REJECTION_ONLY_WITHOUT_TRADE_EXPORTS = (
+        "rejection_only_without_trade_exports"
+    )
+
+
 @dataclass(frozen=True)
 class RunConfig:
     strategy_version: str
@@ -43,7 +50,8 @@ class RunConfig:
     slippage_rate: Decimal
     friction_profile: str
     log_sha256: str
-    trade_export_sha256: str
+    trade_export_sha256: str | None
+    performance_summary_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -71,6 +79,8 @@ class PairedRun:
     baseline: RunResult
     candidate: RunResult
     example_only: bool = False
+    evidence_mode: EvidenceMode = EvidenceMode.FULL
+    evidence_limitation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,11 +126,19 @@ def load_paired_run(path: str | Path) -> PairedRun:
     example_only = payload.get("example_only", False)
     if not isinstance(example_only, bool):
         raise ValueError("example_only must be a boolean")
+    evidence_mode = EvidenceMode(str(payload.get("evidence_mode", "full")))
+    evidence_limitation = payload.get("evidence_limitation")
+    if evidence_limitation is not None and not isinstance(
+        evidence_limitation, str
+    ):
+        raise ValueError("evidence_limitation must be text")
     pair = PairedRun(
         kind=GateKind(str(payload["kind"])),
         baseline=_load_run(payload["baseline"]),
         candidate=_load_run(payload["candidate"]),
         example_only=example_only,
+        evidence_mode=evidence_mode,
+        evidence_limitation=evidence_limitation,
     )
     _validate_pair(pair)
     return pair
@@ -144,6 +162,12 @@ def evaluate_pair(pair: PairedRun) -> GateDecision:
         reasons.append("candidate win-rate improvement is below required delta")
     if pair.kind is GateKind.TRAINING_NOMINAL:
         reasons.extend(_training_reasons(baseline, candidate))
+    if (
+        pair.evidence_mode
+        is EvidenceMode.REJECTION_ONLY_WITHOUT_TRADE_EXPORTS
+        and not reasons
+    ):
+        reasons.append("rejection-only evidence cannot pass a candidate")
     return GateDecision(passed=not reasons, reasons=tuple(reasons))
 
 
@@ -177,7 +201,12 @@ def _load_run(payload: Mapping[str, object]) -> RunResult:
             slippage_rate=_decimal(config["slippage_rate"]),
             friction_profile=str(config["friction_profile"]),
             log_sha256=str(config["log_sha256"]),
-            trade_export_sha256=str(config["trade_export_sha256"]),
+            trade_export_sha256=_optional_text(
+                config.get("trade_export_sha256")
+            ),
+            performance_summary_sha256=_optional_text(
+                config.get("performance_summary_sha256")
+            ),
         ),
         metrics=RunMetrics(
             total_return=_decimal(metrics["total_return"]),
@@ -255,11 +284,15 @@ def _boolean(value: object, field: str) -> bool:
     return value
 
 
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
 def _validate_pair(pair: PairedRun) -> None:
     _validate_identity(pair.baseline.config, FORMAL_IDENTITY, "baseline")
     _validate_identity(pair.candidate.config, CANDIDATE_IDENTITY, "candidate")
-    _validate_hashes(pair.baseline.config, "baseline")
-    _validate_hashes(pair.candidate.config, "candidate")
+    _validate_hashes(pair.baseline.config, "baseline", pair.evidence_mode)
+    _validate_hashes(pair.candidate.config, "candidate", pair.evidence_mode)
     _validate_metrics(pair.baseline.metrics, "baseline")
     _validate_metrics(pair.candidate.metrics, "candidate")
 
@@ -306,6 +339,7 @@ def _validate_pair(pair: PairedRun) -> None:
     )
     if actual_costs != expected_costs:
         raise ValueError("cost values do not match friction_profile")
+    _validate_evidence_mode(pair)
 
 
 def _validate_identity(
@@ -318,11 +352,62 @@ def _validate_identity(
         raise ValueError("%s strategy identity does not match frozen source" % label)
 
 
-def _validate_hashes(config: RunConfig, label: str) -> None:
-    for field in ("log_sha256", "trade_export_sha256"):
-        value = getattr(config, field)
-        if re.fullmatch(r"[0-9a-fA-F]{64}", value) is None:
-            raise ValueError("%s %s must be a complete SHA-256" % (label, field))
+def _validate_hashes(
+    config: RunConfig,
+    label: str,
+    evidence_mode: EvidenceMode,
+) -> None:
+    if re.fullmatch(r"[0-9a-fA-F]{64}", config.log_sha256) is None:
+        raise ValueError("%s log_sha256 must be a complete SHA-256" % label)
+    if evidence_mode is EvidenceMode.FULL:
+        if (
+            config.trade_export_sha256 is None
+            or re.fullmatch(
+                r"[0-9a-fA-F]{64}", config.trade_export_sha256
+            )
+            is None
+        ):
+            raise ValueError(
+                "%s trade_export_sha256 must be a complete SHA-256" % label
+            )
+        return
+    if config.trade_export_sha256 is not None:
+        raise ValueError(
+            "%s trade_export_sha256 must be omitted in rejection-only mode"
+            % label
+        )
+    if (
+        config.performance_summary_sha256 is None
+        or re.fullmatch(
+            r"[0-9a-fA-F]{64}", config.performance_summary_sha256
+        )
+        is None
+    ):
+        raise ValueError(
+            "%s performance_summary_sha256 must be a complete SHA-256" % label
+        )
+
+
+def _validate_evidence_mode(pair: PairedRun) -> None:
+    if pair.evidence_mode is EvidenceMode.FULL:
+        return
+    if pair.kind is not GateKind.TRAINING_NOMINAL:
+        raise ValueError(
+            "rejection-only evidence is limited to nominal training"
+        )
+    if not pair.evidence_limitation or not pair.evidence_limitation.strip():
+        raise ValueError("rejection-only evidence requires evidence_limitation")
+    baseline = pair.baseline.metrics
+    candidate = pair.candidate.metrics
+    decisive_headline_failure = (
+        candidate.total_return < baseline.total_return
+        or candidate.max_drawdown > baseline.max_drawdown
+        or candidate.win_rate - baseline.win_rate < Decimal("0.03")
+    )
+    if not decisive_headline_failure:
+        raise ValueError(
+            "rejection-only evidence requires a decisive headline failure"
+        )
 
 
 def _validate_metrics(metrics: RunMetrics, label: str) -> None:

@@ -96,6 +96,18 @@ Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $evidenceRoot 'candidate-
 先将聚宽导出的四个文件保存到该目录，再计算哈希。不得把证据写入任何只读行情数据根。
 JSON 中分别记录完整的 64 位 SHA-256，不接受文件名、截图或截断哈希替代。
 
+### 5.1 仅拒绝的成交导出例外
+
+2026-09-02 用户明确同意本次训练首关可以不提供独立成交明细。该例外不改变完整证据标准，且只允许同时满足以下条件时关闭候选：
+
+- `kind` 必须是 `training_nominal`；
+- 正式版和候选版的完整日志均存在并有完整 SHA-256；
+- 正式版和候选版的聚宽收益概述截图均存在并有完整 SHA-256；
+- 双方 `trade_export_sha256` 均缺失，不能单边混用证据；
+- 收益下降、最大回撤上升或胜率未达到预登记增幅中的至少一项已经形成决定性失败。
+
+此时 JSON 必须使用 `evidence_mode: rejection_only_without_trade_exports` 并填写 `evidence_limitation`。门禁只允许返回 `FAIL`；若页面核心指标可能通过、用于其他阶段或试图据此采用候选，证据必须返回 `INVALID`。这不是后续候选的默认放宽。
+
 ## 6. 指标填写口径
 
 从模板复制一份阶段结果：

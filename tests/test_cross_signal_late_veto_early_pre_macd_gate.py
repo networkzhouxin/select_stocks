@@ -12,6 +12,14 @@ import sys
 import pytest
 
 
+ARCHIVED_TRAINING_PAIR = (
+    Path(__file__).resolve().parents[1]
+    / "cross_signal_strategy"
+    / "reports"
+    / "late_veto_early_pre_macd_training_nominal_pair.json"
+)
+
+
 def _run_config(*, candidate: bool) -> dict:
     return {
         "strategy_version": (
@@ -69,6 +77,23 @@ def valid_training_payload() -> dict:
             "metrics": _metrics(candidate=True),
         },
     }
+
+
+def rejection_only_training_payload() -> dict:
+    payload = valid_training_payload()
+    payload["evidence_mode"] = "rejection_only_without_trade_exports"
+    payload["evidence_limitation"] = (
+        "Independent JoinQuant trade exports were not provided; this evidence "
+        "may reject but cannot pass or adopt the candidate."
+    )
+    for label, marker in (("baseline", "e"), ("candidate", "f")):
+        config = payload[label]["config"]
+        config.pop("trade_export_sha256")
+        config["performance_summary_sha256"] = marker * 64
+    payload["candidate"]["metrics"]["total_return"] = 0.9765
+    payload["candidate"]["metrics"]["max_drawdown"] = 0.0675
+    payload["candidate"]["metrics"]["win_rate"] = 0.515
+    return payload
 
 
 def write_pair(tmp_path: Path, payload: dict) -> Path:
@@ -248,6 +273,108 @@ def test_training_gate_accepts_complete_nondegrading_improvement(tmp_path):
 
     assert decision.passed is True
     assert decision.reasons == ()
+
+
+def test_rejection_only_evidence_can_close_a_decisively_failed_training_pair(
+    tmp_path,
+):
+    from cross_signal_strategy.research.late_veto_early_pre_macd_gate import (
+        EvidenceMode,
+        evaluate_pair,
+        load_paired_run,
+    )
+
+    pair = load_paired_run(
+        write_pair(tmp_path, rejection_only_training_payload())
+    )
+    decision = evaluate_pair(pair)
+
+    assert pair.evidence_mode is EvidenceMode.REJECTION_ONLY_WITHOUT_TRADE_EXPORTS
+    assert pair.baseline.config.trade_export_sha256 is None
+    assert pair.candidate.config.trade_export_sha256 is None
+    assert decision.passed is False
+    assert any("return" in reason for reason in decision.reasons)
+    assert any("drawdown" in reason for reason in decision.reasons)
+    assert any("win-rate" in reason for reason in decision.reasons)
+
+
+def test_rejection_only_evidence_cannot_validate_a_possible_pass(tmp_path):
+    from cross_signal_strategy.research.late_veto_early_pre_macd_gate import (
+        load_paired_run,
+    )
+
+    payload = rejection_only_training_payload()
+    payload["candidate"]["metrics"].update(
+        total_return=1.31,
+        max_drawdown=0.06,
+        win_rate=0.59,
+    )
+
+    with pytest.raises(ValueError, match="decisive headline failure"):
+        load_paired_run(write_pair(tmp_path, payload))
+
+
+def test_rejection_only_evidence_is_invalid_outside_nominal_training(tmp_path):
+    from cross_signal_strategy.research.late_veto_early_pre_macd_gate import (
+        load_paired_run,
+    )
+
+    payload = rejection_only_training_payload()
+    payload["kind"] = "training_double_friction"
+    for label in ("baseline", "candidate"):
+        config = payload[label]["config"]
+        config["friction_profile"] = "double"
+        config["commission_rate"] = 0.0006
+        config["minimum_commission"] = 10
+        config["slippage_rate"] = 0.002
+
+    with pytest.raises(ValueError, match="nominal training"):
+        load_paired_run(write_pair(tmp_path, payload))
+
+
+@pytest.mark.parametrize(
+    "label,value",
+    [
+        ("baseline", None),
+        ("candidate", "not-a-sha256"),
+    ],
+)
+def test_rejection_only_evidence_requires_both_summary_hashes(
+    tmp_path, label, value
+):
+    from cross_signal_strategy.research.late_veto_early_pre_macd_gate import (
+        load_paired_run,
+    )
+
+    payload = rejection_only_training_payload()
+    if value is None:
+        payload[label]["config"].pop("performance_summary_sha256")
+    else:
+        payload[label]["config"]["performance_summary_sha256"] = value
+
+    with pytest.raises((KeyError, ValueError), match="performance_summary_sha256"):
+        load_paired_run(write_pair(tmp_path, payload))
+
+
+def test_archived_training_pair_is_rejection_only_and_fails_all_headline_gates():
+    from cross_signal_strategy.research.late_veto_early_pre_macd_gate import (
+        EvidenceMode,
+        evaluate_pair,
+        load_paired_run,
+    )
+
+    pair = load_paired_run(ARCHIVED_TRAINING_PAIR)
+    decision = evaluate_pair(pair)
+
+    assert pair.evidence_mode is EvidenceMode.REJECTION_ONLY_WITHOUT_TRADE_EXPORTS
+    assert pair.baseline.metrics.total_return == Decimal("1.29248")
+    assert pair.candidate.metrics.total_return == Decimal("0.976525")
+    assert pair.baseline.metrics.closed_trade_count == 95
+    assert pair.candidate.metrics.closed_trade_count == 101
+    assert decision.passed is False
+    assert any("return" in reason for reason in decision.reasons)
+    assert any("drawdown" in reason for reason in decision.reasons)
+    assert any("win-rate" in reason for reason in decision.reasons)
 
 
 @pytest.mark.parametrize(
