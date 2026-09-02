@@ -479,6 +479,22 @@ def test_stacked_late_veto_early_pre_macd_candidate_is_frozen_pending_joinquant(
     assert raw["official_gate"][
         "win_rate_must_improve_vs_formal_and_late_veto"
     ] is True
+    gate = raw["official_gate"]
+    assert gate["minimum_formal_return_retention"] == 1.0
+    assert gate[
+        "training_minimum_win_rate_improvement_percentage_points"
+    ] == 3.0
+    assert gate[
+        "full_period_minimum_win_rate_improvement_percentage_points"
+    ] == 3.0
+    assert gate["all_windows_return_must_not_worsen"] is True
+    assert gate["all_windows_drawdown_must_not_worsen"] is True
+    assert gate["all_windows_win_rate_must_not_worsen"] is True
+    assert gate["double_friction_must_not_worsen"] is True
+    assert gate["paired_run_configuration_required"] is True
+    assert gate["raw_precision_required"] is True
+    assert gate["unclosed_positions_excluded_from_win_rate"] is True
+    assert gate["validation_tuning_forbidden"] is True
     assert raw["validation_influence"] == "none"
     assert raw["prohibit_alternatives"] is True
 
