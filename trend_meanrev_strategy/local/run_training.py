@@ -3,15 +3,13 @@
 
 from __future__ import annotations
 
-from trend_meanrev_strategy.local.data_loader import (
-    EXTRA_CODES, TREND_POOL, TrendMeanrevDataLoader,
-)
+from trend_meanrev_strategy.local.data_loader import TrendMeanrevDataLoader
 from trend_meanrev_strategy.local.engine import TrendLegEngine
 
 
 def main() -> None:
     loader = TrendMeanrevDataLoader()
-    engine = TrendLegEngine(loader=loader, pool=TREND_POOL + EXTRA_CODES)
+    engine = TrendLegEngine(loader=loader)  # 默认池 = TREND_POOL(9只趋势型)
     summary = engine.run()
 
     print("=" * 70)

@@ -20,6 +20,8 @@ PARAMS = {
     "trailing_atr_mult": 2.5,
     "stop_floor": 0.05,
     "stop_cap": 0.15,
+    # 利润分段收紧：(利润阈值, ATR倍数缩放)，从高到低。默认 5-15%→0.8x、>15%→0.6x
+    "profit_tiers": ((0.15, 0.6), (0.05, 0.8)),
     "min_hold_days": 5,
     "cooldown_days": 5,
     "overheat_rsi": 75,
@@ -30,6 +32,12 @@ PARAMS = {
     "roc_period": 20,
     "commission": 0.0003,
     "min_commission": 5.0,
+    # 压力半仓（H1）：lookback 天内 >= min_stops 次 ATR 止损 → 新买入 × stress_buy_scale
+    "stress_lookback_days": 15,
+    "stress_min_stops": 0,  # 0 = 关闭
+    "stress_buy_scale": 0.50,
+    # 熊市过滤：510300 收盘<MA60 且 MA60 下行 → A股ETF 暂停新买入
+    "bear_filter": True,
 }
 
 
@@ -104,6 +112,7 @@ class TrendLegEngine:
             daily = daily.assign(
                 ma_fast=ind.calc_ma(c, p["ma_fast"]),
                 ma_slow=ind.calc_ma(c, p["ma_slow"]),
+                ma_slow_prev=ind.calc_ma(c, p["ma_slow"]).shift(1),
                 atr=ind.calc_atr(h, l, c, p["atr_period"]),
                 rsi=ind.calc_rsi(c, p["rsi_period"]),
                 roc20=ind.calc_roc(c, p["roc_period"]),
@@ -141,6 +150,8 @@ class TrendLegEngine:
         self.orders: List[Order] = []
         self.cooldown: Dict[str, int] = {}
         self.equity: List[tuple] = []
+        self.atr_stop_history: List[int] = []
+        self.trade_stats: List[tuple] = []
         self.max_holdings_seen = 0
         for i in range(1, len(self.calendar_str)):
             self._trade_day(i, self.calendar_str[i], self.calendar_str[i - 1])
@@ -166,9 +177,17 @@ class TrendLegEngine:
                 continue
 
         # 买入阶段：合格候选按 ROC20 降序取前 N
+        bear = False
+        if self.params.get("bear_filter", False):
+            s510 = self.signals.get("510300", {}).get(prev_ds)
+            if s510 is not None:
+                bear = (s510["close"] < s510["ma_slow"]) and (s510["ma_slow"] < s510["ma_slow_prev"])
+        a_share = {"510300", "159915", "512100", "159928"}
         qualified = []
         for code in self.pool:
             if code in self.positions:
+                continue
+            if bear and code in a_share:
                 continue
             if code in self.cooldown and i - self.cooldown[code] <= self.params["cooldown_days"]:
                 continue
@@ -186,8 +205,8 @@ class TrendLegEngine:
             qualified.append((code, roc, price))
         qualified.sort(key=lambda x: (-x[1], x[0]))
         slots = self.params["max_hold"] - len(self.positions)
-        for code, _roc, price in qualified[:max(0, slots)]:
-            self._buy(code, ds, price)
+        for code, roc, price in qualified[:max(0, slots)]:
+            self._buy(code, ds, price, roc)
 
     def _buy_signal(self, sig: dict) -> bool:
         close = sig["close"]
@@ -209,10 +228,10 @@ class TrendLegEngine:
             return None
         profit = price / pos["entry_cost"] - 1 if pos["entry_cost"] > 0 else 0.0
         mult = self.params["trailing_atr_mult"]
-        if profit > 0.15:
-            mult *= 0.6
-        elif profit > 0.05:
-            mult *= 0.8
+        for thr, scale in self.params["profit_tiers"]:
+            if profit > thr:
+                mult *= scale
+                break
         pct = mult * float(atr) / highest
         pct = max(self.params["stop_floor"], min(self.params["stop_cap"], pct))
         return highest * (1 - pct)
@@ -226,10 +245,27 @@ class TrendLegEngine:
         self.cash += proceeds - commission
         self.orders.append(Order(ds, "SELL", code, price, proceeds, reason))
         self.cooldown[code] = self.date_index[ds]
+        if reason == "atr_stop":
+            self.atr_stop_history.append(self.date_index[ds])
+        final_pnl = price / pos["entry_cost"] - 1 if pos["entry_cost"] > 0 else 0.0
+        hold_days = self.date_index[ds] - pos["entry_index"]
+        self.trade_stats.append((code, hold_days, pos.get("buy_roc", 0.0), pos["peak_pnl"], final_pnl, reason))
 
-    def _buy(self, code: str, ds: str, price: float) -> None:
+    def _stress_scale(self, current_idx: int) -> float:
+        p = self.params
+        lookback = p.get("stress_lookback_days", 0)
+        min_stops = p.get("stress_min_stops", 0)
+        if lookback <= 0 or min_stops <= 0:
+            return 1.0
+        recent = sum(1 for s in self.atr_stop_history if 0 <= current_idx - s <= lookback)
+        if recent < min_stops:
+            return 1.0
+        return float(p.get("stress_buy_scale", 1.0))
+
+    def _buy(self, code: str, ds: str, price: float, roc: float = 0.0) -> None:
         total = self.cash + sum(p["shares"] * p["last_price"] for p in self.positions.values())
         target = total * self.params["base_ratio"] / self.params["max_hold"]
+        target *= self._stress_scale(self.date_index[ds])
         shares = target / price
         cost = shares * price
         commission = max(cost * self.params["commission"], self.params["min_commission"])
@@ -247,6 +283,8 @@ class TrendLegEngine:
             "entry_index": self.date_index[ds],
             "highest": price,
             "last_price": price,
+            "peak_pnl": 0.0,
+            "buy_roc": roc,
         }
         self.orders.append(Order(ds, "BUY", code, price, cost, "buy"))
 
@@ -259,6 +297,8 @@ class TrendLegEngine:
             total += pos["shares"] * close
             pos["last_price"] = close
             pos["highest"] = max(pos["highest"], close)
+            pnl = close / pos["entry_cost"] - 1 if pos["entry_cost"] > 0 else 0.0
+            pos["peak_pnl"] = max(pos["peak_pnl"], pnl)
         self.equity.append((ds, total))
         self.max_holdings_seen = max(self.max_holdings_seen, len(self.positions))
 
