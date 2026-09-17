@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Union
 
 import pandas as pd
 
-TRAINING_ROOT = Path(r"G:\financial\history_data\trend_meanrev_train_2017_2021")
+TRAINING_ROOT = Path(
+    os.environ.get("TREND_MEANREV_DATA_ROOT", r"D:\test\trend_meanrev_train_2017_2021")
+)
 WARMUP_START = pd.Timestamp("2016-01-01")
 TRAIN_START = pd.Timestamp("2017-01-01")
 TRAIN_END = pd.Timestamp("2021-12-31")
