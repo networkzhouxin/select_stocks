@@ -78,11 +78,13 @@ class TrendLegEngine:
         initial_cash: float = 20000.0,
         start=TRAIN_START,
         end=TRAIN_END,
+        pool=None,
     ):
         self.loader = loader or TrendMeanrevDataLoader()
         self.params = dict(PARAMS)
         if params:
             self.params.update(params)
+        self.pool = list(pool) if pool is not None else list(TREND_POOL)
         self.initial_cash = initial_cash
         self.start = pd.Timestamp(start)
         self.end = pd.Timestamp(end)
@@ -96,7 +98,7 @@ class TrendLegEngine:
         self.closes: Dict[str, Dict[str, float]] = {}
         self.minute_0935: Dict[str, Dict[str, float]] = {}
         all_dates = set()
-        for code in TREND_POOL:
+        for code in self.pool:
             daily = self.loader.load_daily(code)
             c, h, l = daily["close"], daily["high"], daily["low"]
             daily = daily.assign(
@@ -165,7 +167,7 @@ class TrendLegEngine:
 
         # 买入阶段：合格候选按 ROC20 降序取前 N
         qualified = []
-        for code in TREND_POOL:
+        for code in self.pool:
             if code in self.positions:
                 continue
             if code in self.cooldown and i - self.cooldown[code] <= self.params["cooldown_days"]:
