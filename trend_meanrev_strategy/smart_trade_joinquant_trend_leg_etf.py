@@ -42,6 +42,8 @@ def get_default_params():
         "ma_slow": 60,
         "high_period": 20,
         "roc_period": 20,
+        # 熊市过滤开关：510300 收盘<MA60 且 MA60 下行 → A股ETF 暂停新买入
+        "bear_filter": True,
     }
 
 
@@ -248,10 +250,11 @@ def do_trading(context):
 
     # 熊市过滤：510300 收盘<MA60 且 MA60 下行 → A股ETF 暂停新买入
     bear = False
-    sig_510300 = calc_trend_signal("510300.XSHG", prev_date)
-    if sig_510300 is not None and sig_510300["ma_slow_prev"] is not None:
-        bear = (sig_510300["close"] < sig_510300["ma_slow"]
-                and sig_510300["ma_slow"] < sig_510300["ma_slow_prev"])
+    if p.get("bear_filter", True):
+        sig_510300 = calc_trend_signal("510300.XSHG", prev_date)
+        if sig_510300 is not None and sig_510300["ma_slow_prev"] is not None:
+            bear = (sig_510300["close"] < sig_510300["ma_slow"]
+                    and sig_510300["ma_slow"] < sig_510300["ma_slow_prev"])
 
     qualified = []
     for code in g.etf_pool:
