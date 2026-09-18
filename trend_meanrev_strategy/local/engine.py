@@ -23,8 +23,8 @@ PARAMS = {
     # 利润分段收紧：(利润阈值, ATR倍数缩放)，从高到低。默认 5-15%→0.8x、>15%→0.6x
     "profit_tiers": ((0.15, 0.6), (0.05, 0.8)),
     "min_hold_days": 5,
-    "cooldown_days": 5,
     "overheat_rsi": 75,
+    "rsi_min": None,  # 买入要求 RSI >= 该值（趋势强度下限），None=关闭
     "rsi_period": 14,
     "ma_fast": 20,
     "ma_slow": 60,
@@ -38,6 +38,9 @@ PARAMS = {
     "stress_buy_scale": 0.50,
     # 熊市过滤：510300 收盘<MA60 且 MA60 下行 → A股ETF 暂停新买入
     "bear_filter": True,
+    # MA10 实验开关
+    "triple_ma_buy": False,  # 买入要求 MA10>MA20>MA60 三均线排列
+    "ma10_exit": False,      # 卖出加：收盘<MA10 且 MA10 下行
 }
 
 
@@ -110,6 +113,8 @@ class TrendLegEngine:
             daily = self.loader.load_daily(code)
             c, h, l = daily["close"], daily["high"], daily["low"]
             daily = daily.assign(
+                ma10=ind.calc_ma(c, 10),
+                ma10_prev=ind.calc_ma(c, 10).shift(1),
                 ma_fast=ind.calc_ma(c, p["ma_fast"]),
                 ma_slow=ind.calc_ma(c, p["ma_slow"]),
                 ma_slow_prev=ind.calc_ma(c, p["ma_slow"]).shift(1),
@@ -148,7 +153,6 @@ class TrendLegEngine:
         self.cash = self.initial_cash
         self.positions: Dict[str, dict] = {}
         self.orders: List[Order] = []
-        self.cooldown: Dict[str, int] = {}
         self.equity: List[tuple] = []
         self.atr_stop_history: List[int] = []
         self.trade_stats: List[tuple] = []
@@ -175,6 +179,15 @@ class TrendLegEngine:
             if sig is not None and held_days >= self.params["min_hold_days"] and _flag(sig["dead_cross"]):
                 self._sell(code, ds, price, "dead_cross")
                 continue
+            if (self.params.get("ma10_exit", False) and sig is not None
+                    and held_days >= self.params["min_hold_days"]):
+                ma10 = sig.get("ma10")
+                ma10_prev = sig.get("ma10_prev")
+                if (ma10 is not None and ma10_prev is not None
+                        and not pd.isna(ma10) and not pd.isna(ma10_prev)
+                        and float(sig["close"]) < float(ma10) and float(ma10) < float(ma10_prev)):
+                    self._sell(code, ds, price, "ma10_exit")
+                    continue
 
         # 买入阶段：合格候选按 ROC20 降序取前 N
         bear = False
@@ -189,8 +202,6 @@ class TrendLegEngine:
                 continue
             if bear and code in a_share:
                 continue
-            if code in self.cooldown and i - self.cooldown[code] <= self.params["cooldown_days"]:
-                continue
             sig = self.signals[code].get(prev_ds)
             if sig is None:
                 continue
@@ -198,6 +209,9 @@ class TrendLegEngine:
                 continue
             if not pd.isna(sig["rsi"]) and float(sig["rsi"]) > self.params["overheat_rsi"]:
                 continue  # 防追高
+            rsi_min = self.params.get("rsi_min")
+            if rsi_min is not None and not pd.isna(sig["rsi"]) and float(sig["rsi"]) < rsi_min:
+                continue  # 趋势太弱
             price = self.minute_0935[code].get(ds)
             if price is None or price <= 0:
                 continue
@@ -209,13 +223,17 @@ class TrendLegEngine:
             self._buy(code, ds, price, roc)
 
     def _buy_signal(self, sig: dict) -> bool:
-        close = sig["close"]
         ma_fast = sig["ma_fast"]
         ma_slow = sig["ma_slow"]
-        for v in (close, ma_fast, ma_slow):
+        for v in (ma_fast, ma_slow):
             if v is None or pd.isna(v):
                 return False
-        return _flag(sig["new_high"]) and float(close) > float(ma_fast) and float(ma_fast) > float(ma_slow)
+        if self.params.get("triple_ma_buy", False):
+            ma10 = sig.get("ma10")
+            if ma10 is None or pd.isna(ma10):
+                return False
+            return _flag(sig["new_high"]) and float(ma10) > float(ma_fast) > float(ma_slow)
+        return _flag(sig["new_high"]) and float(ma_fast) > float(ma_slow)
 
     def _calc_stop(self, pos: dict, sig: Optional[dict], price: float) -> Optional[float]:
         if sig is None:
@@ -244,7 +262,6 @@ class TrendLegEngine:
         commission = max(proceeds * self.params["commission"], self.params["min_commission"])
         self.cash += proceeds - commission
         self.orders.append(Order(ds, "SELL", code, price, proceeds, reason))
-        self.cooldown[code] = self.date_index[ds]
         if reason == "atr_stop":
             self.atr_stop_history.append(self.date_index[ds])
         final_pnl = price / pos["entry_cost"] - 1 if pos["entry_cost"] > 0 else 0.0

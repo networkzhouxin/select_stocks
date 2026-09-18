@@ -9,10 +9,10 @@
   跨市场: 513100纳指, 513500标普500, 159920恒生, 513880日经, 513050中概互联
 
 规则：
-  买入 = 多头趋势(close>MA20 且 MA20>MA60) + 突破20日新高；RSI>75 防追高暂缓
+  买入 = 多头趋势(MA20>MA60) + 突破20日新高；RSI>75 防追高暂缓
   卖出 = ATR(14)跟踪止损(2.5x, 利润分段收紧) 或 MA20死叉MA60（任一触发）
   仓位 = max_hold=3 等分，base_ratio=0.95 留5%现金；候选不足留现金不凑数
-  防whipsaw = 冷却5天 + 最低持有5天；合格数>3 时按 ROC20 降序取前3
+  防whipsaw = 最低持有5天；合格数>3 时按 ROC20 降序取前3
   执行 = 09:35 主流程；信号只用 T-1 数据（avoid_future_data 兜底）
 
 平台约定（对齐 Multi-Factor 聚宽版）：
@@ -35,7 +35,6 @@ def get_default_params():
         "stop_floor": 0.05,
         "stop_cap": 0.15,
         "min_hold_days": 5,
-        "cooldown_days": 5,
         "overheat_rsi": 75,
         "rsi_period": 14,
         "ma_fast": 20,
@@ -107,7 +106,6 @@ def initialize(context):
     g.etf_pool = get_default_etf_pool()
     g.highest_since_buy = {}
     g.buy_date = {}
-    g.last_sell_date = {}
 
     run_daily(do_trading, time="09:35")
     run_daily(after_close, time="15:30")
@@ -130,14 +128,6 @@ def held_trading_days(code, today):
     if buy is None:
         return 999
     return len(get_trade_days(start_date=buy, end_date=today)) - 1
-
-
-def in_cooldown(code, today):
-    sell = g.last_sell_date.get(code)
-    if sell is None:
-        return False
-    elapsed = len(get_trade_days(start_date=sell, end_date=today)) - 1
-    return elapsed <= g.params["cooldown_days"]
 
 
 # ============================================================
@@ -174,12 +164,11 @@ def calc_trend_signal(code, end_date):
 
 
 def buy_signal_ok(sig):
-    for key in ("close", "ma_fast", "ma_slow"):
+    for key in ("ma_fast", "ma_slow"):
         v = sig.get(key)
         if v is None or pd.isna(v):
             return False
     return (sig["new_high"]
-            and sig["close"] > sig["ma_fast"]
             and sig["ma_fast"] > sig["ma_slow"])
 
 
@@ -213,7 +202,6 @@ def execute_sell(context, code, reason, price):
     order_target(code, 0)
     g.highest_since_buy.pop(code, None)
     g.buy_date.pop(code, None)
-    g.last_sell_date[code] = context.current_dt.date()
 
 
 def do_trading(context):
@@ -258,7 +246,7 @@ def do_trading(context):
 
     qualified = []
     for code in g.etf_pool:
-        if code in holds or in_cooldown(code, today):
+        if code in holds:
             continue
         if bear and code in A_SHARE_CODES:
             continue
