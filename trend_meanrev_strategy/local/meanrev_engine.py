@@ -50,6 +50,8 @@ PARAMS = {
     "dmi_adx_threshold": 25.0,
     "sell_mode": "mid",
     "relative_backfill_enabled": False,
+    "volume_veto_enabled": False,
+    "volume_ratio_threshold": 1.0,
     "commission": 0.0003,
     "min_commission": 5.0,
 }
@@ -160,6 +162,9 @@ class MeanrevEngine:
                 & (l >= l.shift(1))
             )
 
+            vol = pd.to_numeric(daily["volume"], errors="coerce")
+            volume_ratio = vol / vol.rolling(20).mean()
+
             daily = daily.assign(
                 ma_fast=ma_fast, ma_slow=ma_slow, atr=atr, rsi=rsi,
                 mid=mid, upper=upper, lower=lower,
@@ -167,6 +172,7 @@ class MeanrevEngine:
                 boll_buy=boll_buy, rsi_buy=rsi_buy, kdj_buy=kdj_buy,
                 rsi_sell=rsi_sell, kdj_sell=kdj_sell, knife=knife,
                 boll_rel_buy=boll_rel_buy, rsi_rel_buy=rsi_rel_buy, kdj_rel_buy=kdj_rel_buy,
+                volume_ratio=volume_ratio,
             )
             sig, close_map = {}, {}
             for row in daily.itertuples(index=False):
@@ -269,6 +275,10 @@ class MeanrevEngine:
             rsi = s1.get("rsi")
             if rsi is not None and not pd.isna(rsi) and float(rsi) > self.params["overheat_rsi"]:
                 continue  # 防追高
+            if self.params["volume_veto_enabled"]:
+                vr = s1.get("volume_ratio")
+                if vr is not None and not pd.isna(vr) and float(vr) >= self.params["volume_ratio_threshold"]:
+                    continue  # 放量不买（缩量=抛压衰竭）
             price = self.minute_0935[code].get(ds)
             if price is None or price <= 0:
                 continue
