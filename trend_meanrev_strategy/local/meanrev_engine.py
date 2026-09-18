@@ -27,7 +27,7 @@ PARAMS = {
     "stop_floor": 0.05,
     "stop_cap": 0.15,
     "min_hold_days": 5,
-    "cooldown_days": 5,
+    "cooldown_days": 0,
     "time_stop_days": 10,
     "overheat_rsi": 75,
     "rsi_period": 14,
