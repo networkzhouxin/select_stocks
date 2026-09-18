@@ -50,6 +50,9 @@ PARAMS = {
     "dmi_adx_threshold": 25.0,
     "sell_mode": "mid",
     "relative_backfill_enabled": False,
+    "buy_mode": "resonance",
+    "divergence_sell_enabled": False,
+    "divergence_window": 10,
     "volume_veto_enabled": False,
     "volume_ratio_threshold": 1.0,
     "commission": 0.0003,
@@ -165,6 +168,12 @@ class MeanrevEngine:
             vol = pd.to_numeric(daily["volume"], errors="coerce")
             volume_ratio = vol / vol.rolling(20).mean()
 
+            div_win = int(p.get("divergence_window", 10))
+            divergence = (
+                (c > c.rolling(div_win).max().shift(1))
+                & ~(rsi > rsi.rolling(div_win).max().shift(1))
+            )
+
             daily = daily.assign(
                 ma_fast=ma_fast, ma_slow=ma_slow, atr=atr, rsi=rsi,
                 mid=mid, upper=upper, lower=lower,
@@ -172,7 +181,7 @@ class MeanrevEngine:
                 boll_buy=boll_buy, rsi_buy=rsi_buy, kdj_buy=kdj_buy,
                 rsi_sell=rsi_sell, kdj_sell=kdj_sell, knife=knife,
                 boll_rel_buy=boll_rel_buy, rsi_rel_buy=rsi_rel_buy, kdj_rel_buy=kdj_rel_buy,
-                volume_ratio=volume_ratio,
+                volume_ratio=volume_ratio, divergence=divergence,
             )
             sig, close_map = {}, {}
             for row in daily.itertuples(index=False):
@@ -238,7 +247,11 @@ class MeanrevEngine:
                     self._sell(code, ds, price, "atr_stop")
                     continue
             if sig is not None and held_days >= self.params["min_hold_days"]:
-                if self.params["sell_mode"] == "top":
+                if self.params["divergence_sell_enabled"]:
+                    if _flag(sig.get("divergence")):
+                        self._sell(code, ds, price, "divergence")
+                        continue
+                elif self.params["sell_mode"] == "top":
                     if self._top_signal_exit(sig):
                         self._sell(code, ds, price, "top_signal")
                         continue
@@ -281,6 +294,10 @@ class MeanrevEngine:
                     continue  # 放量不买（缩量=抛压衰竭）
             price = self.minute_0935[code].get(ds)
             if price is None or price <= 0:
+                continue
+            if self.params["buy_mode"] == "relative":
+                if self._relative_buy_signal(s1, s2):
+                    relative.append((code, price, False))
                 continue
             ok, all_multi = self._buy_resonance(s1, s2)
             if ok:
