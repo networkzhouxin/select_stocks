@@ -12,7 +12,7 @@
   1. 每季度第一个交易日
   2. 任一资产（含现金）实际权重偏离目标 > 5%（绝对）
 
-执行：order_target_value 调到目标权重，先卖超配、再买低配；债部分持有现金、不下单。
+执行：先按比例算目标股数、差值向零取整到整手，order_target 调仓，先卖超配、再买低配；债部分持有现金、不下单。
 
 债=现金的原因：国债 ETF(511010) 一手约 1.1 万，2 万小资金买不进（35%=7000 元 < 一手），
 且国债 ETF 会随利率波动下跌，不是保本。改用货基/逆回购（场外、几乎不跌、1元起购）。
@@ -23,7 +23,7 @@
   季度触发 + 阈值触发（含现金口径）+ 万三/最低5元佣金 + 先卖后买。
 已知执行模型差异（非策略逻辑差异）：
   - 本地现金计息 2%/年；聚宽现金 0%
-  - 本地引擎无滑点问题（已对齐 0.1%）；聚宽 set_slippage 0.1%
+  - 滑点：本地与聚宽均为 0.1%（已对齐）
   - 本地引擎整手（100股）；聚宽整手（100股）
   - 本地引擎按收盘价；聚宽 14:50 近收盘执行
 """
@@ -97,6 +97,21 @@ def _threshold_hit(weights):
     return False
 
 
+def _target_shares(context, code, total):
+    """目标股数：按比例算目标股数，与当前持仓的差向零取整到整手；
+    差 < 1 手返回当前持仓（即无需下单）。停牌/无价返回 None。"""
+    price = get_current_data()[code].last_price
+    if price is None or price <= 0:
+        return None
+    pos = context.portfolio.positions.get(code)
+    current = pos.total_amount if pos is not None else 0
+    delta_float = total * g.target_weights[code] / price - current
+    delta = int(abs(delta_float) // 100) * 100
+    if delta_float < 0:
+        delta = -delta
+    return current + delta
+
+
 def check_rebalance(context):
     weights = _current_weights(context)
     if not g.initialized:
@@ -116,13 +131,28 @@ def check_rebalance(context):
             code, weights.get(code, 0.0) * 100, g.target_weights[code] * 100))
     log.info("  现金 调前%.1f%% -> 目标%.1f%%" % (weights.get("CASH", 0.0) * 100, g.bond_weight * 100))
 
-    # 先卖超配（释放现金），再买低配，与本地引擎 _rebalance 顺序一致
+    positions = context.portfolio.positions
+    # 先卖超配（释放现金），再买低配，与本地引擎 _rebalance 顺序一致。
+    # 目标股数已修正为整手；修正后与当前持仓一致（差 < 1 手）则不下单，
+    # 绝不发出会被平台拒绝的 < 1 手订单。
     for code, target in g.target_weights.items():
-        if weights.get(code, 0.0) > target:
-            order_target_value(code, total * target)
+        tgt = _target_shares(context, code, total)
+        if tgt is None:
+            continue
+        pos = positions.get(code)
+        current = pos.total_amount if pos is not None else 0
+        if tgt < current:
+            log.info("  [卖] %s %d -> %d 股" % (code, current, tgt))
+            order_target(code, tgt)
     for code, target in g.target_weights.items():
-        if weights.get(code, 0.0) < target:
-            order_target_value(code, total * target)
+        tgt = _target_shares(context, code, total)
+        if tgt is None:
+            continue
+        pos = positions.get(code)
+        current = pos.total_amount if pos is not None else 0
+        if tgt > current:
+            log.info("  [买] %s %d -> %d 股" % (code, current, tgt))
+            order_target(code, tgt)
 
     g.rebalance_count += 1
     g.initialized = True

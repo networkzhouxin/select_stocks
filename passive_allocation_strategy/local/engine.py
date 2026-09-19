@@ -86,16 +86,30 @@ class RebalanceEngine:
         self.cash = self.initial_cash
         self.equity: List[tuple] = []
         self.rebalance_count = 0
+        self.net_invested: Dict[str, float] = {c: 0.0 for c in self.equity_codes}
+        self.interest_accrued = 0.0
+        self.attribution: List[tuple] = []   # (ds, {code: 贡献}, 累计利息)
 
         self._rebalance(self.calendar[0])   # 初始建仓
         self._record(self.calendar[0])
+        self._record_attribution(self.calendar[0])
         for i in range(1, len(self.calendar)):
             ds = self.calendar[i]
-            self.cash *= (1 + self._daily_rate())   # 货基每日计息
+            interest = self.cash * self._daily_rate()   # 货基每日计息
+            self.cash += interest
+            self.interest_accrued += interest
             if self._should_rebalance(ds, i):
                 self._rebalance(ds)
             self._record(ds)
+            self._record_attribution(ds)
         return self._summary()
+
+    def _record_attribution(self, ds: str) -> None:
+        contrib = {}
+        for code in self.equity_codes:
+            p = self._price(code, ds)
+            contrib[code] = (self.shares[code] * p - self.net_invested[code]) if p else 0.0
+        self.attribution.append((ds, contrib, self.interest_accrued))
 
     def _price(self, code: str, ds: str) -> Optional[float]:
         return self.closes[code].get(ds)
@@ -128,8 +142,11 @@ class RebalanceEngine:
             return True
         return False
 
-    def _lot(self, shares: float) -> int:
-        return int(shares // LOT_SIZE) * LOT_SIZE
+    def _delta_lot(self, code: str, total: float, p: float) -> int:
+        """按比例算目标股数，与当前持仓的差向零取整到整手（差 < 1 手返回 0）。"""
+        delta_float = total * self.target_weights[code] / p - self.shares[code]
+        delta = int(abs(delta_float) // LOT_SIZE) * LOT_SIZE
+        return -delta if delta_float < 0 else delta
 
     def _rebalance(self, ds: str) -> None:
         total = self._total_value(ds)
@@ -140,35 +157,39 @@ class RebalanceEngine:
             p = self._price(code, ds)
             if not p:
                 continue
-            target_shares = self._lot(total * self.target_weights[code] / p)
-            delta = target_shares - self.shares[code]
+            delta = self._delta_lot(code, total, p)
             if delta < 0:
                 sell_price = p * (1 - SLIPPAGE)
                 proceeds = -delta * sell_price
                 commission = max(proceeds * COMMISSION, MIN_COMMISSION)
-                self.cash += proceeds - commission
-                self.shares[code] = target_shares
+                net_proceeds = proceeds - commission
+                self.cash += net_proceeds
+                self.net_invested[code] -= net_proceeds
+                self.shares[code] += delta
         # 再买低配（现金不足时按可负担的整手数买入），买入价 = 收盘价 × (1 + 滑点)
         for code in self.equity_codes:
             p = self._price(code, ds)
             if not p:
                 continue
-            target_shares = self._lot(total * self.target_weights[code] / p)
-            delta = target_shares - self.shares[code]
+            delta = self._delta_lot(code, total, p)
             if delta <= 0:
                 continue
             buy_price = p * (1 + SLIPPAGE)
             cost = delta * buy_price
             commission = max(cost * COMMISSION, MIN_COMMISSION)
             if cost + commission <= self.cash:
-                self.cash -= cost + commission
-                self.shares[code] = target_shares
+                total_cost = cost + commission
+                self.cash -= total_cost
+                self.net_invested[code] += total_cost
+                self.shares[code] += delta
             else:
                 lots = int(self.cash // (buy_price * LOT_SIZE * (1 + COMMISSION)))
                 if lots > 0:
                     shares = lots * LOT_SIZE
                     actual = shares * buy_price
-                    self.cash -= actual + max(actual * COMMISSION, MIN_COMMISSION)
+                    total_cost = actual + max(actual * COMMISSION, MIN_COMMISSION)
+                    self.cash -= total_cost
+                    self.net_invested[code] += total_cost
                     self.shares[code] += shares
         self.rebalance_count += 1
 
