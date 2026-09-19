@@ -35,6 +35,7 @@ OLD_POOL = {
 
 SLEEVE_TOTAL = sum(EQUITY_SLEEVE.values())
 TRADING_DAYS_PER_YEAR = 244
+INITIAL_CASH = 20000.0  # 用户实际投入 ~2 万
 
 
 def make_weights(equity_total: float) -> dict:
@@ -46,7 +47,7 @@ def make_weights(equity_total: float) -> dict:
 
 
 def run_scenario(loader, weights) -> dict:
-    engine = RebalanceEngine(loader=loader, target_weights=weights)
+    engine = RebalanceEngine(loader=loader, target_weights=weights, initial_cash=INITIAL_CASH)
     s = engine.run()
     eq = np.array([v for _, v in engine.equity], dtype=float)
     rets = np.diff(eq) / eq[:-1]
@@ -81,7 +82,7 @@ def main() -> None:
 
     sep = "-" * 92
     print("=" * 92)
-    print("被动配置 股债比例 A/B（2017-2021, 10万起始, 前复权, 黄金固定5%）")
+    print("被动配置 股债比例 A/B（2017-2021, 2万起始, 债=现金2%/年, 黄金固定5%）")
     print("=" * 92)
     print(f"{'场景':<10}{'总收益':>9}{'年化':>8}{'年化波动':>9}{'夏普':>7}{'最大回撤':>9}{'收益/回撤':>9}{'再平衡':>7}")
     print(sep)

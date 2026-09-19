@@ -6,9 +6,11 @@ from __future__ import annotations
 from passive_allocation_strategy.local.data_loader import PassiveAllocationDataLoader
 from passive_allocation_strategy.local.engine import RebalanceEngine
 
+INITIAL_CASH = 20000.0  # 用户实际投入 ~2 万
+
 
 def main() -> None:
-    engine = RebalanceEngine(loader=PassiveAllocationDataLoader())
+    engine = RebalanceEngine(loader=PassiveAllocationDataLoader(), initial_cash=INITIAL_CASH)
     s = engine.run()
 
     print("=" * 70)

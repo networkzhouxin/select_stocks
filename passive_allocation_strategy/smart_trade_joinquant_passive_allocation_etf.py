@@ -2,17 +2,30 @@
 """
 被动配置 + 再平衡 策略 JoinQuant 版 v1
 ======================================
-不预测涨跌，用股债黄金固定比例控制风险，靠定期再平衡机械高抛低吸。
+不预测涨跌，用股权+黄金固定比例控制风险，债 = 现金（货基/逆回购），靠定期再平衡机械高抛低吸。
 
-池与目标权重（7 只，可配置）：
+池与目标权重（6 只场内 ETF + 35% 现金，可配置）：
   红利 510880 20% | 沪深300 510300 10% | 创业板 159915 5%
-  纳指 513100 15% | 标普500 513500 10% | 黄金 518880 5% | 国债 511010 35%
+  纳指 513100 15% | 标普500 513500 10% | 黄金 518880 5% | 债(现金) 35%
 
 再平衡（二选一触发）：
   1. 每季度第一个交易日
-  2. 任一资产实际权重偏离目标 > 5%（绝对）
+  2. 任一资产（含现金）实际权重偏离目标 > 5%（绝对）
 
-执行：order_target_percent 调到目标权重。
+执行：order_target_value 调到目标权重，先卖超配、再买低配；债部分持有现金、不下单。
+
+债=现金的原因：国债 ETF(511010) 一手约 1.1 万，2 万小资金买不进（35%=7000 元 < 一手），
+且国债 ETF 会随利率波动下跌，不是保本。改用货基/逆回购（场外、几乎不跌、1元起购）。
+本地引擎把现金建模为年化 2%（货基收益）；聚宽现金不产息，因此聚宽回测比本地略低
+（约 2% × 35% × 年数），属已知口径差异，不影响结构验证。
+
+与本地回测（passive_allocation_strategy/local/engine.py）策略逻辑一致：
+  季度触发 + 阈值触发（含现金口径）+ 万三/最低5元佣金 + 先卖后买。
+已知执行模型差异（非策略逻辑差异）：
+  - 本地现金计息 2%/年；聚宽现金 0%
+  - 本地引擎无滑点问题（已对齐 0.1%）；聚宽 set_slippage 0.1%
+  - 本地引擎整手（100股）；聚宽整手（100股）
+  - 本地引擎按收盘价；聚宽 14:50 近收盘执行
 """
 
 from jqdata import *
@@ -24,8 +37,9 @@ TARGET_WEIGHTS = {
     "513100.XSHG": 0.15,  # 纳指100
     "513500.XSHG": 0.10,  # 标普500
     "518880.XSHG": 0.05,  # 黄金
-    "511010.XSHG": 0.35,  # 国债
 }
+
+BOND_WEIGHT = 0.35  # 债 = 现金（货基/逆回购），持有现金不下单
 
 REBALANCE_THRESHOLD = 0.05  # 偏离 5% 触发
 
@@ -43,8 +57,10 @@ def initialize(context):
     ), type="stock")
 
     g.target_weights = dict(TARGET_WEIGHTS)
+    g.bond_weight = BOND_WEIGHT
     g.threshold = REBALANCE_THRESHOLD
     g.initialized = False
+    g.rebalance_count = 0
 
     run_daily(check_rebalance, time="14:50")
 
@@ -59,30 +75,54 @@ def _is_quarter_start(context):
     return days[0].month != today.month
 
 
-def _threshold_hit(context):
+def _current_weights(context):
     total = context.portfolio.total_value
-    if total <= 0:
-        return False
-    for code, target in g.target_weights.items():
+    weights = {}
+    for code in g.target_weights:
         pos = context.portfolio.positions.get(code)
-        if pos is None or pos.total_amount <= 0:
-            if target > 0.05:
-                return True
-            continue
-        current = pos.total_amount * pos.price / total
-        if abs(current - target) > g.threshold:
+        if pos is not None and pos.total_amount > 0:
+            weights[code] = pos.total_amount * pos.price / total if total > 0 else 0.0
+        else:
+            weights[code] = 0.0
+    weights["CASH"] = context.portfolio.available_cash / total if total > 0 else 0.0
+    return weights
+
+
+def _threshold_hit(weights):
+    for code, target in g.target_weights.items():
+        if abs(weights.get(code, 0.0) - target) > g.threshold:
             return True
+    if abs(weights.get("CASH", 0.0) - g.bond_weight) > g.threshold:
+        return True
     return False
 
 
 def check_rebalance(context):
-    if g.initialized and not (_is_quarter_start(context) or _threshold_hit(context)):
+    weights = _current_weights(context)
+    if not g.initialized:
+        reason = "初始建仓"
+    elif _is_quarter_start(context):
+        reason = "季度"
+    elif _threshold_hit(weights):
+        reason = "阈值"
+    else:
         return
 
     total = context.portfolio.total_value
-    for code, target in g.target_weights.items():
-        order_target_percent(code, target)
+    log.info("[再平衡#%d] %s | 触发:%s | 总值:%.0f" % (
+        g.rebalance_count + 1, context.current_dt.date(), reason, total))
+    for code in g.target_weights:
+        log.info("  %s 调前%.1f%% -> 目标%.1f%%" % (
+            code, weights.get(code, 0.0) * 100, g.target_weights[code] * 100))
+    log.info("  现金 调前%.1f%% -> 目标%.1f%%" % (weights.get("CASH", 0.0) * 100, g.bond_weight * 100))
 
+    # 先卖超配（释放现金），再买低配，与本地引擎 _rebalance 顺序一致
+    for code, target in g.target_weights.items():
+        if weights.get(code, 0.0) > target:
+            order_target_value(code, total * target)
+    for code, target in g.target_weights.items():
+        if weights.get(code, 0.0) < target:
+            order_target_value(code, total * target)
+
+    g.rebalance_count += 1
     g.initialized = True
-    log.info("[再平衡] %s 总值%.0f 季度=%s" % (
-        context.current_dt.date(), total, _is_quarter_start(context)))

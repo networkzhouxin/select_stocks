@@ -2,6 +2,8 @@
 """被动配置 + 再平衡 本地回测引擎。
 
 逻辑：不预测涨跌，按目标权重持有，季度或偏离阈值触发再平衡（机械高抛低吸）。
+债 = 现金（货基/逆回购近似，年化 ~2%），不买国债 ETF（一手 1.1 万，小资金买不进且会跌）。
+执行口径对齐交易规则底线：整手（100股）+ 滑点 0.1% + 万三/最低5元佣金。
 """
 
 from __future__ import annotations
@@ -18,6 +20,12 @@ from passive_allocation_strategy.local.data_loader import (
 REBALANCE_THRESHOLD = 0.05  # 任一资产偏离目标 > 5% 触发
 COMMISSION = 0.0003  # 万三
 MIN_COMMISSION = 5.0
+LOT_SIZE = 100  # 一手 = 100 股，禁止分数股（对齐交易规则底线）
+SLIPPAGE = 0.001  # 滑点 0.1%，对齐聚宽 PriceRelatedSlippage(0.001)
+
+BOND_CODE = "511010"  # 债券压舱石 = 现金（货基/逆回购），不买国债 ETF
+BOND_RATE = 0.02      # 货基/逆回购年化 ~2%
+TRADING_DAYS = 244    # A股年交易日数
 
 
 @dataclass
@@ -42,6 +50,7 @@ class RebalanceEngine:
         initial_cash: float = 100000.0,
         start: str = "2017-01-01",
         end: str = "2021-12-31",
+        bond_rate: float = BOND_RATE,
     ):
         self.loader = loader or PassiveAllocationDataLoader()
         self.target_weights = dict(target_weights or TARGET_WEIGHTS)
@@ -49,12 +58,15 @@ class RebalanceEngine:
         self.initial_cash = initial_cash
         self.start = pd.Timestamp(start)
         self.end = pd.Timestamp(end)
+        self.bond_rate = bond_rate
+        self.bond_code = BOND_CODE
+        self.equity_codes = [c for c in self.target_weights if c != self.bond_code]
         self._prepare()
 
     def _prepare(self) -> None:
         self.closes: Dict[str, Dict[str, float]] = {}
         all_dates = set()
-        for code in self.target_weights:
+        for code in self.equity_codes:
             df = self.loader.load_daily(code)
             m = {}
             for d, c in zip(df["date"], df["close"]):
@@ -66,8 +78,11 @@ class RebalanceEngine:
         self.calendar = sorted(all_dates)
         self.date_index = {d: i for i, d in enumerate(self.calendar)}
 
+    def _daily_rate(self) -> float:
+        return (1 + self.bond_rate) ** (1 / TRADING_DAYS) - 1
+
     def run(self) -> BacktestSummary:
-        self.shares: Dict[str, float] = {c: 0.0 for c in self.target_weights}
+        self.shares: Dict[str, float] = {c: 0.0 for c in self.equity_codes}
         self.cash = self.initial_cash
         self.equity: List[tuple] = []
         self.rebalance_count = 0
@@ -76,6 +91,7 @@ class RebalanceEngine:
         self._record(self.calendar[0])
         for i in range(1, len(self.calendar)):
             ds = self.calendar[i]
+            self.cash *= (1 + self._daily_rate())   # 货基每日计息
             if self._should_rebalance(ds, i):
                 self._rebalance(ds)
             self._record(ds)
@@ -100,51 +116,60 @@ class RebalanceEngine:
         total = self._total_value(ds)
         if total <= 0:
             return False
-        for code, target in self.target_weights.items():
+        for code in self.equity_codes:
             p = self._price(code, ds)
             if not p:
                 continue
             current = self.shares[code] * p / total
-            if abs(current - target) > self.threshold:
+            if abs(current - self.target_weights[code]) > self.threshold:
                 return True
+        cash_weight = self.cash / total
+        if abs(cash_weight - self.target_weights.get(self.bond_code, 0.0)) > self.threshold:
+            return True
         return False
+
+    def _lot(self, shares: float) -> int:
+        return int(shares // LOT_SIZE) * LOT_SIZE
 
     def _rebalance(self, ds: str) -> None:
         total = self._total_value(ds)
         if total <= 0:
             return
-        # 先卖超配（释放现金）
-        for code, target in self.target_weights.items():
+        # 先卖超配（释放现金），卖出价 = 收盘价 × (1 - 滑点)
+        for code in self.equity_codes:
             p = self._price(code, ds)
             if not p:
                 continue
-            target_shares = total * target / p
+            target_shares = self._lot(total * self.target_weights[code] / p)
             delta = target_shares - self.shares[code]
             if delta < 0:
-                proceeds = -delta * p
+                sell_price = p * (1 - SLIPPAGE)
+                proceeds = -delta * sell_price
                 commission = max(proceeds * COMMISSION, MIN_COMMISSION)
                 self.cash += proceeds - commission
                 self.shares[code] = target_shares
-        # 再买低配（现金不足时按可负担额度买入，避免一只永远买不满）
-        for code, target in self.target_weights.items():
+        # 再买低配（现金不足时按可负担的整手数买入），买入价 = 收盘价 × (1 + 滑点)
+        for code in self.equity_codes:
             p = self._price(code, ds)
             if not p:
                 continue
-            target_shares = total * target / p
+            target_shares = self._lot(total * self.target_weights[code] / p)
             delta = target_shares - self.shares[code]
             if delta <= 0:
                 continue
-            cost = delta * p
+            buy_price = p * (1 + SLIPPAGE)
+            cost = delta * buy_price
             commission = max(cost * COMMISSION, MIN_COMMISSION)
             if cost + commission <= self.cash:
                 self.cash -= cost + commission
                 self.shares[code] = target_shares
             else:
-                affordable = self.cash / (p * (1 + COMMISSION))
-                if affordable > 0:
-                    actual = affordable * p
+                lots = int(self.cash // (buy_price * LOT_SIZE * (1 + COMMISSION)))
+                if lots > 0:
+                    shares = lots * LOT_SIZE
+                    actual = shares * buy_price
                     self.cash -= actual + max(actual * COMMISSION, MIN_COMMISSION)
-                    self.shares[code] += affordable
+                    self.shares[code] += shares
         self.rebalance_count += 1
 
     def _record(self, ds: str) -> None:

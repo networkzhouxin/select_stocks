@@ -101,6 +101,18 @@ Chinese ETF quantitative trading strategy system. Automated buy/sell signal gene
 - **ETF correlation matters**: Don't add 510050 (overlaps 510300) or 159901 (overlaps 159915+510300). Only add truly uncorrelated ETFs like 510880 (红利) and 512100 (中证1000).
 - **Highest price uses closing price, not intraday high**: Intraday highs contain noise (upper wicks/spikes). ATR multiplier (2.5×) is calibrated against closing prices — using intraday high would systematically tighten stops, contradicting "let profits run".
 
+## Trading Rules Baseline (交易规则底线)
+
+**所有策略/回测引擎必须满足真实 A 股/ETF 交易规则，违反者回测结果无效。** 完整清单见 `docs/交易规则底线.md`。核心硬规则：
+
+- **禁止分数股**：买入最小 100 股（1 手）；2023-08-10 后"100股起、1股递增"；卖出零股一次性卖光。本地回测引擎必须整手取整（2026-09-19 被动配置踩坑：本地分数股 +57.7% vs 聚宽整手 +53% 无法对齐，再平衡 20 vs 339 次）。
+- **T+1/T+0 按品种区分**：A股股票ETF（510300/510880/159915/512100/159928）T+1；跨境ETF（513100/513500/159920/513880/513050）、债券ETF（511010）、黄金ETF（518880）、货币ETF T+0 回转。
+- **涨跌停**：主板 ±10%、创业板 ±20%（2020-08-24 后）、跨境/黄金/债券ETF 无涨跌停。涨停不可买、跌停不可卖。
+- **税费**：ETF 免印花税；佣金万三 + 最低 5 元（回测口径）。
+- **复权**：分红除息、份额拆分/合并须前复权或正确处理（拆分 bug 见 `data-split-adjust-bug`）。
+- **停牌/流动性/QDII溢价**：停牌不可交易；QDII 有额度限制与二级市场溢价，实盘成本高于回测。
+- **本地引擎与聚宽口径必须一致**：股数取整、税费、T+0/T+1、复权，本地和聚宽用同一套规则，否则样本内外无法对齐。
+
 ## Platform Backtesting Rules
 
 - **JoinQuant backtest is the authority for strategy performance.** `run_daily` executes at the exact time specified (09:30, 09:35, 15:00, 15:30), matching real trading behavior.
