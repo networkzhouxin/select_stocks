@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>趋势腿策略 · 买卖决策流程</title>
+<style>
+  :root {
+    --bg: #1e1e1e; --panel: #262626; --border: #3a3a3a;
+    --text: #e8e8e8; --muted: #9a9a9a; --accent: #4da3ff;
+    --blue: #4da3ff; --green: #34c759; --red: #ff6b6b; --amber: #ffb020;
+    --blue-bg: rgba(77,163,255,.12); --green-bg: rgba(52,199,89,.12);
+    --red-bg: rgba(255,107,107,.12); --amber-bg: rgba(255,176,32,.12);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+         font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border);
+          border-radius: 10px; padding: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 2px; }
+  .card .desc { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  svg { width: 100%; height: auto; display: block; }
+  .node { cursor: pointer; }
+  .node text { user-select: none; }
+  #detail { margin-top: 20px; }
+  #detail .title { font-weight: 600; font-size: 14px; }
+  #detail .body { color: var(--muted); font-size: 13px; margin-top: 4px; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <h1>趋势腿策略 · 买卖决策流程</h1>
+  <p class="sub">信号驱动趋势跟随（11 只 ETF 池）。点击任意节点查看详细规则。</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>买入决策流程</h2>
+      <p class="desc">对每只 ETF，T-1 收盘判断，T 日 09:35 执行</p>
+      <svg id="buySvg" viewBox="0 0 400 560"></svg>
+    </div>
+    <div class="card">
+      <h2>卖出决策流程</h2>
+      <p class="desc">对每只持仓，T 日 09:35 检查</p>
+      <svg id="sellSvg" viewBox="0 0 400 300"></svg>
+    </div>
+  </div>
+
+  <div class="card" id="detail">
+    <div class="title" id="detailTitle">点击节点查看详情</div>
+    <div class="body" id="detailBody">例如点击「熊市过滤？」或「ATR 跟踪止损」查看完整规则与参数。</div>
+  </div>
+
+<script>
+const NODE_W = 236, NODE_H = 58, GAP = 38, CX = 132, EX_X = 306, EX_W = 84;
+
+const buyNodes = [
+  { id:"b1", label:"已持有？", sub:"该 ETF 已在持仓中", color:"#4da3ff", bg:"rgba(77,163,255,.12)",
+    detail:"持仓中的 ETF 不再重复买入，直接跳过。" },
+  { id:"b2", label:"熊市过滤？", sub:"沪深300 < MA60 且 MA60 下行，且是 A 股", color:"#ffb020", bg:"rgba(255,176,32,.12)",
+    detail:"当沪深300收盘跌破60日均线、且60日均线本身下行时，判定 A 股处于熊市，暂停 A 股 4 只（510300/159915/512100/159928）的新买入。跨市场 QDII、国债、有色不受影响。" },
+  { id:"b3", label:"MA20 > MA60？", sub:"多头排列（中期趋势向上）", color:"#4da3ff", bg:"rgba(77,163,255,.12)",
+    detail:"20 日均线在 60 日均线上方，表示中期趋势向上。买入的方向性前提——只顺势，不抄底。" },
+  { id:"b4", label:"突破 20 日新高？", sub:"收盘价高于此前 20 日最高收盘", color:"#4da3ff", bg:"rgba(77,163,255,.12)",
+    detail:"价格创 20 日新高，代表趋势加速、动量确认。避免在均线排列成立但价格仍横盘时过早买入。" },
+  { id:"b5", label:"RSI ≤ 75？", sub:"防追高过滤", color:"#ffb020", bg:"rgba(255,176,32,.12)",
+    detail:"RSI(14) 超过 75 视为短期过热，暂缓新买入（仅影响新买入，不动已持仓）。避免追在情绪高点。" },
+];
+const buyTerminal = { id:"bt", label:"★ 合格候选 → 按 ROC20 降序取前 N，等分买入", color:"#34c759", bg:"rgba(52,199,89,.12)",
+  detail:"全部条件通过后成为合格候选。若合格数超过空余仓位（N = 3 − 当前持仓数），按 ROC20 从高到低取前 N 只。每只买入目标市值 = 总资产 × 0.95 ÷ 3。候选不足则留现金，不凑数。" };
+
+const sellNodes = [
+  { id:"s1", label:"现价 ≤ 最高收盘 × (1 − 止损幅度)？", sub:"ATR 跟踪止损（风控通道）", color:"#ff6b6b", bg:"rgba(255,107,107,.12)",
+    detail:"止损幅度 = 2.5 × ATR(14) / 最高收盘，夹在 5% ~ 15%。利润分段收紧：盈利 5-15% → 2.0x，盈利 >15% → 1.5x。最高价用收盘价（不用盘中最高）。触发即卖出——ATR 止损是主力离场出口。" },
+  { id:"s2", label:"MA20 下穿 MA60 且 持有 ≥ 5 天？", sub:"死叉（趋势破坏通道）", color:"#ff6b6b", bg:"rgba(255,107,107,.12)",
+    detail:"MA20 从上方下穿 MA60，中期趋势结构破坏。慢速兜底信号——处理「缓慢阴跌、ATR 一直不触发」的场景。需满足最低持有 5 天（防止买入即卖）。" },
+];
+const sellTerminal = { id:"st", label:"继续持有", color:"#4da3ff", bg:"rgba(77,163,255,.14)",
+  detail:"两个卖出条件都未触发，继续持有。盘后（15:30）更新最高收盘价和动态 ATR，供次日止损判断。" };
+
+function draw(svg, nodes, terminal, exitLabel) {
+  const n = nodes.length;
+  const nodeY = i => 16 + i * (NODE_H + GAP);
+  const terminalY = nodeY(n);
+  const h = terminalY + NODE_H + 12;
+  svg.setAttribute("viewBox", `0 0 400 ${h}`);
+  svg.innerHTML = "";
+
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (id, color) => {
+    const m = document.createElementNS(ns, "marker");
+    m.setAttribute("id", id); m.setAttribute("markerWidth", 7); m.setAttribute("markerHeight", 7);
+    m.setAttribute("refX", 6.2); m.setAttribute("refY", 3.5); m.setAttribute("orient", "auto");
+    m.setAttribute("markerUnits", "strokeWidth");
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("d", "M 1 1 L 6 3.5 L 1 6"); p.setAttribute("fill", "none");
+    p.setAttribute("stroke", color); p.setAttribute("strokeWidth", 1.2);
+    p.setAttribute("strokeLinecap", "round"); p.setAttribute("strokeLinejoin", "round");
+    m.appendChild(p); return m;
+  };
+  const defs = document.createElementNS(ns, "defs");
+  defs.appendChild(mk("arr-" + svg.id, "#8a8a8a"));
+  defs.appendChild(mk("arrx-" + svg.id, "#6a6a6a"));
+  svg.appendChild(defs);
+
+  nodes.forEach((nd, i) => {
+    const y = nodeY(i);
+    const g = document.createElementNS(ns, "g");
+    g.setAttribute("class", "node");
+    g.addEventListener("click", () => show(nd.id, nd.label, nd.detail));
+
+    const rect = document.createElementNS(ns, "rect");
+    rect.setAttribute("x", CX - NODE_W/2); rect.setAttribute("y", y);
+    rect.setAttribute("width", NODE_W); rect.setAttribute("height", NODE_H);
+    rect.setAttribute("rx", 10); rect.setAttribute("fill", nd.bg);
+    rect.setAttribute("stroke", nd.color); rect.setAttribute("strokeWidth", 1.3);
+    g.appendChild(rect);
+
+    const t1 = document.createElementNS(ns, "text");
+    t1.setAttribute("x", CX); t1.setAttribute("y", y + 24); t1.setAttribute("textAnchor", "middle");
+    t1.setAttribute("fill", "#e8e8e8"); t1.setAttribute("fontSize", 12.5); t1.setAttribute("fontWeight", 650);
+    t1.textContent = nd.label; g.appendChild(t1);
+
+    const t2 = document.createElementNS(ns, "text");
+    t2.setAttribute("x", CX); t2.setAttribute("y", y + 42); t2.setAttribute("textAnchor", "middle");
+    t2.setAttribute("fill", "#9a9a9a"); t2.setAttribute("fontSize", 9.5);
+    t2.textContent = nd.sub; g.appendChild(t2);
+
+    // 向下箭头
+    const down = document.createElementNS(ns, "path");
+    down.setAttribute("d", `M ${CX} ${y+NODE_H} L ${CX} ${y+NODE_H+GAP}`);
+    down.setAttribute("stroke", "#8a8a8a"); down.setAttribute("strokeWidth", 1.3);
+    down.setAttribute("fill", "none"); down.setAttribute("marker-end", `url(#arr-${svg.id})`);
+    g.appendChild(down);
+
+    // 右侧跳过/卖出
+    const side = document.createElementNS(ns, "path");
+    side.setAttribute("d", `M ${CX+NODE_W/2} ${y+NODE_H/2} L ${EX_X-EX_W/2} ${y+NODE_H/2}`);
+    side.setAttribute("stroke", "#6a6a6a"); side.setAttribute("strokeWidth", 1.1);
+    side.setAttribute("strokeDasharray", "4 4"); side.setAttribute("fill", "none");
+    side.setAttribute("marker-end", `url(#arrx-${svg.id})`);
+    g.appendChild(side);
+
+    const pill = document.createElementNS(ns, "g");
+    pill.setAttribute("class", "node");
+    pill.addEventListener("click", () => show(nd.id, nd.label, nd.detail));
+    const pr = document.createElementNS(ns, "rect");
+    pr.setAttribute("x", EX_X-EX_W/2); pr.setAttribute("y", y+NODE_H/2-12);
+    pr.setAttribute("width", EX_W); pr.setAttribute("height", 24); pr.setAttribute("rx", 12);
+    pr.setAttribute("fill", "#2e2e2e"); pr.setAttribute("stroke", "#3a3a3a");
+    pill.appendChild(pr);
+    const pt = document.createElementNS(ns, "text");
+    pt.setAttribute("x", EX_X); pt.setAttribute("y", y+NODE_H/2+4); pt.setAttribute("textAnchor", "middle");
+    pt.setAttribute("fill", "#9a9a9a"); pt.setAttribute("fontSize", 10.5);
+    pt.textContent = exitLabel; pill.appendChild(pt);
+    g.appendChild(pill);
+
+    svg.appendChild(g);
+  });
+
+  // 终端
+  const g = document.createElementNS(ns, "g");
+  g.setAttribute("class", "node");
+  g.addEventListener("click", () => show(terminal.id, terminal.label, terminal.detail));
+  const rect = document.createElementNS(ns, "rect");
+  rect.setAttribute("x", CX - NODE_W/2); rect.setAttribute("y", terminalY);
+  rect.setAttribute("width", NODE_W); rect.setAttribute("height", NODE_H);
+  rect.setAttribute("rx", 10); rect.setAttribute("fill", terminal.bg);
+  rect.setAttribute("stroke", terminal.color); rect.setAttribute("strokeWidth", 1.5);
+  g.appendChild(rect);
+  const t = document.createElementNS(ns, "text");
+  t.setAttribute("x", CX); t.setAttribute("y", terminalY + 24); t.setAttribute("textAnchor", "middle");
+  t.setAttribute("fill", "#e8e8e8"); t.setAttribute("fontSize", 12); t.setAttribute("fontWeight", 700);
+  t.textContent = terminal.label; g.appendChild(t);
+  svg.appendChild(g);
+}
+
+function show(id, title, body) {
+  document.getElementById("detailTitle").textContent = title;
+  document.getElementById("detailBody").textContent = body;
+}
+
+draw(document.getElementById("buySvg"), buyNodes, buyTerminal, "跳过");
+draw(document.getElementById("sellSvg"), sellNodes, sellTerminal, "卖出");
+</script>
+</body>
+</html>

@@ -41,6 +41,9 @@ PARAMS = {
     # MA10 实验开关
     "triple_ma_buy": False,  # 买入要求 MA10>MA20>MA60 三均线排列
     "ma10_exit": False,      # 卖出加：收盘<MA10 且 MA10 下行
+    "time_stop_days": None,  # 时间止损：买入后 N 天仍亏损则卖，None=关闭
+    # 离场通道：dead_cross=死叉 / low10=跌破10日新低 / low20=跌破20日新低（海龟式）
+    "exit_signal": "dead_cross",
 }
 
 
@@ -122,6 +125,8 @@ class TrendLegEngine:
                 rsi=ind.calc_rsi(c, p["rsi_period"]),
                 roc20=ind.calc_roc(c, p["roc_period"]),
                 new_high=ind.calc_new_high(c, p["high_period"]),
+                new_low_10=c < c.rolling(10).min().shift(1),
+                new_low_20=c < c.rolling(20).min().shift(1),
                 dead_cross=(ind.calc_ma(c, p["ma_fast"]) < ind.calc_ma(c, p["ma_slow"]))
                 & (ind.calc_ma(c, p["ma_fast"]).shift(1) >= ind.calc_ma(c, p["ma_slow"]).shift(1)),
             )
@@ -176,9 +181,21 @@ class TrendLegEngine:
                 if stop_price is not None and price <= stop_price:
                     self._sell(code, ds, price, "atr_stop")
                     continue
-            if sig is not None and held_days >= self.params["min_hold_days"] and _flag(sig["dead_cross"]):
-                self._sell(code, ds, price, "dead_cross")
-                continue
+                ts = self.params.get("time_stop_days")
+                if ts is not None and held_days >= ts and price < pos["entry_cost"]:
+                    self._sell(code, ds, price, "time_stop")
+                    continue
+            if sig is not None and held_days >= self.params["min_hold_days"]:
+                es = self.params.get("exit_signal", "dead_cross")
+                if es == "low10":
+                    triggered = _flag(sig["new_low_10"])
+                elif es == "low20":
+                    triggered = _flag(sig["new_low_20"])
+                else:
+                    triggered = _flag(sig["dead_cross"])
+                if triggered:
+                    self._sell(code, ds, price, es)
+                    continue
             if (self.params.get("ma10_exit", False) and sig is not None
                     and held_days >= self.params["min_hold_days"]):
                 ma10 = sig.get("ma10")
@@ -266,7 +283,8 @@ class TrendLegEngine:
             self.atr_stop_history.append(self.date_index[ds])
         final_pnl = price / pos["entry_cost"] - 1 if pos["entry_cost"] > 0 else 0.0
         hold_days = self.date_index[ds] - pos["entry_index"]
-        self.trade_stats.append((code, hold_days, pos.get("buy_roc", 0.0), pos["peak_pnl"], final_pnl, reason))
+        self.trade_stats.append((code, hold_days, pos.get("buy_roc", 0.0),
+                                 pos["peak_pnl"], pos["trough_pnl"], final_pnl, reason))
 
     def _stress_scale(self, current_idx: int) -> float:
         p = self.params
@@ -301,6 +319,7 @@ class TrendLegEngine:
             "highest": price,
             "last_price": price,
             "peak_pnl": 0.0,
+            "trough_pnl": 0.0,
             "buy_roc": roc,
         }
         self.orders.append(Order(ds, "BUY", code, price, cost, "buy"))
@@ -316,6 +335,7 @@ class TrendLegEngine:
             pos["highest"] = max(pos["highest"], close)
             pnl = close / pos["entry_cost"] - 1 if pos["entry_cost"] > 0 else 0.0
             pos["peak_pnl"] = max(pos["peak_pnl"], pnl)
+            pos["trough_pnl"] = min(pos["trough_pnl"], pnl)
         self.equity.append((ds, total))
         self.max_holdings_seen = max(self.max_holdings_seen, len(self.positions))
 
